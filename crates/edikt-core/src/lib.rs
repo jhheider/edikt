@@ -10,6 +10,7 @@
 //! slice, once there is a concrete CST to shape them against.
 
 mod ast;
+mod document;
 mod eval;
 mod feature;
 mod lexer;
@@ -17,6 +18,7 @@ mod parser;
 mod value;
 
 pub use ast::{BinOp, Expr, Step};
+pub use document::Document;
 pub use eval::{EvalError, eval};
 pub use feature::Feature;
 pub use parser::{ParseError, parse};
