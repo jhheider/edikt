@@ -1,6 +1,6 @@
 //! The format-agnostic document seam.
 
-use crate::{Feature, Value};
+use crate::{EditError, Expr, Feature, Value};
 
 /// A parsed config document.
 ///
@@ -22,4 +22,9 @@ pub trait Document {
 
     /// The format's capabilities.
     fn features(&self) -> &'static [Feature];
+
+    /// Apply a mutation expression (assignment / `del`) in place,
+    /// format-preserving. Query expressions should be evaluated against
+    /// [`Document::to_value`] instead; use [`Expr::is_mutation`] to choose.
+    fn apply(&mut self, expr: &Expr) -> Result<(), EditError>;
 }

@@ -9,7 +9,7 @@
 //! results), 2 = parse / evaluation / I/O error.
 
 use clap::Parser;
-use edikt_core::{Document as _, Value};
+use edikt_core::{Document, Value};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -65,9 +65,18 @@ fn main() -> ExitCode {
     }
 }
 
-/// The supported formats. Only JSONC is wired in M1.
+/// The supported formats.
 enum Format {
     Jsonc,
+}
+
+/// Parse `src` in the given format into a boxed, format-agnostic document.
+fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String> {
+    match format {
+        Format::Jsonc => Ok(Box::new(
+            edikt_jsonc::parse(src).map_err(|e| e.to_string())?,
+        )),
+    }
 }
 
 fn run(args: Args) -> Result<ExitCode, String> {
@@ -104,32 +113,26 @@ fn run(args: Args) -> Result<ExitCode, String> {
     let mut emitted = false;
     for (path, src) in &inputs {
         let loc = display_path(path.as_deref());
-        match detect_format(path.as_deref(), args.format.as_deref())? {
-            Format::Jsonc => {
-                if is_mutation {
-                    let mut doc = edikt_jsonc::parse(src).map_err(|e| format!("{loc}: {e}"))?;
-                    edikt_jsonc::apply(&mut doc, &expr).map_err(|e| format!("{loc}: {e}"))?;
-                    let out = doc.to_source();
-                    if args.in_place {
-                        let p = path
-                            .as_ref()
-                            .ok_or("cannot edit stdin in place; pass a file")?;
-                        std::fs::write(p, out)
-                            .map_err(|e| format!("writing {}: {e}", p.display()))?;
-                    } else {
-                        print!("{out}");
-                    }
-                    emitted = true;
-                } else {
-                    let doc = edikt_jsonc::parse(src).map_err(|e| format!("{loc}: {e}"))?;
-                    let value = doc.to_value();
-                    let results =
-                        edikt_core::eval(&expr, &value).map_err(|e| format!("{loc}: {e}"))?;
-                    for r in &results {
-                        println!("{}", render(r, as_json));
-                        emitted = true;
-                    }
-                }
+        let format = detect_format(path.as_deref(), args.format.as_deref())?;
+        let mut doc = parse_document(format, src).map_err(|e| format!("{loc}: {e}"))?;
+        if is_mutation {
+            doc.apply(&expr).map_err(|e| format!("{loc}: {e}"))?;
+            let out = doc.to_source();
+            if args.in_place {
+                let p = path
+                    .as_ref()
+                    .ok_or("cannot edit stdin in place; pass a file")?;
+                std::fs::write(p, out).map_err(|e| format!("writing {}: {e}", p.display()))?;
+            } else {
+                print!("{out}");
+            }
+            emitted = true;
+        } else {
+            let value = doc.to_value();
+            let results = edikt_core::eval(&expr, &value).map_err(|e| format!("{loc}: {e}"))?;
+            for r in &results {
+                println!("{}", render(r, as_json));
+                emitted = true;
             }
         }
     }

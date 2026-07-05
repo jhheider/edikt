@@ -10,26 +10,8 @@
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
-use edikt_core::{BinOp, Document, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
 use rowan::{GreenNode, NodeOrToken};
-
-/// An edit failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EditError {
-    pub msg: String,
-}
-
-impl EditError {
-    pub(crate) fn new(msg: impl Into<String>) -> EditError {
-        EditError { msg: msg.into() }
-    }
-}
-impl std::fmt::Display for EditError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-impl std::error::Error for EditError {}
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
 pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {

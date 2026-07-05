@@ -11,6 +11,7 @@
 
 mod ast;
 mod document;
+mod error;
 mod eval;
 mod feature;
 mod lexer;
@@ -19,6 +20,7 @@ mod value;
 
 pub use ast::{BinOp, Expr, Step};
 pub use document::Document;
+pub use error::EditError;
 pub use eval::{EvalError, eval};
 pub use feature::Feature;
 pub use parser::{ParseError, parse};
