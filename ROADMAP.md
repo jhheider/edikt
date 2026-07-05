@@ -80,8 +80,9 @@ Release infra is intentionally **last** — build the capability, then ship it.
   boolean, so `.env` inline and JSON comments error/remap through the same
   derived check conversion already uses. Multi-line comments are **wrapped
   strings** (not line arrays), wrapped to the file's own envelope —
-  `min(longest source line, 100)` — so a comment never makes the document wider;
-  a comment that a compact JSON object or a YAML flow list can't hold forces
+  `clamp(longest source line, 80, 100)` — so a comment tracks the document's
+  width without going tiny on a flat `.env` or huge on a wide file; a comment
+  that a compact JSON object or a YAML flow list can't hold forces structural
   expansion, which **warns**. Sequenced query → mutate → bulk. An identity shift:
   "edit values, preserve comments" → "edit the document, comments included."
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB

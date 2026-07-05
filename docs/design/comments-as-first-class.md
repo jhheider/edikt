@@ -189,26 +189,31 @@ write. Decided: **rational wrapping (and re-wrapping), not line arrays** — and
 the width is *the file's own envelope*, so comments never make the document
 wider than it already is.
 
-- **Wrap column (absolute)** `= min(longest line in the source, 100)`. The file
-  is already this wide; a wrapped comment that fits inside it adds no horizontal
-  extent — the moat, applied to columns. The `100` is a hard ceiling so a
-  pathologically wide file doesn't yield 200-char comment lines. The longest
-  line is measured on the **original source** (before the edit), so edits don't
-  ratchet the width up.
+- **Wrap column (absolute)** `= clamp(longest line in the source, 80, 100)`.
+  Between the bounds it tracks the file's own width — a comment that fits inside
+  the existing envelope adds no horizontal extent (the moat, applied to
+  columns). The `100` ceiling stops a pathologically wide file from yielding
+  200-char comment lines. The `80` floor keeps *narrow* files sane: a flat
+  `.env` whose longest line is `PORT=8080` must not wrap prose to 9 columns —
+  comments want a readable width, and matching a tiny key envelope is the wrong
+  master. The longest line is measured on the **original source** (before the
+  edit), so edits don't ratchet the width up.
 - **Text budget at a comment's indent** `I` with delimiter `D` (`"# "`, `"// "`)
   `= wrap_col − I − len(D)`. This is what "longest line minus current indent"
   computes, anchored to the absolute edge so a deeply-indented comment still
-  ends *at or before* `wrap_col` — never past it. Continuation lines repeat `D`
-  at column `I`.
-- **No lower floor.** A genuinely narrow file (longest line 40) keeps its
-  comments at 40 — that is the point ("use the space as it exists"). A floor
-  could push a comment past the longest line and *expand* the envelope, which is
-  the one thing this rule exists to prevent.
+  ends *at or before* `wrap_col`. Continuation lines repeat `D` at column `I`.
+- **The floor may widen a narrow file, by design.** Below 80 columns the
+  envelope is too narrow to be a sensible comment width, so a head comment on a
+  9-column `.env` may reach column 80 — accepted for readability. (This is *not*
+  the same as the [layout reflow](#layout-reflow-when-a-comment-forces-expansion)
+  warning, which is about forcing structural expansion — flow→block,
+  compact→pretty. A comment simply being 80 wide in a narrow file is expected and
+  silent.)
 - **Unbreakable tokens overflow** rather than hard-break (a URL or path longer
-  than the budget). So "no expansion" is best-effort: we never widen *by choice*,
-  only when a single word leaves no option.
+  than the budget). We never widen past the ceiling *by choice*, only when a
+  single word leaves no option.
 - **Empty / comment-free source** has no longest line to learn from → fall back
-  to the `100` ceiling.
+  to the `80` floor (the conventional default width).
 - **Inline comments never wrap** — a wrapped trailing comment would spill onto a
   line that reads as the *next* node's head comment. A long inline stays long
   (or the author should have used head).
@@ -287,9 +292,9 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
 - **`del(.foo)` takes attached comments with the node** — no "keep the comment"
   escape. ✅
 - **Multi-line comments are wrapped strings, not line arrays** — wrapped to the
-  file's own envelope (`min(longest source line, 100)`) so a comment never
-  widens the document; re-wrapped on edit (see
-  [Wrapping](#wrapping-long-comments)). ✅
+  file's own envelope, `clamp(longest source line, 80, 100)`, so a comment
+  tracks the document's width without going tiny on narrow files or huge on wide
+  ones; re-wrapped on edit (see [Wrapping](#wrapping-long-comments)). ✅
 
 ## Still open
 
