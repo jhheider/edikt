@@ -19,10 +19,10 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Format-preserving structured-config editor (JSONC and INI; .env coming).",
-    long_about = "Query and edit JSONC/JSON5 and INI files with a jq-flavored \
-expression language, preserving comments and layout. Reads stdin and writes \
-stdout by default, like sed."
+    about = "Format-preserving structured-config editor: JSONC, INI, .env, TOML.",
+    long_about = "Query and edit JSONC/JSON5, INI, .env/.properties, and TOML with \
+a jq-flavored expression language, preserving comments and layout. Convert between \
+them with -T. Reads stdin and writes stdout by default, like sed."
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -80,6 +80,7 @@ enum Format {
     Jsonc,
     Ini,
     Env,
+    Toml,
 }
 
 /// Resolve a `-t`/`-T` format name.
@@ -88,6 +89,7 @@ fn format_from_name(name: &str) -> Result<Format, String> {
         "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
         "ini" | "cfg" | "conf" => Ok(Format::Ini),
         "env" | "properties" | "props" => Ok(Format::Env),
+        "toml" => Ok(Format::Toml),
         other => Err(format!("unknown format `{other}`")),
     }
 }
@@ -100,6 +102,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String
         )),
         Format::Ini => Ok(Box::new(edikt_ini::parse(src).map_err(|e| e.to_string())?)),
         Format::Env => Ok(Box::new(edikt_env::parse(src).map_err(|e| e.to_string())?)),
+        Format::Toml => Ok(Box::new(edikt_toml::parse(src).map_err(|e| e.to_string())?)),
     }
 }
 
@@ -110,6 +113,7 @@ fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>), String> 
         Format::Jsonc => Ok((edikt_jsonc::emit(value), Vec::new())),
         Format::Ini => edikt_ini::emit(value).map_err(|e| e.to_string()),
         Format::Env => edikt_env::emit(value).map_err(|e| e.to_string()),
+        Format::Toml => edikt_toml::emit(value).map_err(|e| e.to_string()),
     }
 }
 
@@ -278,6 +282,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
         Some("jsonc" | "json5" | "json") => Ok(Format::Jsonc),
         Some("ini" | "cfg" | "conf") => Ok(Format::Ini),
         Some("env" | "properties" | "props") => Ok(Format::Env),
+        Some("toml") => Ok(Format::Toml),
         Some(ext) => Err(format!("cannot infer format from `.{ext}`; pass -t")),
         None => Err("cannot infer format (no extension); pass -t".to_string()),
     }

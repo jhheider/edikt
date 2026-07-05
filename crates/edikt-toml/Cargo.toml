@@ -1,0 +1,11 @@
+[package]
+name = "edikt-toml"
+version = "0.0.0"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "edikt TOML format module: lossless edits via toml_edit, implementing Document."
+
+[dependencies]
+edikt-core = { workspace = true }
+toml_edit = "0.22"

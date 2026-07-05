@@ -26,10 +26,10 @@ Release infra is intentionally **last** — build the capability, then ship it.
 - ⬜ **Small fixes.** New-key creation for INI (section-aware), object literals
   `{...}` and `.["key"]` bracket keys in the language, `-i.bak` backups,
   iterate-in-assignment (`.a[] = x`).
-- ⬜ **M8 — YAML & TOML** (newly in scope). Bring the common formats in-house,
-  not just the gap ones. TOML gets a `toml_edit`-style lossless-CST head start;
-  YAML (comments + layout) is the ambitious one. Both drop into the
-  `Document`/`Feature` seams.
+- 🚧 **M8 — YAML & TOML** (newly in scope). ✅ **TOML**: full lossless edit via
+  `toml_edit` (query + edit + convert). ⬜ **YAML**: query + convert first
+  (pure-Rust serde); lossless in-place edit via `yqlib-sys` (FFI) or a greenfield
+  `yaml-lib` CST — spike to decide. Both drop into the `Document`/`Feature` seams.
 - ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
   real queries demand.
 - ⬜ **Release infra — LAST.** Coverage (Coveralls), release workflow
@@ -52,8 +52,8 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | `.env` | ✅ in scope (done) | flat, line-level only, interpret nothing |
 | `.properties` (Java) | ✅ in scope (done) | `key=value` / `key:value`; `\` continuations are a follow-up |
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
-| TOML | 🟡 planned (M8) | `toml_edit` gives a lossless-CST head start |
-| YAML | 🟡 planned (M8) | comments + layout — the ambitious one (currently served by yq) |
+| TOML | ✅ in scope (done) | full lossless edit via `toml_edit` (comments, tables, layout) |
+| YAML | 🟡 planned (M8b) | query + convert first (pure-Rust); lossless edit via yqlib-sys or a greenfield CST |
 | XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |
 | HCL (Terraform) | 🟡 candidate | structured devops config |
 | KDL | 🟡 candidate | newer config language |

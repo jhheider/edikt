@@ -1,0 +1,16 @@
+# Project configuration
+title = "edikt"
+
+[package]
+name = "edikt"
+version = "0.1.0"          # bump on release
+edition = "2024"
+authors = ["Jacob Heider <jhheider@gmail.com>"]
+
+[dependencies]
+rowan = "0.16"
+logos = { version = "0.16", features = ["export_derive"] }
+
+[[bin]]
+name = "edikt"
+path = "src/main.rs"

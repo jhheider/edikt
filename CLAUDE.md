@@ -322,5 +322,11 @@ round-trip corpus must be green before merge.
 
 - Being jq — no general-purpose/functional language (see v1 scope list above).
 - Formatting / linting / reflowing — ever, for regions not targeted.
-- First-class YAML/TOML/JSON editing — yq, `toml-cli`, jq own those. edikt fills
-  the *gap* formats; rebuilding the covered ones dilutes the niche.
+
+Note: the brief originally scoped out YAML/TOML as "already served" by yq/
+`toml_edit`. That decision was **revised** — the goal is now to bring the common
+formats in-house for completeness and conversion. **TOML** is done (lossless, via
+`toml_edit`). **YAML** is query + convert first (pure-Rust); lossless in-place
+YAML editing is deferred behind an opt-in backend (`yqlib-sys`) rather than
+hand-rolled, so we don't ship a worse-than-yq YAML editor. We still don't rebuild
+JSON's plain query (jq owns that) or reflow/format anything.

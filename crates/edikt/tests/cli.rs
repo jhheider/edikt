@@ -302,6 +302,38 @@ fn ini_creates_new_section() {
 }
 
 #[test]
+fn toml_query_and_edit_keeps_comment() {
+    let (out, _e, code) = run(
+        &["-t", "toml", ".package.version"],
+        "[package]\nversion = \"1.0.0\"\n",
+    );
+    assert_eq!(out, "1.0.0\n");
+    assert_eq!(code, 0);
+
+    let (edited, _e, code2) = run(
+        &["-t", "toml", r#".version = "2.0.0""#],
+        "version = \"1.0.0\"  # semver\n",
+    );
+    assert_eq!(edited, "version = \"2.0.0\"  # semver\n");
+    assert_eq!(code2, 0);
+}
+
+#[test]
+fn convert_toml_to_json_and_back() {
+    let (out, _e, code) = run(&["-t", "toml", "-T", "json"], "[a]\nb = 1\n");
+    assert_eq!(out, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");
+    assert_eq!(code, 0);
+
+    let (toml, _e, code2) = run(
+        &["-t", "jsonc", "-T", "toml"],
+        "{ \"package\": { \"name\": \"x\", \"version\": \"1\" } }",
+    );
+    assert!(toml.contains("[package]"), "got: {toml}");
+    assert!(toml.contains("name = \"x\""));
+    assert_eq!(code2, 0);
+}
+
+#[test]
 fn object_literal_and_bracket_key() {
     let (out, _e, code) = run(&["-t", "jsonc", ".config = {}"], "{ \"config\": 1 }");
     assert_eq!(out, "{ \"config\": {} }");

@@ -1,0 +1,12 @@
+# server profiles
+default_timeout = 30
+retries = 3
+
+[servers.primary]
+host = "db1.internal"
+port = 5432
+
+[servers.replica]
+host = "db2.internal"
+port = 5432
+weight = 0.5
