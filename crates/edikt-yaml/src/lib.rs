@@ -84,6 +84,26 @@ impl Document for Yaml {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.source, &self.doc))
     }
+    fn set_comment(
+        &mut self,
+        path: &[edikt_core::Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let (source, warnings) =
+            comments::set_node_comment(&self.source, &self.doc, path, kind, text)?;
+        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        Ok(warnings)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[edikt_core::Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        let source = comments::delete_node_comment(&self.source, &self.doc, path, kind)?;
+        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        Ok(())
+    }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
         edit::source_slices(&self.source, &self.doc, path)
     }
@@ -106,6 +126,61 @@ mod tests {
         let mut doc = parse(src).unwrap();
         doc.apply(&parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_block_yaml() {
+        // Head above a mapping entry.
+        assert_eq!(
+            cedit(
+                "web:\n  image: nginx\n  replicas: 3\n",
+                ".web.replicas.# = \"scale\""
+            ),
+            "web:\n  image: nginx\n  # scale\n  replicas: 3\n"
+        );
+        // Inline on a scalar value.
+        assert_eq!(
+            cedit("web:\n  image: nginx\n", ".web.image.#.inline = \"pinned\""),
+            "web:\n  image: nginx  # pinned\n"
+        );
+        // Inline on a container key (the block mapping).
+        assert_eq!(
+            cedit("web:\n  image: nginx\n", ".web.#.inline = \"svc\""),
+            "web:  # svc\n  image: nginx\n"
+        );
+        // Head above a block-sequence item, at the dash's indent.
+        assert_eq!(
+            cedit("ports:\n  - 80\n  - 443\n", ".ports[1].# = \"https\""),
+            "ports:\n  - 80\n  # https\n  - 443\n"
+        );
+        // Editing a sibling leaves an existing inline comment untouched.
+        assert_eq!(
+            cedit(
+                "# stack\nweb:\n  image: nginx   # keep\n  replicas: 3\n",
+                ".web.replicas.# = \"count\""
+            ),
+            "# stack\nweb:\n  image: nginx   # keep\n  # count\n  replicas: 3\n"
+        );
+        // Delete, and the result re-parses byte-for-byte to the original.
+        assert_eq!(cedit("a: 1\n# note\nb: 2\n", "del(.b.#)"), "a: 1\nb: 2\n");
+    }
+
+    #[test]
+    fn comment_on_flow_collection_defers_to_reflow() {
+        let mut doc = parse("flags: [ssl, verify]\n").unwrap();
+        let err = edikt_core::apply_comment_mutation(
+            &mut doc,
+            &parse_expr(".flags[0].# = \"x\"").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("block-style expansion"), "got: {err}");
     }
 
     #[test]

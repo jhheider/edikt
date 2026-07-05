@@ -13,7 +13,204 @@
 
 use crate::compose::{self, Entry, Node, NodeKind};
 use crate::emit::emit;
-use edikt_core::{Commented, CommentedNode, Comments, EditError, Value};
+use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, line_index,
+    place_line_comment,
+};
+
+// --- in-place comment write-back ---------------------------------------
+
+/// Is `line` a YAML comment line (`#`, after indent)?
+fn is_comment_line(line: &str) -> bool {
+    line.trim_start().starts_with('#')
+}
+
+/// Set the `kind` comment on the node at `path` (a value prefix), format-
+/// preserving via a byte-splice over the source. Head/foot go on own lines
+/// around the target's line; inline after its first line's content. A **flow**
+/// target (inside `[…]`/`{…}`, no own line) errors — that reflow is a follow-up.
+pub(crate) fn set_node_comment(
+    source: &str,
+    doc: &Node,
+    path: &[Step],
+    kind: CommentKind,
+    text: &str,
+) -> Result<(String, Vec<String>), EditError> {
+    let (anchor, first_line_end) = resolve_anchor(source, doc, path)?;
+    let indent = block_indent(source, anchor).ok_or_else(|| {
+        EditError::new(
+            "adding a comment to a flow collection needs block-style expansion (a follow-up)",
+        )
+    })?;
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot => {
+            let width = wrap_width(source);
+            let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
+            place_line_comment(
+                source,
+                line_index(source, anchor),
+                matches!(kind, CommentKind::Head),
+                &indent,
+                "# ",
+                &is_comment_line,
+                Some(&wrapped),
+            )
+        }
+        CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, Some(text)),
+    };
+    Ok((out, Vec::new()))
+}
+
+/// Delete the `kind` comment on the node at `path` (a miss is a no-op).
+pub(crate) fn delete_node_comment(
+    source: &str,
+    doc: &Node,
+    path: &[Step],
+    kind: CommentKind,
+) -> Result<String, EditError> {
+    let Ok((anchor, first_line_end)) = resolve_anchor(source, doc, path) else {
+        return Ok(source.to_string());
+    };
+    let Some(indent) = block_indent(source, anchor) else {
+        return Ok(source.to_string()); // flow: nothing to drop here
+    };
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot => place_line_comment(
+            source,
+            line_index(source, anchor),
+            matches!(kind, CommentKind::Head),
+            &indent,
+            "# ",
+            &is_comment_line,
+            None,
+        ),
+        CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, None),
+    };
+    Ok(out)
+}
+
+/// Rewrite (or clear) the inline comment on the target's first line: keep the
+/// line's content (trimmed of trailing space and any existing comment), then set
+/// `  # text` before its line ending.
+fn rewrite_inline(source: &str, anchor: usize, first_line_end: usize, set: Option<&str>) -> String {
+    // Preserve a CRLF ending: keep the `\r` with the tail, not the content.
+    let content_end = if source[..first_line_end].ends_with('\r') {
+        first_line_end - 1
+    } else {
+        first_line_end
+    };
+    let line = &source[anchor..content_end];
+    let core_len = inline_comment_start(line).unwrap_or(line.len());
+    let core = line[..core_len].trim_end();
+    let tail = match set {
+        Some(text) => format!("  # {}", sanitize(text)),
+        None => String::new(),
+    };
+    format!(
+        "{}{}{}{}",
+        &source[..anchor],
+        core,
+        tail,
+        &source[content_end..]
+    )
+}
+
+/// The comment indent for a **block** target: the leading whitespace of its
+/// line. `None` when the target is inside a **flow** collection (the text
+/// between the line start and the anchor holds more than whitespace and
+/// block-sequence `-` markers — e.g. `[`, `,`), which has no own line.
+fn block_indent(source: &str, anchor: usize) -> Option<String> {
+    let line_start = source[..anchor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    // Block context: only whitespace and sequence dashes precede the anchor.
+    if !source[line_start..anchor]
+        .chars()
+        .all(|c| c == ' ' || c == '\t' || c == '-')
+    {
+        return None;
+    }
+    Some(
+        source[line_start..]
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect(),
+    )
+}
+
+/// The byte index in `line` where an inline comment begins (a `#` at the start
+/// or after whitespace), if any. Imprecise on a `#` inside a quoted scalar —
+/// the same trade-off `has_comments` makes; only ever over-trims a rare case.
+fn inline_comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    (0..bytes.len()).find(|&i| bytes[i] == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()))
+}
+
+/// Resolve a comment target to `(line anchor, first-line end)`: the anchor is
+/// the key's byte offset (mapping entry) or the item's (sequence element); the
+/// first-line end is the `\n` (or EOF) ending the target's opening line.
+fn resolve_anchor(source: &str, doc: &Node, path: &[Step]) -> Result<(usize, usize), EditError> {
+    let Some((last, parent)) = path.split_last() else {
+        return Err(EditError::new(
+            "document-level (`.#`) comment editing for YAML is a follow-up",
+        ));
+    };
+    let container = descend(doc, parent)?;
+    let anchor = match last {
+        Step::Field(k) => {
+            let NodeKind::Mapping(entries) = &container.kind else {
+                return Err(EditError::new("comment target is not a mapping key"));
+            };
+            entries
+                .iter()
+                .find(|e| &e.key == k)
+                .map(|e| e.key_span.start)
+                .ok_or_else(|| EditError::new(format!("no key `{k}`")))?
+        }
+        Step::Index(i) => {
+            let NodeKind::Sequence(items) = &container.kind else {
+                return Err(EditError::new("comment target is not a sequence element"));
+            };
+            let idx = if *i < 0 { items.len() as i64 + i } else { *i };
+            if idx < 0 || idx as usize >= items.len() {
+                return Err(EditError::new("sequence index out of range"));
+            }
+            items[idx as usize].span.start
+        }
+        _ => {
+            return Err(EditError::new(
+                "comment paths address mapping keys or sequence elements",
+            ));
+        }
+    };
+    let first_line_end = source[anchor..]
+        .find('\n')
+        .map(|i| anchor + i)
+        .unwrap_or(source.len());
+    Ok((anchor, first_line_end))
+}
+
+/// Navigate the physical span tree along `path` (a merged-in key isn't
+/// physically present, so it isn't a comment target — consistent with edits).
+fn descend<'a>(node: &'a Node, path: &[Step]) -> Result<&'a Node, EditError> {
+    let mut cur = node;
+    for step in path {
+        cur = match (step, &cur.kind) {
+            (Step::Field(k), NodeKind::Mapping(entries)) => entries
+                .iter()
+                .find(|e| &e.key == k)
+                .map(|e| &e.value)
+                .ok_or_else(|| EditError::new(format!("no key `{k}`")))?,
+            (Step::Index(i), NodeKind::Sequence(items)) => {
+                let idx = if *i < 0 { items.len() as i64 + i } else { *i };
+                items
+                    .get(usize::try_from(idx).map_err(|_| EditError::new("negative index"))?)
+                    .ok_or_else(|| EditError::new("index out of range"))?
+            }
+            _ => return Err(EditError::new("comment path does not resolve to a node")),
+        };
+    }
+    Ok(cur)
+}
 
 // --- extraction ---------------------------------------------------------
 
