@@ -182,6 +182,67 @@ mod tests {
     }
 
     #[test]
+    fn value_editing_paths() {
+        // += and |= arithmetic; a pipe of edits; del — the apply arms.
+        assert!(edit_src("n = 1\n", ".n += 4").contains("n = 5"));
+        assert!(edit_src("n = 10\n", ".n |= . / 2").contains("n = 5"));
+        assert_eq!(
+            edit_src("a = 1\nb = 2\n", ".a = 9 | .b = 8"),
+            "a = 9\nb = 8\n"
+        );
+        assert!(!edit_src("a = 1\nb = 2\n", "del(.a)").contains("a ="));
+        // Setting an array and a nested object (inline table).
+        assert!(edit_src("xs = []\n", ".xs = [1, 2, 3]").contains("xs = [1, 2, 3]"));
+        let obj = edit_src("t = 0\n", r#".t = {"x": 1, "y": true}"#);
+        assert!(
+            obj.contains("x = 1") && obj.contains("y = true"),
+            "got: {obj}"
+        );
+    }
+
+    #[test]
+    fn null_value_is_rejected() {
+        // TOML has no null; setting one is a clean error, not a panic.
+        let mut doc = parse("a = 1\n").unwrap();
+        let err = apply(&mut doc, &parse_expr(".a = null").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("null"), "got: {err}");
+    }
+
+    #[test]
+    fn emit_shapes_tables_and_arrays() {
+        // A top-level scalar stays a key; a nested object becomes a `[table]`;
+        // an array of objects emits as an inline array of tables (and round-trips).
+        let value = Value::Object(vec![
+            ("name".into(), Value::Str("edikt".into())),
+            (
+                "server".into(),
+                Value::Object(vec![("port".into(), Value::Int(8080))]),
+            ),
+            (
+                "bin".into(),
+                Value::Array(vec![
+                    Value::Object(vec![("name".into(), Value::Str("a".into()))]),
+                    Value::Object(vec![("name".into(), Value::Str("b".into()))]),
+                ]),
+            ),
+        ]);
+        let (out, warnings) = emit(&value).unwrap();
+        assert!(warnings.is_empty());
+        assert!(out.contains("name = \"edikt\""));
+        assert!(
+            out.contains("[server]") && out.contains("port = 8080"),
+            "got: {out}"
+        );
+        assert!(out.contains("bin = [{"), "got: {out}");
+        // Re-reading yields the same value.
+        assert_eq!(parse(&out).unwrap().to_value(), value);
+        // A non-object top level can't be a TOML document.
+        assert!(emit(&Value::Int(1)).is_err());
+    }
+
+    #[test]
     fn comment_mutation_set_edit_delete() {
         // Set a head comment above a value; surrounding bytes untouched.
         assert_eq!(
