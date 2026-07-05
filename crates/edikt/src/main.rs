@@ -69,6 +69,7 @@ fn main() -> ExitCode {
 enum Format {
     Jsonc,
     Ini,
+    Env,
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
@@ -78,6 +79,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String
             edikt_jsonc::parse(src).map_err(|e| e.to_string())?,
         )),
         Format::Ini => Ok(Box::new(edikt_ini::parse(src).map_err(|e| e.to_string())?)),
+        Format::Env => Ok(Box::new(edikt_env::parse(src).map_err(|e| e.to_string())?)),
     }
 }
 
@@ -179,16 +181,20 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
         return match t.to_ascii_lowercase().as_str() {
             "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
             "ini" | "cfg" | "conf" => Ok(Format::Ini),
-            "env" | "properties" | "props" => {
-                Err(".env/.properties support arrives in M5".to_string())
-            }
+            "env" | "properties" | "props" => Ok(Format::Env),
             other => Err(format!("unknown format `{other}`")),
         };
+    }
+    // `.env` (and `.env.local`, …) are dotfiles with no extension — match by name.
+    if let Some(name) = path.and_then(|p| p.file_name()).and_then(|n| n.to_str())
+        && (name == ".env" || name.starts_with(".env."))
+    {
+        return Ok(Format::Env);
     }
     match path.and_then(|p| p.extension()).and_then(|e| e.to_str()) {
         Some("jsonc" | "json5" | "json") => Ok(Format::Jsonc),
         Some("ini" | "cfg" | "conf") => Ok(Format::Ini),
-        Some("env" | "properties") => Err(".env/.properties support arrives in M5".to_string()),
+        Some("env" | "properties" | "props") => Ok(Format::Env),
         Some(ext) => Err(format!("cannot infer format from `.{ext}`; pass -t")),
         None => Err("cannot infer format (no extension); pass -t".to_string()),
     }
