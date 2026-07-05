@@ -577,13 +577,21 @@ fn comment_mutation_on_decor_formats() {
     assert_eq!(out2, "server {\n    port 8080 // listen\n}\n");
     assert_eq!(c2, 0);
 
-    // A format without a comment write path yet errors clearly (not a panic).
-    let (_o, err, c3) = run(&["-t", "jsonc", r#".a.# = "x""#], "{ \"a\": 1 }");
-    assert_eq!(c3, 2);
-    assert!(
-        err.contains("isn't supported for this format yet"),
-        "got: {err}"
+    // JSONC (rowan) head comment in place; surrounding bytes untouched.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/comment-edit.jsonc");
+    std::fs::write(&path, "{\n  // keep\n  \"a\": 1,\n  \"b\": 2\n}\n").unwrap();
+    let (_o, _e, c3) = run(&["-i", r#".b.# = "note""#, &path], "");
+    assert_eq!(c3, 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "{\n  // keep\n  \"a\": 1,\n  // note\n  \"b\": 2\n}\n"
     );
+
+    // A compact object defers to the layout-reflow follow-up with a clear error.
+    let (_o, err, c4) = run(&["-t", "jsonc", r#".b.# = "x""#], "{ \"a\": 1, \"b\": 2 }");
+    assert_eq!(c4, 2);
+    assert!(err.contains("layout expansion"), "got: {err}");
 }
 
 #[test]

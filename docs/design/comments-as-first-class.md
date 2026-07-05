@@ -286,9 +286,17 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
   - ✅ **2a — TOML & KDL** (decor strings). **Shipped.** `foot` and
     document-level (`.#`) editing are follow-ups; comment targets are nodes, not
     properties/args.
-  - ⬜ **2b — JSONC / INI / `.env`** (rowan comment-token splice).
+  - ✅ **2b — JSONC / INI / `.env`** (source splice guided by the rowan tree,
+    then re-parse — untouched bytes preserved). **Shipped.** Line-oriented
+    formats (INI, `.env`) share `edikt_core::place_line_comment`; JSONC splices
+    by member/element span. `.env` has head/foot only (inline refused); INI adds
+    inline + section-header comments; JSONC does head/inline for members and
+    array elements. A **compact / single-line JSONC** target (no line to hang an
+    own-line comment, or a container-close that an inline would swallow) errors
+    with a clear "needs layout expansion" — that reflow is 2c.
   - ⬜ **2c — YAML** (span-tree byte-splice) + the layout-reflow warnings
-    (compact→pretty, flow→block).
+    (compact JSON → pretty, YAML flow → block) that turn 2b's clean errors into
+    warn-and-expand.
 - **Phase 3 — document-wide `comments` + bulk edit + comment→key.** Requires the
   key-carrying-iteration primitive; the largest and least-certain piece, so it
   goes last and its shape is confirmed by what Phase 1/2 usage actually demands.

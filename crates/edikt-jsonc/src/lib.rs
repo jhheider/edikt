@@ -217,6 +217,25 @@ impl Document for Jsonc {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.root))
     }
+    fn set_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let (source, warnings) = comments::set_node_comment(&self.root, path, kind, text)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(warnings)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        let source = comments::delete_node_comment(&self.root, path, kind)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(())
+    }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
         edit::source_slice(&self.root, path)
     }
@@ -387,6 +406,63 @@ mod tests {
         let mut doc = parse(src).unwrap();
         apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_head_inline_and_element() {
+        // Head above a member (only that region changes).
+        assert_eq!(
+            cedit(
+                "{\n  \"strict\": true,\n  \"target\": \"ES2020\"\n}\n",
+                ".target.# = \"level\""
+            ),
+            "{\n  \"strict\": true,\n  // level\n  \"target\": \"ES2020\"\n}\n"
+        );
+        // Inline after the value (past the comma).
+        assert_eq!(
+            cedit(
+                "{\n  \"strict\": true,\n  \"x\": 1\n}\n",
+                ".strict.#.inline = \"checks\""
+            ),
+            "{\n  \"strict\": true, // checks\n  \"x\": 1\n}\n"
+        );
+        // Head on an array element.
+        assert_eq!(
+            cedit(
+                "{\n  \"xs\": [\n    \"a\",\n    \"b\"\n  ]\n}\n",
+                ".xs[1].# = \"second\""
+            ),
+            "{\n  \"xs\": [\n    \"a\",\n    // second\n    \"b\"\n  ]\n}\n"
+        );
+        // Replace one member's head, keep a sibling's comment.
+        assert_eq!(
+            cedit(
+                "{\n  // keep\n  \"a\": 1,\n  // old\n  \"b\": 2\n}\n",
+                ".b.# |= ascii_upcase"
+            ),
+            "{\n  // keep\n  \"a\": 1,\n  // OLD\n  \"b\": 2\n}\n"
+        );
+        // Delete a head comment.
+        assert_eq!(
+            cedit("{\n  // drop\n  \"a\": 1\n}\n", "del(.a.#)"),
+            "{\n  \"a\": 1\n}\n"
+        );
+    }
+
+    #[test]
+    fn comment_on_compact_object_defers_to_reflow() {
+        let mut doc = parse("{ \"a\": 1, \"b\": 2 }").unwrap();
+        let err =
+            edikt_core::apply_comment_mutation(&mut doc, &parse_expr(".b.# = \"x\"").unwrap())
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("layout expansion"), "got: {err}");
     }
 
     fn changed_lines(a: &str, b: &str) -> Vec<usize> {

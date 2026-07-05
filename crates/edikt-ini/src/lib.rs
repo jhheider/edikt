@@ -124,6 +124,25 @@ impl Document for Ini {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.root))
     }
+    fn set_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let (source, warnings) = comments::set_target_comment(&self.root, path, kind, text)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(warnings)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        let source = comments::delete_target_comment(&self.root, path, kind)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(())
+    }
 }
 
 /// Emit a value as INI: top-level scalars become preamble entries, top-level
@@ -151,6 +170,44 @@ mod tests {
         let mut doc = parse(src).unwrap();
         apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_entry_and_header() {
+        // Head above an entry.
+        assert_eq!(
+            cedit(
+                "[server]\nhost = x\nport = 8080\n",
+                ".server.port.# = \"listen\""
+            ),
+            "[server]\nhost = x\n; listen\nport = 8080\n"
+        );
+        // Inline on an entry.
+        assert_eq!(
+            cedit("[s]\nport = 8080\n", ".s.port.#.inline = \"the port\""),
+            "[s]\nport = 8080  ; the port\n"
+        );
+        // Head above a section header.
+        assert_eq!(
+            cedit("[server]\nhost = x\n", ".server.# = \"web\""),
+            "; web\n[server]\nhost = x\n"
+        );
+        // Replace an existing inline.
+        assert_eq!(
+            cedit("port = 8080  ; old\n", ".port.#.inline = \"new\""),
+            "port = 8080  ; new\n"
+        );
+        // Delete an inline.
+        assert_eq!(
+            cedit("port = 8080  ; drop\n", "del(.port.#.inline)"),
+            "port = 8080\n"
+        );
     }
 
     #[test]

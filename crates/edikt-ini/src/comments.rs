@@ -5,8 +5,146 @@
 
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
-use edikt_core::{Commented, CommentedNode, Comments, EditError, Value, flatten_commented};
+use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, flatten_commented,
+    line_index, place_line_comment,
+};
 use rowan::NodeOrToken;
+
+// --- in-place comment write-back ---------------------------------------
+
+/// Is `line` an INI comment line (`;` or `#`, after indent)?
+fn is_comment_line(line: &str) -> bool {
+    matches!(line.trim_start().as_bytes().first(), Some(b';' | b'#'))
+}
+
+/// Set the `kind` comment on the node (entry or section header) at `path`.
+pub(crate) fn set_target_comment(
+    root: &SyntaxNode,
+    path: &[Step],
+    kind: CommentKind,
+    text: &str,
+) -> Result<(String, Vec<String>), EditError> {
+    let target = resolve_target(root, path)?;
+    let source = edikt_syntax::to_source(root);
+    let start: usize = target.text_range().start().into();
+    let indent: String = source[start..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot => {
+            let width = wrap_width(&source);
+            let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
+            place_line_comment(
+                &source,
+                line_index(&source, start),
+                matches!(kind, CommentKind::Head),
+                &indent,
+                "; ",
+                &is_comment_line,
+                Some(&wrapped),
+            )
+        }
+        CommentKind::Inline => rewrite_inline(&source, &target, Some(text)),
+    };
+    Ok((out, Vec::new()))
+}
+
+/// Delete the `kind` comment on the node at `path` (a miss is a no-op).
+pub(crate) fn delete_target_comment(
+    root: &SyntaxNode,
+    path: &[Step],
+    kind: CommentKind,
+) -> Result<String, EditError> {
+    let source = edikt_syntax::to_source(root);
+    let Ok(target) = resolve_target(root, path) else {
+        return Ok(source);
+    };
+    let start: usize = target.text_range().start().into();
+    let indent: String = source[start..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot => place_line_comment(
+            &source,
+            line_index(&source, start),
+            matches!(kind, CommentKind::Head),
+            &indent,
+            "; ",
+            &is_comment_line,
+            None,
+        ),
+        CommentKind::Inline => rewrite_inline(&source, &target, None),
+    };
+    Ok(out)
+}
+
+/// Rewrite (or clear) an entry/header line's inline comment: keep everything up
+/// to the value/`]`, then set `  ; text` (or nothing) before the line's newline.
+fn rewrite_inline(source: &str, target: &SyntaxNode, set: Option<&str>) -> String {
+    // Content end: after the entry's Value node, or after a header's `]`.
+    let content_end: usize = target
+        .children()
+        .find(|n| n.kind() == Sk::Value)
+        .map(|v| v.text_range().end())
+        .or_else(|| {
+            target
+                .children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| t.kind() == Sk::Close)
+                .map(|t| t.text_range().end())
+        })
+        .map(usize::from)
+        .unwrap_or_else(|| target.text_range().end().into());
+    let nl = source[content_end..]
+        .find('\n')
+        .map(|i| content_end + i)
+        .unwrap_or(source.len());
+    let tail = match set {
+        Some(text) => format!("  ; {}", sanitize(text)),
+        None => String::new(),
+    };
+    format!("{}{}{}", &source[..content_end], tail, &source[nl..])
+}
+
+/// Resolve a comment target to its entry or header node.
+fn resolve_target(root: &SyntaxNode, path: &[Step]) -> Result<SyntaxNode, EditError> {
+    match path {
+        [] => Err(EditError::new(
+            "document-level (`.#`) comment editing for INI is a follow-up",
+        )),
+        [Step::Field(name)] => {
+            // A `[name]` section's header, else a preamble entry.
+            if let Some(header) = section_header(root, name) {
+                Ok(header)
+            } else {
+                crate::edit::resolve_entry(root, path)
+                    .ok_or_else(|| EditError::new(format!("no key or section `{name}`")))
+            }
+        }
+        [Step::Field(_), Step::Field(_)] => {
+            crate::edit::resolve_entry(root, path).ok_or_else(|| EditError::new("no such entry"))
+        }
+        _ => Err(EditError::new(
+            "INI comment paths are `.key`, `.section`, or `.section.key`",
+        )),
+    }
+}
+
+/// The `Header` node of a named section, if it exists.
+fn section_header(root: &SyntaxNode, name: &str) -> Option<SyntaxNode> {
+    root.children()
+        .filter(|n| n.kind() == Sk::Section)
+        .find_map(|s| {
+            s.children()
+                .find(|c| c.kind() == Sk::Header)
+                .filter(|h| project::section_name(h) == name)
+        })
+}
 
 // --- extraction ---------------------------------------------------------
 
