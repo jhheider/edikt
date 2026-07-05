@@ -20,7 +20,7 @@ pub(crate) fn is_value_token(kind: Sk) -> bool {
     matches!(kind, Sk::Str | Sk::Num | Sk::True | Sk::False | Sk::Null)
 }
 
-fn value_node(node: &SyntaxNode) -> Value {
+pub(crate) fn value_node(node: &SyntaxNode) -> Value {
     if let Some(obj) = node.children().find(|n| n.kind() == Sk::Object) {
         return object(&obj);
     }
@@ -82,7 +82,7 @@ fn number(text: &str) -> Value {
 }
 
 /// Unescape a JSON double-quoted string token (quotes included).
-fn unescape(tok: &str) -> String {
+pub(crate) fn unescape(tok: &str) -> String {
     let inner = tok
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))

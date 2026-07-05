@@ -118,16 +118,33 @@ impl Parser {
     }
 
     fn parse_comma(&mut self) -> Result<Expr, ParseError> {
-        let first = self.parse_cmp()?;
+        let first = self.parse_assign()?;
         if self.peek() != Some(Lx::Comma) {
             return Ok(first);
         }
         let mut items = vec![first];
         while self.peek() == Some(Lx::Comma) {
             self.pos += 1;
-            items.push(self.parse_cmp()?);
+            items.push(self.parse_assign()?);
         }
         Ok(Expr::Comma(items))
+    }
+
+    fn parse_assign(&mut self) -> Result<Expr, ParseError> {
+        let lhs = self.parse_cmp()?;
+        match self.peek() {
+            Some(Lx::Assign) => {
+                self.pos += 1;
+                let rhs = self.parse_assign()?; // right-associative
+                Ok(Expr::Assign(Box::new(lhs), Box::new(rhs)))
+            }
+            Some(Lx::PipeAssign) => {
+                self.pos += 1;
+                let rhs = self.parse_assign()?;
+                Ok(Expr::UpdateAssign(Box::new(lhs), Box::new(rhs)))
+            }
+            _ => Ok(lhs),
+        }
     }
 
     fn parse_cmp(&mut self) -> Result<Expr, ParseError> {

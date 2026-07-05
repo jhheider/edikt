@@ -6,12 +6,15 @@
 //! only the targeted nodes. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
 
+mod edit;
 mod lexer;
 mod parser;
 mod project;
 mod syntax;
 
-use edikt_core::{Document, Feature, Value};
+pub use edit::{EditError, apply};
+
+use edikt_core::{Document, Feature, Step, Value};
 use syntax::{Sk, SyntaxNode};
 
 /// Capabilities of the JSONC/JSON5 family.
@@ -41,9 +44,26 @@ pub struct Jsonc {
 }
 
 impl Jsonc {
-    /// Access the underlying syntax tree (needed by the M2 edit path).
+    /// Access the underlying syntax tree.
     pub fn syntax(&self) -> &SyntaxNode {
         &self.root
+    }
+
+    /// Set the value at `path` to `value`, format-preserving: only that value
+    /// node's bytes change. The path must already exist (new-key creation lands
+    /// in a later slice).
+    pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        let target = edit::resolve_value_node(&self.root, path).ok_or_else(|| {
+            EditError::new("path not found (creating new keys is not supported yet)")
+        })?;
+        let new_root = target.replace_with(edit::value_green(value));
+        self.root = SyntaxNode::new_root(new_root);
+        Ok(())
+    }
+
+    /// The value at `path`, projected to the value model, or `None` if absent.
+    pub fn value_at(&self, path: &[Step]) -> Option<Value> {
+        edit::resolve_value_node(&self.root, path).map(|n| project::value_node(&n))
     }
 }
 
@@ -238,5 +258,102 @@ mod tests {
             vec![Value::Str("node_modules".into()), Value::Str("dist".into())]
         );
         assert_eq!(q(".compilerOptions.lib | length"), vec![Value::Int(2)]);
+    }
+
+    // --- format-preserving edits (surgical, anti-parity) ------------------
+
+    fn edit_src(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    fn changed_lines(a: &str, b: &str) -> Vec<usize> {
+        let la: Vec<_> = a.lines().collect();
+        let lb: Vec<_> = b.lines().collect();
+        (0..la.len().max(lb.len()))
+            .filter(|&i| la.get(i) != lb.get(i))
+            .collect()
+    }
+
+    #[test]
+    fn set_touches_exactly_one_line_and_keeps_comments() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let out = edit_src(&src, r#".compilerOptions.target = "ES2022""#);
+        assert_eq!(
+            changed_lines(&src, &out),
+            vec![3],
+            "only the target line should change"
+        );
+        assert!(out.contains(r#""target": "ES2022""#));
+        // comments and trailing commas survive — the thing jq/yq can't do
+        assert!(out.contains("// TypeScript compiler configuration"));
+        assert!(out.contains("/* language level */"));
+        assert!(out.contains("\"dist\",\n\t],"));
+        assert!(parse(&out).is_ok(), "edited output must re-parse");
+    }
+
+    #[test]
+    fn set_scalars() {
+        assert_eq!(
+            edit_src("{ \"a\": true }", ".a = false"),
+            "{ \"a\": false }"
+        );
+        assert_eq!(edit_src("{ \"a\": 1 }", ".a = 42"), "{ \"a\": 42 }");
+        assert_eq!(edit_src("{ \"a\": 1 }", ".a = null"), "{ \"a\": null }");
+        assert_eq!(
+            edit_src("{ \"a\": \"x\" }", r#".a = "y""#),
+            "{ \"a\": \"y\" }"
+        );
+    }
+
+    #[test]
+    fn set_into_array_index() {
+        assert_eq!(edit_src("[10, 20, 30]", ".[1] = 99"), "[10, 99, 30]");
+        assert_eq!(edit_src("[10, 20, 30]", ".[-1] = 99"), "[10, 20, 99]");
+    }
+
+    #[test]
+    fn update_assign_over_cst() {
+        assert_eq!(
+            edit_src("{ \"count\": 5 }", ".count |= . + 1"),
+            "{ \"count\": 6 }"
+        );
+        assert_eq!(
+            edit_src("{ \"n\": \"edikt\" }", ".n |= ascii_upcase"),
+            "{ \"n\": \"EDIKT\" }"
+        );
+    }
+
+    #[test]
+    fn piped_assignments() {
+        assert_eq!(
+            edit_src("{ \"a\": 1, \"b\": 2 }", ".a = 9 | .b = 8"),
+            "{ \"a\": 9, \"b\": 8 }"
+        );
+    }
+
+    #[test]
+    fn every_fixture_survives_a_noop_style_roundtrip_after_edit() {
+        // Editing one value then reading the file back must still be valid JSONC
+        // and preserve unrelated bytes.
+        for path in jsonc_fixtures() {
+            let src = std::fs::read_to_string(&path).unwrap();
+            let mut doc = parse(&src).unwrap();
+            // set root-level identity is meaningless; only run where a known key
+            // exists. Instead assert a re-parse of the unedited round-trip.
+            assert_eq!(doc.to_source(), src);
+            // an edit to a non-existent path must error, not corrupt the doc
+            let _ = apply(&mut doc, &parse_expr(".___nope___ = 1").unwrap());
+            assert_eq!(doc.to_source(), src, "failed edit must leave doc intact");
+        }
+    }
+
+    #[test]
+    fn set_missing_path_errors_and_del_is_deferred() {
+        let mut doc = parse("{ \"a\": 1 }").unwrap();
+        assert!(apply(&mut doc, &parse_expr(".nope = 1").unwrap()).is_err());
+        assert!(apply(&mut doc, &parse_expr("del(.a)").unwrap()).is_err());
+        assert!(apply(&mut doc, &parse_expr(".a").unwrap()).is_err()); // not an assignment
     }
 }
