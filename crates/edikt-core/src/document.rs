@@ -31,4 +31,17 @@ pub trait Document {
     /// Whether the source contains any comments — used to warn on conversion,
     /// which drops them.
     fn has_comments(&self) -> bool;
+
+    /// The **original source text** of each node selected by `path`, in document
+    /// order (aligned 1:1 with [`crate::eval`]'s results for the same path). This
+    /// is the format-preserving "get": a structural query returns the exact bytes
+    /// — comments, indentation, quoting — rather than a re-serialized value.
+    ///
+    /// The default returns empty, meaning "this format doesn't source-slice";
+    /// the caller then falls back to emitting the value in the target format.
+    /// Only formats with structural values (JSONC, YAML) need override it.
+    fn source_slice(&self, path: &[crate::Step]) -> Vec<String> {
+        let _ = path;
+        Vec::new()
+    }
 }

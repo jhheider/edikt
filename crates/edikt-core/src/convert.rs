@@ -6,7 +6,7 @@
 //! helpers are the shared machinery; the per-format emitters live in the format
 //! crates.
 
-use crate::Value;
+use crate::{Feature, Value};
 
 /// Render a value as pretty (2-space) JSON with a trailing newline.
 pub fn to_pretty_json(value: &Value) -> String {
@@ -115,6 +115,34 @@ pub fn has_array(value: &Value) -> bool {
 
 fn is_container(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
+}
+
+/// The [`Feature`]s a value needs a format to have to represent it faithfully:
+/// `Arrays` if it contains a sequence, `Nesting` if it nests containers,
+/// `TypedScalars` if it holds a non-string scalar. Used to name candidate output
+/// formats when the chosen one can't hold a query result.
+pub fn features_used(value: &Value) -> Vec<Feature> {
+    let mut used = Vec::new();
+    if has_array(value) {
+        used.push(Feature::Arrays);
+    }
+    if has_nesting(value) {
+        used.push(Feature::Nesting);
+    }
+    if has_typed_scalar(value) {
+        used.push(Feature::TypedScalars);
+    }
+    used
+}
+
+/// Does `value` contain a non-string scalar (number/bool/null) anywhere?
+fn has_typed_scalar(value: &Value) -> bool {
+    match value {
+        Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null => true,
+        Value::Str(_) => false,
+        Value::Array(a) => a.iter().any(has_typed_scalar),
+        Value::Object(m) => m.iter().any(|(_, v)| has_typed_scalar(v)),
+    }
 }
 
 #[cfg(test)]

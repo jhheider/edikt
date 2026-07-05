@@ -74,6 +74,9 @@ impl Document for Yaml {
             .lines()
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
     }
+    fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
+        edit::source_slices(&self.source, &self.doc, path)
+    }
 }
 
 #[cfg(test)]
@@ -317,6 +320,35 @@ mod tests {
         let out = edit(src, ".prod.a = 9");
         assert_eq!(out, "base: &b\n  a: 1\nprod:\n  <<: *b\n  a: 9\n");
         assert_eq!(q(&out, ".prod.a"), vec![Value::Int(9)]);
+    }
+
+    #[test]
+    fn source_slice_block_dedents_and_flow_is_verbatim() {
+        let doc = parse(SAMPLE).unwrap();
+        let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+        // A block mapping is returned dedented to the margin (valid standalone
+        // YAML), with its inline comment intact.
+        assert_eq!(
+            slice(".web"),
+            vec!["image: nginx:1.25   # pinned\nports:\n  - 80\n  - 443\nreplicas: 3"]
+        );
+        // A block sequence, dedented.
+        assert_eq!(slice(".web.ports"), vec!["- 80\n- 443"]);
+        // A scalar is its exact bytes.
+        assert_eq!(slice(".web.image"), vec!["nginx:1.25"]);
+        // Iterate yields one slice per element.
+        assert_eq!(slice(".web.ports[]"), vec!["80", "443"]);
+    }
+
+    #[test]
+    fn source_slice_flow_collection_is_verbatim() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
+        let src = std::fs::read_to_string(dir.join("anchors.yaml")).unwrap();
+        let doc = parse(&src).unwrap();
+        let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+        // A flow sequence/mapping comes back verbatim (already self-contained).
+        assert_eq!(slice(".production.flags"), vec!["[ssl, verify, fast]"]);
+        assert_eq!(slice(".production.meta"), vec!["{ owner: ops, tier: 1 }"]);
     }
 
     #[test]

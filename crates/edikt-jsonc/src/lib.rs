@@ -204,6 +204,9 @@ impl Document for Jsonc {
             .filter_map(|e| e.into_token())
             .any(|t| matches!(t.kind(), Sk::LineComment | Sk::BlockComment))
     }
+    fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
+        edit::source_slice(&self.root, path)
+    }
 }
 
 /// Emit a value as pretty JSON (the JSON/JSONC conversion target). JSON has no
@@ -238,6 +241,18 @@ mod tests {
             "{\n  \"nested\": { \"deep\": { \"x\": null } },\n  \"nums\": [-1, 2.5, 1e3]\n}",
         );
         roundtrips("{ \"unicode\": \"\\u00e9\\tdone\" }");
+    }
+
+    #[test]
+    fn source_slice_returns_exact_bytes() {
+        let doc = parse(TSCONFIG).unwrap();
+        let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+        // A structural result is its exact source — comment and all.
+        assert_eq!(slice(".compilerOptions.lib"), vec!["[\"ES2020\", \"DOM\"]"]);
+        // Iterate yields one slice per element, in order.
+        assert_eq!(slice(".exclude[]"), vec!["\"node_modules\""]);
+        // A nested object keeps its inner comment.
+        assert!(slice(".compilerOptions")[0].contains("/* bump me */"));
     }
 
     #[test]

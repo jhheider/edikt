@@ -378,3 +378,69 @@ fn block_end(source: &str, node: &Node) -> usize {
         },
     }
 }
+
+/// The original source text of each node selected by `path`, in document order
+/// (aligned with the evaluator). See [`slice_of`] for the per-node form.
+pub(crate) fn source_slices(source: &str, root: &Node, path: &[Step]) -> Vec<String> {
+    let mut current: Vec<&Node> = vec![root];
+    for step in path {
+        let mut next: Vec<&Node> = Vec::new();
+        for node in &current {
+            match step {
+                Step::Field(k) => {
+                    if let NodeKind::Mapping(entries) = &node.kind
+                        && let Some(e) = entries.iter().find(|e| &e.key == k)
+                    {
+                        next.push(&e.value);
+                    }
+                }
+                Step::Index(i) => {
+                    if let NodeKind::Sequence(items) = &node.kind
+                        && let Some(item) =
+                            normalize_index(*i, items.len()).and_then(|n| items.get(n))
+                    {
+                        next.push(item);
+                    }
+                }
+                Step::Iterate => match &node.kind {
+                    NodeKind::Sequence(items) => next.extend(items.iter()),
+                    NodeKind::Mapping(entries) => next.extend(entries.iter().map(|e| &e.value)),
+                    _ => {}
+                },
+            }
+        }
+        current = next;
+    }
+    current.iter().map(|n| slice_of(source, n)).collect()
+}
+
+/// The source form of one node: a scalar or flow collection (`[...]`/`{...}`) is
+/// returned verbatim; a block collection is returned as its full-line region,
+/// dedented to the left margin so the fragment is valid standalone YAML.
+fn slice_of(source: &str, node: &Node) -> String {
+    match &node.kind {
+        NodeKind::Scalar(_) => source[node.span.clone()].to_string(),
+        _ if matches!(source.as_bytes().get(node.span.start), Some(b'[' | b'{')) => {
+            source[node.span.clone()].to_string()
+        }
+        _ => {
+            let start = line_start(source, node.span.start);
+            let end = block_end(source, node);
+            dedent(source[start..end].trim_end_matches(['\n', '\r']))
+        }
+    }
+}
+
+/// Strip the common leading whitespace of every non-blank line.
+fn dedent(text: &str) -> String {
+    let min = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    text.lines()
+        .map(|l| if l.len() >= min { &l[min..] } else { l })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
