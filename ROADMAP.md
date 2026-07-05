@@ -26,12 +26,13 @@ Release infra is intentionally **last** — build the capability, then ship it.
 - ⬜ **Small fixes.** New-key creation for INI (section-aware), object literals
   `{...}` and `.["key"]` bracket keys in the language, `-i.bak` backups,
   iterate-in-assignment (`.a[] = x`).
-- 🚧 **M8 — YAML & TOML** (newly in scope). ✅ **TOML**: full lossless edit via
-  `toml_edit` (query + edit + convert). ✅ **YAML**: query + convert (pure-Rust
-  serde). ⬜ **YAML lossless in-place edit**: favored path is a greenfield
-  pure-Rust `yaml-lib` CST (full ownership, no FFI/social/license baggage;
-  grounded in the YAML 1.2.2 spec + yaml-test-suite) — `yqlib-sys` FFI is the
-  fallback.
+- ✅ **M8 — YAML & TOML** (newly in scope). ✅ **TOML**: full lossless edit via
+  `toml_edit` (query + edit + convert). ✅ **YAML**: **lossless in-place edit** +
+  query + convert, **pure Rust** via `libyaml-safer` (safe port of the reference
+  parser, zero transitive deps). One parse pass → a span tree that is both the
+  data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
+  preserve comments and layout; merge keys (`<<`) resolve in queries. Replaced
+  the serde floor — the greenfield-CST / `yqlib-sys` paths are moot.
 - ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
   real queries demand.
 - ⬜ **Release infra — LAST.** Coverage (Coveralls), release workflow
@@ -55,7 +56,7 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | `.properties` (Java) | ✅ in scope (done) | `key=value` / `key:value`; `\` continuations are a follow-up |
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
 | TOML | ✅ in scope (done) | full lossless edit via `toml_edit` (comments, tables, layout) |
-| YAML | ✅ query + convert | pure-Rust (serde); lossless in-place edit pending (greenfield `yaml-lib` favored) |
+| YAML | ✅ in scope (done) | lossless edit + query + convert, pure Rust via `libyaml-safer`; merge keys (`<<`) resolve in queries |
 | XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |
 | HCL (Terraform) | 🟡 candidate | structured devops config |
 | KDL | 🟡 candidate | newer config language |

@@ -349,10 +349,19 @@ fn yaml_query_and_convert() {
 }
 
 #[test]
-fn yaml_edit_is_refused_clearly() {
-    let (_o, err, code) = run(&["-t", "yaml", "-i", ".a = 1"], "a: 0\n");
-    assert_eq!(code, 2);
-    assert!(err.contains("YAML"));
+fn yaml_edit_is_lossless() {
+    // A one-scalar edit preserves the comment and every untouched byte.
+    let (out, _e, code) = run(
+        &["-t", "yaml", ".replicas = 5"],
+        "# stack\nreplicas: 3   # count\ndebug: false\n",
+    );
+    assert_eq!(out, "# stack\nreplicas: 5   # count\ndebug: false\n");
+    assert_eq!(code, 0);
+
+    // del + append through the CLI.
+    let (out2, _e, c2) = run(&["-t", "yaml", "del(.debug)"], "a: 1\ndebug: true\n");
+    assert_eq!(out2, "a: 1\n");
+    assert_eq!(c2, 0);
 }
 
 #[test]

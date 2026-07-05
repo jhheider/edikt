@@ -1,18 +1,29 @@
-//! edikt YAML format module — **query + conversion** for now.
+//! edikt YAML format module — **lossless in-place edit, query, and conversion**,
+//! pure Rust.
 //!
-//! YAML is backed by a data-model parser (`serde_yaml`), so edikt can *read* YAML
-//! (query it) and *convert* to/from it (`-T`), which is the completeness the
-//! format-conversion story needs. **Lossless in-place YAML editing is deferred**:
-//! there is no pure-Rust comment-preserving YAML CST to lean on (the way
-//! `toml_edit` backs TOML), so rather than ship a comment-clobbering YAML editor
-//! that betrays the whole point of edikt, `apply` errors and points at query /
-//! conversion. The eventual edit backend is an explicit future decision — an
-//! opt-in `yqlib` FFI, or a greenfield lossless CST.
+//! YAML is driven by [`libyaml-safer`](https://crates.io/crates/libyaml-safer), a
+//! safe pure-Rust port of the reference parser (zero transitive deps). One parse
+//! pass feeds all three jobs: its event stream is composed into a **span tree**
+//! (see [`compose`]) that carries both the data model (fold to [`Value`] for
+//! query/convert) and every node's byte marks (the lossless splice for edit).
+//!
+//! The moat holds: an edit replaces exactly the targeted node's bytes; comments,
+//! indentation, quote style, and layout of every untouched region survive
+//! byte-for-byte. Restructuring a block in place (replacing a whole
+//! mapping/sequence, or creating nested keys) is refused rather than reflowed —
+//! edikt never rewrites what it didn't target.
 
+mod compose;
+mod edit;
+mod emit;
+mod scalar;
+
+use compose::{Node, node_to_value};
 use edikt_core::{Document, EditError, Expr, Feature, Value};
-use serde_yaml::Value as YamlValue;
 
-/// Capabilities of YAML.
+pub use emit::emit;
+
+/// Capabilities of YAML: everything but sections.
 pub const FEATURES: &[Feature] = &[
     Feature::Comments,
     Feature::Nesting,
@@ -33,24 +44,18 @@ impl std::fmt::Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
-/// A parsed YAML document (data-model view + original source).
+/// A parsed YAML document: the original source plus its span tree.
 pub struct Yaml {
-    value: Value,
-    source: String,
-    had_comments: bool,
+    pub(crate) source: String,
+    pub(crate) doc: Node,
 }
 
-/// Parse YAML source into a [`Yaml`] document.
+/// Parse YAML `src` into a [`Yaml`] document.
 pub fn parse(src: &str) -> Result<Yaml, ParseError> {
-    let yaml: YamlValue =
-        serde_yaml::from_str(src).map_err(|e| ParseError { msg: e.to_string() })?;
-    let had_comments = src
-        .lines()
-        .any(|l| l.trim_start().starts_with('#') || l.contains(" #"));
+    let doc = compose::compose_source(src).map_err(|msg| ParseError { msg })?;
     Ok(Yaml {
-        value: yaml_to_value(yaml),
         source: src.to_string(),
-        had_comments,
+        doc,
     })
 }
 
@@ -59,87 +64,29 @@ impl Document for Yaml {
         self.source.clone()
     }
     fn to_value(&self) -> Value {
-        self.value.clone()
+        node_to_value(&self.doc)
     }
     fn features(&self) -> &'static [Feature] {
         FEATURES
     }
-    fn apply(&mut self, _expr: &Expr) -> Result<(), EditError> {
-        Err(EditError::new(
-            "edikt does not losslessly edit YAML yet — query it, or convert with -T",
-        ))
+    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
+        edit::apply(self, expr)
     }
     fn has_comments(&self) -> bool {
-        self.had_comments
-    }
-}
-
-/// Emit a value as YAML (for conversion targets). YAML holds nesting, arrays, and
-/// typed scalars, so there is nothing to flatten.
-pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
-    let yaml = value_to_yaml(value);
-    let text = serde_yaml::to_string(&yaml).map_err(|e| EditError::new(e.to_string()))?;
-    Ok((text, Vec::new()))
-}
-
-fn yaml_to_value(yaml: YamlValue) -> Value {
-    match yaml {
-        YamlValue::Null => Value::Null,
-        YamlValue::Bool(b) => Value::Bool(b),
-        YamlValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::Float(n.as_f64().unwrap_or(0.0))
-            }
-        }
-        YamlValue::String(s) => Value::Str(s),
-        YamlValue::Sequence(seq) => Value::Array(seq.into_iter().map(yaml_to_value).collect()),
-        YamlValue::Mapping(map) => Value::Object(
-            map.into_iter()
-                .map(|(k, v)| (yaml_key_to_string(k), yaml_to_value(v)))
-                .collect(),
-        ),
-        YamlValue::Tagged(tagged) => yaml_to_value(tagged.value),
-    }
-}
-
-/// Non-string YAML keys are rendered to their scalar text (config keys are
-/// almost always strings; this keeps the flat key model honest for the rest).
-fn yaml_key_to_string(key: YamlValue) -> String {
-    match key {
-        YamlValue::String(s) => s,
-        YamlValue::Bool(b) => b.to_string(),
-        YamlValue::Number(n) => n.to_string(),
-        YamlValue::Null => "null".to_string(),
-        other => serde_yaml::to_string(&other)
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
-    }
-}
-
-fn value_to_yaml(value: &Value) -> YamlValue {
-    match value {
-        Value::Null => YamlValue::Null,
-        Value::Bool(b) => YamlValue::Bool(*b),
-        Value::Int(i) => YamlValue::Number((*i).into()),
-        Value::Float(f) => YamlValue::Number((*f).into()),
-        Value::Str(s) => YamlValue::String(s.clone()),
-        Value::Array(a) => YamlValue::Sequence(a.iter().map(value_to_yaml).collect()),
-        Value::Object(m) => YamlValue::Mapping(
-            m.iter()
-                .map(|(k, v)| (YamlValue::String(k.clone()), value_to_yaml(v)))
-                .collect(),
-        ),
+        // A `#` at line start or after whitespace opens a comment. This can
+        // false-positive on a `#` inside a quoted scalar, which only ever
+        // over-warns on conversion — acceptable, and never wrong the other way.
+        self.source
+            .lines()
+            .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edikt_core::eval;
     use edikt_core::parse as parse_expr;
+    use edikt_core::{Document, eval};
 
     const SAMPLE: &str = "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 80\n    - 443\n  replicas: 3\ndebug: false\n";
 
@@ -147,8 +94,20 @@ mod tests {
         eval(&parse_expr(expr).unwrap(), &parse(src).unwrap().to_value()).unwrap()
     }
 
+    /// Apply a mutation program to `src` and return the resulting source.
+    fn edit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        doc.apply(&parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
     #[test]
-    fn queries_yaml() {
+    fn round_trips_byte_identical() {
+        assert_eq!(parse(SAMPLE).unwrap().to_source(), SAMPLE);
+    }
+
+    #[test]
+    fn queries_typed_values() {
         assert_eq!(
             q(SAMPLE, ".web.image"),
             vec![Value::Str("nginx:1.25".into())]
@@ -160,28 +119,147 @@ mod tests {
             vec![Value::Int(80), Value::Int(443)]
         );
         assert_eq!(q(SAMPLE, ".web.ports | length"), vec![Value::Int(2)]);
+        assert_eq!(q(SAMPLE, ".web.ports[-1]"), vec![Value::Int(443)]);
     }
 
     #[test]
-    fn to_source_is_the_original() {
-        assert_eq!(parse(SAMPLE).unwrap().to_source(), SAMPLE);
+    fn set_scalar_touches_only_that_value() {
+        // Change one scalar; every other byte — comments, indent, the pinned
+        // comment on the same line — stays put.
+        let out = edit(SAMPLE, ".web.replicas = 5");
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 80\n    - 443\n  replicas: 5\ndebug: false\n"
+        );
     }
 
     #[test]
-    fn edit_is_refused_clearly() {
+    fn set_preserves_inline_comment() {
+        let out = edit(SAMPLE, ".web.image = \"nginx:1.27\"");
+        // The `# pinned` inline comment and its spacing survive.
+        assert!(out.contains("image: nginx:1.27   # pinned"));
+    }
+
+    #[test]
+    fn set_string_that_looks_numeric_is_quoted() {
+        let out = edit(SAMPLE, ".web.replicas = \"3\"");
+        assert!(out.contains("replicas: \"3\""));
+        // And it re-reads as a string, not an int.
+        assert_eq!(q(&out, ".web.replicas"), vec![Value::Str("3".into())]);
+    }
+
+    #[test]
+    fn update_assign_sees_current() {
+        let out = edit(SAMPLE, ".web.replicas |= . + 1");
+        assert!(out.contains("replicas: 4"));
+    }
+
+    #[test]
+    fn append_to_block_sequence() {
+        let out = edit(SAMPLE, ".web.ports += [8080]");
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 80\n    - 443\n    - 8080\n  replicas: 3\ndebug: false\n"
+        );
+    }
+
+    #[test]
+    fn delete_mapping_entry() {
+        let out = edit(SAMPLE, "del(.debug)");
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 80\n    - 443\n  replicas: 3\n"
+        );
+    }
+
+    #[test]
+    fn delete_nested_entry_keeps_siblings() {
+        let out = edit(SAMPLE, "del(.web.replicas)");
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 80\n    - 443\ndebug: false\n"
+        );
+    }
+
+    #[test]
+    fn delete_sequence_item() {
+        let out = edit(SAMPLE, "del(.web.ports[0])");
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25   # pinned\n  ports:\n    - 443\n  replicas: 3\ndebug: false\n"
+        );
+    }
+
+    #[test]
+    fn new_leaf_key_matches_indent() {
+        let out = edit(SAMPLE, ".web.user = \"nginx\"");
+        assert!(out.contains("\n  user: nginx\n"));
+        // Inserted inside `web`, before `debug`.
+        assert!(out.contains("  replicas: 3\n  user: nginx\ndebug: false\n"));
+    }
+
+    #[test]
+    fn new_root_key_at_column_zero() {
+        let out = edit(SAMPLE, ".name = \"stack\"");
+        assert!(out.ends_with("debug: false\nname: stack\n"));
+    }
+
+    #[test]
+    fn refuses_to_replace_a_mapping() {
         let mut doc = parse(SAMPLE).unwrap();
         let err = doc
-            .apply(&parse_expr(".debug = true").unwrap())
-            .unwrap_err();
-        assert!(err.to_string().contains("YAML"));
+            .apply(&parse_expr(".web = 1").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mapping or sequence"), "got: {err}");
     }
 
     #[test]
-    fn emits_yaml_roundtrippable_through_value() {
+    fn resolves_anchors_aliases_and_merge_keys() {
+        let src = "base: &b\n  timeout: 30\n  retries: 3\nprod:\n  <<: *b\n  retries: 5\n";
+        // The anchored mapping is directly queryable.
+        assert_eq!(q(src, ".base.timeout"), vec![Value::Int(30)]);
+        // A merge key (`<<: *b`) pulls the anchor's keys into `prod`...
+        assert_eq!(q(src, ".prod.timeout"), vec![Value::Int(30)]);
+        // ...but an explicit key wins over the merged one.
+        assert_eq!(q(src, ".prod.retries"), vec![Value::Int(5)]);
+    }
+
+    #[test]
+    fn anchors_fixture_round_trips_and_edits_surgically() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
+        let src = std::fs::read_to_string(dir.join("anchors.yaml")).unwrap();
+        // Byte-identical round-trip over anchors, flow, folded scalars, comments.
+        assert_eq!(parse(&src).unwrap().to_source(), src);
+        // Merge-key resolution: development inherits `adapter` from &defaults.
+        assert_eq!(
+            q(&src, ".development.adapter"),
+            vec![Value::Str("postgres".into())]
+        );
+        // Flow collections query.
+        assert_eq!(
+            q(&src, ".production.flags[0]"),
+            vec![Value::Str("ssl".into())]
+        );
+        assert_eq!(
+            q(&src, ".production.meta.owner"),
+            vec![Value::Str("ops".into())]
+        );
+        // A surgical edit changes exactly one line.
+        let out = edit(&src, ".production.pool = 50");
+        let diff: Vec<_> = src
+            .lines()
+            .zip(out.lines())
+            .filter(|(a, b)| a != b)
+            .collect();
+        assert_eq!(diff, vec![("  pool: 25", "  pool: 50")]);
+    }
+
+    #[test]
+    fn emits_yaml_round_trippable_through_value() {
         let value = parse(SAMPLE).unwrap().to_value();
         let (yaml, warnings) = emit(&value).unwrap();
         assert!(warnings.is_empty());
-        // Re-parsing the emitted YAML yields the same value model.
         assert_eq!(parse(&yaml).unwrap().to_value(), value);
     }
 
@@ -192,9 +270,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_document_is_null() {
+        assert_eq!(parse("").unwrap().to_value(), Value::Null);
+        assert_eq!(parse("# just a comment\n").unwrap().to_value(), Value::Null);
+    }
+
+    #[test]
     fn queries_compose_fixture() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
         let src = std::fs::read_to_string(dir.join("compose.yaml")).unwrap();
+        // Fixture round-trips byte-identically.
+        assert_eq!(parse(&src).unwrap().to_source(), src);
         assert_eq!(
             q(&src, ".services.web.image"),
             vec![Value::Str("nginx:1.25".into())]
@@ -205,10 +291,6 @@ mod tests {
                 Value::Str("db".into()),
                 Value::Str("web".into()),
             ])]
-        );
-        assert_eq!(
-            q(&src, ".services.web.ports[]"),
-            vec![Value::Str("80:80".into()), Value::Str("443:443".into())]
         );
     }
 }

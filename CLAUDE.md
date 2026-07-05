@@ -209,6 +209,14 @@ Workspace; each format is an isolated module with no cross-coupling.
 - **`edikt-jsonc` / `edikt-ini` / `edikt-env`** — each = a `logos` lexer + a
   parser emitting a rowan tree over `edikt-syntax`, typed AST accessors, a static
   `FEATURES: &[Feature]`, and impls of `Document` + `Convert`.
+- **`edikt-toml`** — `Document`/`Convert` over `toml_edit`'s decor-preserving
+  DOM (edits keep comments/layout; no rowan needed — `toml_edit` is the CST).
+- **`edikt-yaml`** — pure Rust over `libyaml-safer`. Not a rowan CST: one parse
+  pass composes the event stream into a **span tree** (every scalar/collection's
+  byte range) that doubles as the data model *and* the edit map. Edits are a byte
+  splice over the original source (untouched bytes preserved verbatim); merge
+  keys (`<<`) resolve in the value projection. Same `Document`/`Convert` seam, so
+  the CLI dispatches over it identically to the rowan formats.
 
 **Why rowan+logos:** lossless-by-construction CST, edit = structural-sharing
 splice (untouched nodes are the *same* green nodes → provably byte-identical),
@@ -326,7 +334,9 @@ round-trip corpus must be green before merge.
 Note: the brief originally scoped out YAML/TOML as "already served" by yq/
 `toml_edit`. That decision was **revised** — the goal is now to bring the common
 formats in-house for completeness and conversion. **TOML** is done (lossless, via
-`toml_edit`). **YAML** is query + convert first (pure-Rust); lossless in-place
-YAML editing is deferred behind an opt-in backend (`yqlib-sys`) rather than
-hand-rolled, so we don't ship a worse-than-yq YAML editor. We still don't rebuild
-JSON's plain query (jq owns that) or reflow/format anything.
+`toml_edit`). **YAML** is done too — lossless in-place edit + query + convert,
+**pure Rust**, driven by `libyaml-safer` (a safe port of the reference parser,
+zero transitive deps). One parse pass yields both the data model and byte-precise
+marks; edits are a byte splice over the untouched source, so comments/layout
+survive (see the `edikt-yaml` module note below). We still don't rebuild JSON's
+plain query (jq owns that) or reflow/format anything.

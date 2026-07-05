@@ -1,0 +1,27 @@
+# gnarly: anchors, aliases, mixed quote styles, block + flow, tab-free indent
+defaults: &defaults          # anchor on a mapping
+  adapter: postgres
+  host: localhost
+  timeout: 30
+  retries: 3
+
+development:
+  <<: *defaults              # merge alias
+  database: myapp_dev
+
+production:
+  <<: *defaults
+  database: myapp_prod
+  host: db.prod.internal     # override with an inline comment
+  pool: 25
+  flags: [ssl, verify, fast] # flow sequence
+  meta: { owner: ops, tier: 1 }  # flow mapping
+
+# trailing top-level scalars in assorted styles
+name: 'edikt-demo'
+version: "1.4.0"
+enabled: true
+ratio: 0.75
+notes: >
+  folded block scalar
+  spanning two lines

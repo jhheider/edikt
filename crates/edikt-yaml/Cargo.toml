@@ -4,8 +4,11 @@ version = "0.0.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "edikt YAML format module: query + conversion (lossless in-place edit is a future backend)."
+description = "edikt YAML format module: lossless in-place edit, query, and conversion (pure Rust, via libyaml-safer)."
 
 [dependencies]
 edikt-core = { workspace = true }
-serde_yaml = "0.9"
+# Pure-Rust libyaml port (safe API, zero transitive deps). We drive its event
+# stream for both the data model (query/convert) and byte-precise marks (the
+# lossless splice) — one parser, three jobs.
+libyaml-safer = "0.3"
