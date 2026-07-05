@@ -19,10 +19,11 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Format-preserving structured-config editor: JSONC, INI, .env, TOML.",
-    long_about = "Query and edit JSONC/JSON5, INI, .env/.properties, and TOML with \
-a jq-flavored expression language, preserving comments and layout. Convert between \
-them with -T. Reads stdin and writes stdout by default, like sed."
+    about = "Format-preserving structured-config editor: JSONC, INI, .env, TOML, YAML.",
+    long_about = "Query and edit JSONC/JSON5, INI, .env/.properties, and TOML with a \
+jq-flavored expression language, preserving comments and layout; query and convert \
+YAML too. Convert between formats with -T. Reads stdin and writes stdout by \
+default, like sed."
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -81,6 +82,7 @@ enum Format {
     Ini,
     Env,
     Toml,
+    Yaml,
 }
 
 /// Resolve a `-t`/`-T` format name.
@@ -90,6 +92,7 @@ fn format_from_name(name: &str) -> Result<Format, String> {
         "ini" | "cfg" | "conf" => Ok(Format::Ini),
         "env" | "properties" | "props" => Ok(Format::Env),
         "toml" => Ok(Format::Toml),
+        "yaml" | "yml" => Ok(Format::Yaml),
         other => Err(format!("unknown format `{other}`")),
     }
 }
@@ -103,6 +106,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String
         Format::Ini => Ok(Box::new(edikt_ini::parse(src).map_err(|e| e.to_string())?)),
         Format::Env => Ok(Box::new(edikt_env::parse(src).map_err(|e| e.to_string())?)),
         Format::Toml => Ok(Box::new(edikt_toml::parse(src).map_err(|e| e.to_string())?)),
+        Format::Yaml => Ok(Box::new(edikt_yaml::parse(src).map_err(|e| e.to_string())?)),
     }
 }
 
@@ -114,6 +118,7 @@ fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>), String> 
         Format::Ini => edikt_ini::emit(value).map_err(|e| e.to_string()),
         Format::Env => edikt_env::emit(value).map_err(|e| e.to_string()),
         Format::Toml => edikt_toml::emit(value).map_err(|e| e.to_string()),
+        Format::Yaml => edikt_yaml::emit(value).map_err(|e| e.to_string()),
     }
 }
 
@@ -283,6 +288,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
         Some("ini" | "cfg" | "conf") => Ok(Format::Ini),
         Some("env" | "properties" | "props") => Ok(Format::Env),
         Some("toml") => Ok(Format::Toml),
+        Some("yaml" | "yml") => Ok(Format::Yaml),
         Some(ext) => Err(format!("cannot infer format from `.{ext}`; pass -t")),
         None => Err("cannot infer format (no extension); pass -t".to_string()),
     }

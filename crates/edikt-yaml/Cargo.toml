@@ -1,0 +1,11 @@
+[package]
+name = "edikt-yaml"
+version = "0.0.0"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "edikt YAML format module: query + conversion (lossless in-place edit is a future backend)."
+
+[dependencies]
+edikt-core = { workspace = true }
+serde_yaml = "0.9"
