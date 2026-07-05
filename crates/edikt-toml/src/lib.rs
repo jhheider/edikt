@@ -22,17 +22,11 @@ pub const FEATURES: &[Feature] = &[
 ];
 
 /// A parse failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{msg}")]
 pub struct ParseError {
     pub msg: String,
 }
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-impl std::error::Error for ParseError {}
 
 /// A parsed TOML document, backed by a lossless `toml_edit` tree.
 pub struct Toml {

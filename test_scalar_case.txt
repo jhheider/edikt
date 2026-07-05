@@ -1,2 +1,0 @@
-# Let's verify the bool/null case sensitivity issue
-# Parse the above YAML and query it

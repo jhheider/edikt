@@ -17,7 +17,8 @@ use crate::value::Value;
 use std::cmp::Ordering;
 
 /// An evaluation failure (type error, unknown function, arity mismatch).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{msg}")]
 pub struct EvalError {
     pub msg: String,
 }
@@ -27,12 +28,6 @@ impl EvalError {
         EvalError { msg: msg.into() }
     }
 }
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-impl std::error::Error for EvalError {}
 
 /// Evaluate `expr` against `input`, returning the output stream.
 pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {

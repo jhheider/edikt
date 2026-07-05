@@ -14,3 +14,4 @@ edikt-env = { workspace = true }
 edikt-toml = { workspace = true }
 edikt-yaml = { workspace = true }
 clap = { workspace = true }
+anyhow = { workspace = true }

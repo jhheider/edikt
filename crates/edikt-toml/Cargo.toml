@@ -9,3 +9,4 @@ description = "edikt TOML format module: lossless edits via toml_edit, implement
 [dependencies]
 edikt-core = { workspace = true }
 toml_edit = "0.22"
+thiserror = { workspace = true }

@@ -11,3 +11,4 @@ edikt-core = { workspace = true }
 edikt-syntax = { workspace = true }
 logos = { workspace = true }
 rowan = { workspace = true }
+thiserror = { workspace = true }

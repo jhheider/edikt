@@ -89,3 +89,59 @@ impl Expr {
         }
     }
 }
+
+/// Render a path of steps back to jq-ish source text (`.a.b[0]`, `.["a.b"]`) for
+/// error messages. An empty path is `.` (identity).
+pub fn render_path(steps: &[Step]) -> String {
+    if steps.is_empty() {
+        return ".".to_string();
+    }
+    let mut out = String::new();
+    for step in steps {
+        match step {
+            Step::Field(k) if is_bare_ident(k) => {
+                out.push('.');
+                out.push_str(k);
+            }
+            // Non-identifier keys use the bracket-string form so the rendered path
+            // is itself a valid expression.
+            Step::Field(k) => out.push_str(&format!(".[{k:?}]")),
+            Step::Index(i) => out.push_str(&format!("[{i}]")),
+            Step::Iterate => out.push_str("[]"),
+        }
+    }
+    out
+}
+
+/// Whether `k` is a bare identifier that needs no quoting in a path (`.foo`).
+fn is_bare_ident(k: &str) -> bool {
+    let mut chars = k.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_paths() {
+        assert_eq!(render_path(&[]), ".");
+        assert_eq!(
+            render_path(&[Step::Field("a".into()), Step::Field("b".into())]),
+            ".a.b"
+        );
+        assert_eq!(
+            render_path(&[Step::Field("arr".into()), Step::Index(0)]),
+            ".arr[0]"
+        );
+        assert_eq!(
+            render_path(&[Step::Field("xs".into()), Step::Iterate]),
+            ".xs[]"
+        );
+        // A dotted key can't be a bare identifier — bracket-quote it.
+        assert_eq!(render_path(&[Step::Field("a.b".into())]), ".[\"a.b\"]");
+    }
+}
