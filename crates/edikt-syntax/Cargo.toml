@@ -7,3 +7,4 @@ repository.workspace = true
 description = "edikt shared rowan substrate: lossless green-tree helpers, serialize, and structural-sharing edit utilities."
 
 [dependencies]
+rowan = { workspace = true }

@@ -7,3 +7,7 @@ repository.workspace = true
 description = "edikt JSONC/JSON5/JSON format module: lossless rowan+logos CST implementing Document + Convert."
 
 [dependencies]
+edikt-core = { workspace = true }
+edikt-syntax = { workspace = true }
+logos = { workspace = true }
+rowan = { workspace = true }
