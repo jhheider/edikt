@@ -19,8 +19,10 @@ edikt-ini = { path = "crates/edikt-ini", version = "0.1.0" }
 edikt-env = { path = "crates/edikt-env", version = "0.1.0" }
 edikt-toml = { path = "crates/edikt-toml", version = "0.1.0" }
 edikt-yaml = { path = "crates/edikt-yaml", version = "0.1.0" }
+edikt-kdl = { path = "crates/edikt-kdl", version = "0.1.0" }
 # Third-party.
 rowan = "0.16"
+kdl = "6"
 logos = "0.16"
 regex = "1"
 clap = { version = "4", features = ["derive"] }

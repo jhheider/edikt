@@ -1,0 +1,8 @@
+package {
+    name "edikt"
+    version "0.1.0"
+    dependencies {
+        kdl "6"
+        rowan "0.16"
+    }
+}

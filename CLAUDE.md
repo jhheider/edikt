@@ -1,8 +1,8 @@
 # edikt — build contract
 
 `edikt` is a **lossless, format-preserving structured-config editor** for
-**JSONC/JSON5**, **INI**, **TOML**, **YAML**, and **sectionless key-value** files
-(`.env`, `.properties`, `zoo.cfg`-style).
+**JSONC/JSON5**, **INI**, **TOML**, **YAML**, **KDL**, and **sectionless
+key-value** files (`.env`, `.properties`, `zoo.cfg`-style).
 
 It edits with a **jq-flavored expression language** and a **sed-flavored
 execution model** (stream-first, `-i` in place, `-e`/`-f` scripts). The one
@@ -164,6 +164,23 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   else. (There is no single `.env` grammar — docker-compose, dotenv libs, and
   shell `source` disagree — so "correctly" parsing it is a bottomless bug queue.
   We don't.)
+- **KDL** — lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
+  of KDL). A KDL node carries positional **arguments**, `key=value`
+  **properties**, *and* **children**, so the `Value` mapping is a fixed,
+  documented convention:
+  - a document / children block → object, one entry per node name in
+    first-appearance order; a name repeated at the same level → **array** of
+    the occurrences, in document order;
+  - one node: children/props only → object (props first, then children);
+    exactly one argument and nothing else → that **scalar**; several arguments
+    only → **array**; a bare node → `null`;
+  - a node mixing arguments with props/children → object with the arguments
+    under the reserved key **`"-"`** (one arg → scalar, several → array);
+  - paths read as printed: `.keybinds.normal.bind[0].["-"]`. Arrays of arrays
+    have no KDL spelling and error cleanly on emit.
+  Edits are surgical (set an arg/prop, create a leaf node, delete, append new
+  occurrences); replacing a whole node body wholesale is refused rather than
+  reflowed, like YAML.
 
 ---
 
@@ -183,6 +200,7 @@ enum Feature { Comments, Nesting, Arrays, TypedScalars, Sections }
 | JSON | — | ● | ● | ● | — |
 | TOML | ● | ● | ● | ● | — |
 | YAML | ● | ● | ● | ● | — |
+| KDL | ● | ● | ● | ● | — |
 | INI | ● | — | — | — | ● |
 | `.env` / `.properties` | ● | — | — | — | — |
 
@@ -254,6 +272,9 @@ Workspace; each format is an isolated module with no cross-coupling.
   `FEATURES: &[Feature]`, and impls of `Document` + `Convert`.
 - **`edikt-toml`** — `Document`/`Convert` over `toml_edit`'s decor-preserving
   DOM (edits keep comments/layout; no rowan needed — `toml_edit` is the CST).
+- **`edikt-kdl`** — `Document`/`Convert` over `kdl-rs`'s format-preserving
+  document (same pattern as TOML: the library is the CST; per-node `leading` /
+  `before_terminator` decor carries the comment model).
 - **`edikt-yaml`** — pure Rust over `libyaml-safer`. Not a rowan CST: one parse
   pass composes the event stream into a **span tree** (every scalar/collection's
   byte range) that doubles as the data model *and* the edit map. Edits are a byte
@@ -317,7 +338,8 @@ Live status and the full backlog live in [`ROADMAP.md`](./ROADMAP.md). In brief:
 - ✅ **M8** TOML (lossless via `toml_edit`) and YAML (lossless via pure-Rust
   `libyaml-safer` span-tree splice) — edit + query + convert.
 - ✅ **Comment-preserving conversion** — the uniform head/inline/foot comment
-  model, extracted and re-emitted by all six formats.
+  model, extracted and re-emitted by all seven formats.
+- ✅ **KDL** — lossless via `kdl-rs`; the args/props/children projection convention.
 - ✅ **M3** builtin/query polish (the regex family, `split`/`join`, affix
   predicates) and ✅ **M7** release infra (coverage, release workflow,
   packaging hooks — the release *ceremony* steps live in ROADMAP).

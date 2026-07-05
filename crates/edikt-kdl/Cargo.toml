@@ -1,0 +1,13 @@
+[package]
+name = "edikt-kdl"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "edikt KDL format module: lossless edits via kdl-rs, implementing Document."
+
+[dependencies]
+kdl = { workspace = true }
+edikt-core = { workspace = true }
+thiserror = { workspace = true }

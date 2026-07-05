@@ -3,8 +3,8 @@
 **Edit config files without reflowing them.**
 
 *edit, meets edict.* A lossless, format-preserving config editor for
-**JSONC/JSON5**, **INI**, **TOML**, **YAML**, and sectionless key-value files
-(**`.env`**, **`.properties`**). It edits with a jq-flavored expression language
+**JSONC/JSON5**, **INI**, **TOML**, **YAML**, **KDL**, and sectionless
+key-value files (**`.env`**, **`.properties`**). It edits with a jq-flavored expression language
 and a sed-flavored execution model, changing only the bytes you target —
 comments, indentation, quoting, and trailing commas in every untouched region
 survive byte-for-byte.
@@ -38,7 +38,7 @@ back a file that is byte-identical except for the one value you changed.
 Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
 
-Status: **alpha** — six formats with lossless in-place edit, query, and
+Status: **alpha** — seven formats with lossless in-place edit, query, and
 conversion (comments carried across); release infra is wired and awaiting the
 first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
