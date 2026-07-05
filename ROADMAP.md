@@ -55,8 +55,14 @@ Release infra is intentionally **last** — build the capability, then ship it.
   source through one still warns. YAML emits by splicing comments into the
   libyaml output at span-tree positions, so comment-free output stays
   byte-identical.
-- ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
-  real queries demand.
+- ✅ **Language polish.** The regex family — `test`, `match` (jq match objects,
+  codepoint offsets, `g` streams every match), `capture` (named groups), `sub`/
+  `gsub` (`$name` capture references — sed-flavored, since the language has no
+  string interpolation) — plus `split` (literal 1-arg, regex 2-arg, jq's shape),
+  `join`, `startswith`, `endswith`. Flags `g i x s m`; a bad regex or flag is a
+  clean exit-2 error; a no-match `match`/`capture` is a grep-shaped exit-1 miss.
+  Driven by the `regex` crate. The registry still grows deliberately, never
+  speculatively.
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
   stripped for all six formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`

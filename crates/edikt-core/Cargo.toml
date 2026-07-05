@@ -8,4 +8,5 @@ description = "edikt core: value model, Feature capabilities, the expression lan
 
 [dependencies]
 logos = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
