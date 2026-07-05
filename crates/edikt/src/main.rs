@@ -1,9 +1,9 @@
 //! The `edikt` CLI.
 //!
 //! Execution model is sed-shaped: read stdin (or files), apply an expression,
-//! write stdout. M1 wires **query mode** on JSONC end-to-end. Mutation (`-i`,
-//! `set`/`del`) and the other formats arrive in later slices; unimplemented
-//! surface errors clearly rather than misleading.
+//! write stdout. Dispatches query, mutation, and conversion modes across all six
+//! formats (JSONC/JSON5, INI, `.env`/`.properties`, TOML, YAML) over the
+//! format-agnostic `Document` seam.
 //!
 //! Exit codes are grep-shaped: 0 = at least one result, 1 = query miss (no
 //! results), 2 = parse / evaluation / I/O error.
@@ -20,11 +20,11 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Format-preserving structured-config editor: JSONC, INI, .env, TOML, YAML.",
-    long_about = "Query and edit JSONC/JSON5, INI, .env/.properties, and TOML with a \
-jq-flavored expression language, preserving comments and layout; query and convert \
-YAML too. Convert between formats with -T. Reads stdin and writes stdout by \
-default, like sed."
+    about = "Lossless, format-preserving config editor: JSONC, INI, .env, TOML, YAML.",
+    long_about = "Query and losslessly edit JSONC/JSON5, INI, .env/.properties, TOML, \
+and YAML with a jq-flavored expression language, changing only the bytes you target \
+and leaving comments and layout untouched. Convert between formats with -T. Reads \
+stdin and writes stdout by default, like sed."
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -39,11 +39,11 @@ struct Args {
     #[arg(short = 'f', long = "file", value_name = "PATH")]
     script_files: Vec<PathBuf>,
 
-    /// Edit files in place (requires a mutating expression — arrives in M2).
+    /// Edit files in place (requires a mutating expression or a conversion -T).
     #[arg(short = 'i', long = "in-place")]
     in_place: bool,
 
-    /// Force the input format: jsonc | json5 | json | ini | env | properties.
+    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
 
