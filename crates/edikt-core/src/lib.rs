@@ -1,5 +1,23 @@
 //! edikt core.
 //!
-//! Home of the `Value` model, the `Feature` capability enum, the expression
-//! language (lexer, parser, evaluator / value calculus), and the format-agnostic
-//! `Document` and `Convert` seams. Populated by the M1+ slices.
+//! Home of the [`Value`] model, the [`Feature`] capability enum, and the
+//! expression language (lexer, [`parse`], evaluator). The evaluator is built and
+//! tested here against a plain in-memory [`Value`] so the language is correct
+//! independent of any format-preserving CST; the format modules wire the same
+//! AST to their CSTs.
+//!
+//! The format-agnostic `Document` and `Convert` seams arrive with the JSONC
+//! slice, once there is a concrete CST to shape them against.
+
+mod ast;
+mod eval;
+mod feature;
+mod lexer;
+mod parser;
+mod value;
+
+pub use ast::{BinOp, Expr, Step};
+pub use eval::{EvalError, eval};
+pub use feature::Feature;
+pub use parser::{ParseError, parse};
+pub use value::Value;
