@@ -253,18 +253,16 @@ pattern, reconsider before writing more.
 
 ## Milestones
 
-- **M0** Spike → CST decision (JSONC + INI), rowan vs alternatives.
-- **M1** Skeleton: workspace, clap CLI, stdin/stdout + `-i` + `-e`/`-f`,
-  `Value`, expression lexer/parser, **query mode on JSONC**, output contract +
-  exit codes.
-- **M2** Value calculus + mutation on JSONC: `=`, `|=`, `+=`, `del()`,
-  arithmetic, string ops — all format-preserving.
-- **M3** `select()`, iteration `[]`, multi-output `,`.
-- **M4** INI module (parallel first-class format).
-- **M5** `.env` / `.properties` (line-level).
-- **M6** Format conversion (`-T`, feasibility lattice, `--flatten`).
-- **M7** Golden round-trip corpus per format, `--help`/man, CI, release
-  (cargo / Homebrew / pkgx).
+Live status and the full backlog live in [`ROADMAP.md`](./ROADMAP.md). In brief:
+
+- ✅ **M0** Spike → CST decision: rowan+logos, lossless edit proven.
+- ✅ **M1** Skeleton + **query mode on JSONC** end-to-end (workspace, CLI,
+  `Value`/expression language/evaluator, lossless CST + `Document` seam, output
+  contract + exit codes).
+- **M2** Mutation on JSONC: `=`, `|=`, `+=`, `del()` + the format-preserving CST
+  **write** path (rowan splice) + `-i`. *The differentiator.*
+- **M3** builtin/query polish. **M4** INI. **M5** `.env`/`.properties`.
+  **M6** conversion (`-T`, Feature-driven warnings). **M7** release infra.
 
 Realistic effort with fuller language + both formats + conversion: **3–5 weeks
 part-time.** The language is the one thing that can balloon it — hold the v1
@@ -305,6 +303,16 @@ CI). Workflows to mirror:
 
 Warnings are errors in CI, so the format-preservation invariants and the
 round-trip corpus must be green before merge.
+
+**Loop discipline & gotchas:**
+- Every change lands via **branch → PR → green CI → squash-merge**; never commit
+  straight to `main`.
+- **Avoid `let`-chains.** rustfmt 1.9 *silently skips* files containing them, so
+  `fmt --check` passes locally while CI (fully formatting them) fails. Use
+  match-guards or iterator combinators instead.
+- Crates live in `crates/`; **fixtures in `fixtures/<format>/`** and every one
+  must round-trip byte-identically. Shared deps go through
+  `[workspace.dependencies]`; crate **versions are per-crate**.
 
 ---
 

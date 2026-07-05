@@ -1,0 +1,12 @@
+{
+  "name": "plain-json",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "left-pad": "^1.3.0"
+  }
+}

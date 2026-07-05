@@ -1,0 +1,19 @@
+{
+	// TypeScript compiler configuration
+	"compilerOptions": {
+		"target": "ES2020",          /* language level */
+		"module": "commonjs",
+		"strict": true,
+		"esModuleInterop": true,
+		"lib": ["ES2020", "DOM"],
+		"outDir": "./dist",
+		"paths": {
+			"@/*": ["./src/*"],
+		},
+	},
+	"include": ["src/**/*"],   // globs
+	"exclude": [
+		"node_modules",
+		"dist",
+	],
+}

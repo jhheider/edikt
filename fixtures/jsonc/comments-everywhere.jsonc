@@ -1,0 +1,15 @@
+// top-of-file banner
+/* block
+   comment
+   spanning lines */
+{
+  "a": 1, // after a value
+  // between members
+  "b": [
+    // before an element
+    2,
+    3, /* after an element */
+  ],
+  "c": /* before a value */ true,
+}
+// trailing line comment

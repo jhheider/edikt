@@ -1,6 +1,6 @@
 [package]
 name = "edikt"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -9,4 +9,4 @@ description = "Format-preserving structured-config editor for the gap formats (J
 [dependencies]
 edikt-core = { workspace = true }
 edikt-jsonc = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }

@@ -1,0 +1,17 @@
+{
+  "int": 42,
+  "negative": -7,
+  "float": 2.5,
+  "exp": 1e3,
+  "negexp": -1.5e-2,
+  "zero": 0,
+  "true": true,
+  "false": false,
+  "null": null,
+  "empty_string": "",
+  "escapes": "tab\there, newline\\n literal, quote \" done",
+  "unicode": "café — é",
+  "empty_object": {},
+  "empty_array": [],
+  "nested_empty": { "a": {}, "b": [] }
+}

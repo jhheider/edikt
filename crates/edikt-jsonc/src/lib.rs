@@ -171,4 +171,72 @@ mod tests {
         assert!(parse("   \n  ").is_err()); // no value
         assert!(parse("// only a comment\n").is_err());
     }
+
+    // --- fixture corpus (roundtrip anything in our test space) -------------
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/jsonc")
+    }
+
+    fn jsonc_fixtures() -> Vec<std::path::PathBuf> {
+        let mut files: Vec<_> = std::fs::read_dir(fixtures_dir())
+            .expect("fixtures/jsonc directory")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("jsonc") | Some("json")
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn roundtrips_every_fixture() {
+        let files = jsonc_fixtures();
+        assert!(
+            files.len() >= 5,
+            "expected several fixtures, found {}",
+            files.len()
+        );
+        for path in files {
+            let src = std::fs::read_to_string(&path).unwrap();
+            let doc = parse(&src).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+            assert_eq!(
+                doc.to_source(),
+                src,
+                "round-trip must be byte-identical: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn every_fixture_projects() {
+        for path in jsonc_fixtures() {
+            let src = std::fs::read_to_string(&path).unwrap();
+            let value = parse(&src).unwrap().to_value();
+            assert_eq!(eval(&parse_expr(".").unwrap(), &value).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn tsconfig_queries_match_expected() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let v = parse(&src).unwrap().to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        assert_eq!(
+            q(".compilerOptions.target"),
+            vec![Value::Str("ES2020".into())]
+        );
+        assert_eq!(q(".compilerOptions.strict"), vec![Value::Bool(true)]);
+        assert_eq!(q(".include[0]"), vec![Value::Str("src/**/*".into())]);
+        assert_eq!(
+            q(".exclude[]"),
+            vec![Value::Str("node_modules".into()), Value::Str("dist".into())]
+        );
+        assert_eq!(q(".compilerOptions.lib | length"), vec![Value::Int(2)]);
+    }
 }
