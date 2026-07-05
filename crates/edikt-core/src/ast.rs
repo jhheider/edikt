@@ -175,5 +175,58 @@ mod tests {
         );
         // A dotted key can't be a bare identifier — bracket-quote it.
         assert_eq!(render_path(&[Step::Field("a.b".into())]), ".[\"a.b\"]");
+        // The comment step renders back to its accessor form.
+        assert_eq!(
+            render_path(&[Step::Field("a".into()), Step::Comment(CommentKind::Head)]),
+            ".a.#"
+        );
+        assert_eq!(
+            render_path(&[Step::Comment(CommentKind::Inline)]),
+            ".#.inline"
+        );
+    }
+
+    fn p(src: &str) -> Expr {
+        crate::parse(src).unwrap()
+    }
+
+    #[test]
+    fn is_mutation_covers_every_arm() {
+        assert!(p(".a = 1").is_mutation());
+        assert!(p(".a |= . + 1").is_mutation());
+        assert!(p(".a += 1").is_mutation());
+        assert!(p("del(.a)").is_mutation());
+        // Mutation nested inside each recursive form.
+        assert!(p(".a = 1 | .b").is_mutation()); // Pipe
+        assert!(p(".a = 1, .b").is_mutation()); // Comma
+        assert!(p("[.a = 1]").is_mutation()); // Collect
+        assert!(p("{k: (.a = 1)}").is_mutation()); // ObjectConstruct
+        assert!(p("select(.a = 1)").is_mutation()); // Call args
+        // Pure queries are not mutations.
+        assert!(!p(".a.b[0]").is_mutation());
+        assert!(!p("1 + 2").is_mutation());
+        assert!(!p("keys").is_mutation());
+        assert!(!p("-.a").is_mutation());
+    }
+
+    #[test]
+    fn has_comment_covers_every_arm() {
+        assert!(p(".a.#").has_comment());
+        assert!(p("comments").has_comment());
+        assert!(p(".a.# | ascii_upcase").has_comment()); // Pipe
+        assert!(p(".a.# // \"x\"").has_comment()); // Alternative
+        assert!(p(".a.#, .b").has_comment()); // Comma
+        assert!(p("[.a.#]").has_comment()); // Collect
+        assert!(p("select(.a.#)").has_comment()); // Call args
+        assert!(p(".a.# == \"x\"").has_comment()); // Binary
+        assert!(!p("-.a").has_comment()); // Neg, no comment
+        assert!(!p(".a.b").has_comment());
+    }
+
+    #[test]
+    fn as_path_only_for_plain_paths() {
+        assert!(p(".a.b").as_path().is_some());
+        assert!(p("1 + 2").as_path().is_none());
+        assert!(p("keys").as_path().is_none());
     }
 }
