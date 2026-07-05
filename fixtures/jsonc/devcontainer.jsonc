@@ -1,0 +1,18 @@
+{
+  "name": "edikt dev",
+  "image": "mcr.microsoft.com/devcontainers/rust:1",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  // forward the dev server
+  "forwardPorts": [3000, 8080],
+  "postCreateCommand": "cargo build",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}

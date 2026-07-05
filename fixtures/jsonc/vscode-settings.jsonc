@@ -1,0 +1,18 @@
+// User settings — comments and trailing commas are load-bearing here.
+{
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.rulers": [80, 100], // soft and hard wrap
+
+  /* files */
+  "files.exclude": {
+    "**/.git": true,
+    "**/node_modules": false,
+  },
+  "files.associations": {
+    "*.jsonc": "jsonc",
+  },
+
+  "terminal.integrated.fontSize": 13,
+  "workbench.colorTheme": "Default Dark+",
+}
