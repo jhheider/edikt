@@ -1,12 +1,13 @@
 # edikt — build contract
 
-`edikt` is a **format-preserving structured-config editor** for the formats the
-current tooling ecosystem edits badly or not at all: **JSONC/JSON5**, **INI**,
-and **sectionless key-value** files (`.env`, `.properties`, `zoo.cfg`-style).
+`edikt` is a **lossless, format-preserving structured-config editor** for
+**JSONC/JSON5**, **INI**, **TOML**, **YAML**, and **sectionless key-value** files
+(`.env`, `.properties`, `zoo.cfg`-style).
 
 It edits with a **jq-flavored expression language** and a **sed-flavored
 execution model** (stream-first, `-i` in place, `-e`/`-f` scripts). The one
-thing it never does is reflow what it didn't touch.
+thing it never does is reflow what it didn't touch — comments, indentation,
+quoting, and trailing commas in every untouched region survive byte-for-byte.
 
 This file is the design contract. Read it before changing behavior. If you
 change a rule here, change it here *first*.
@@ -41,7 +42,7 @@ edikt -f script.edk [-f …] [FILE...]
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
 | `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order |
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin |
-| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`) |
+| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`toml`\|`yaml`) |
 | `-T, --to FMT` | **output** format → conversion / data-model mode (see below) |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
 | `--json` | force JSON-encoded output |
@@ -153,6 +154,8 @@ enum Feature { Comments, Nesting, Arrays, TypedScalars, Sections }
 |---|:-:|:-:|:-:|:-:|:-:|
 | JSONC / JSON5 | ● | ● | ● | ● | — |
 | JSON | — | ● | ● | ● | — |
+| TOML | ● | ● | ● | ● | — |
+| YAML | ● | ● | ● | ● | — |
 | INI | ● | — | — | — | ● |
 | `.env` / `.properties` | ● | — | — | — | — |
 
@@ -267,10 +270,14 @@ Live status and the full backlog live in [`ROADMAP.md`](./ROADMAP.md). In brief:
 - ✅ **M1** Skeleton + **query mode on JSONC** end-to-end (workspace, CLI,
   `Value`/expression language/evaluator, lossless CST + `Document` seam, output
   contract + exit codes).
-- **M2** Mutation on JSONC: `=`, `|=`, `+=`, `del()` + the format-preserving CST
+- ✅ **M2** Mutation on JSONC: `=`, `|=`, `+=`, `del()` + the format-preserving CST
   **write** path (rowan splice) + `-i`. *The differentiator.*
-- **M3** builtin/query polish. **M4** INI. **M5** `.env`/`.properties`.
-  **M6** conversion (`-T`, Feature-driven warnings). **M7** release infra.
+- ✅ **M4** INI. ✅ **M5** `.env`/`.properties`. ✅ **M6** conversion (`-T`,
+  Feature-driven warnings).
+- ✅ **M8** TOML (lossless via `toml_edit`) and YAML (lossless via pure-Rust
+  `libyaml-safer` span-tree splice) — edit + query + convert.
+- **M3** builtin/query polish and **M7** release infra remain (release infra is
+  intentionally last — see ROADMAP).
 
 Realistic effort with fuller language + both formats + conversion: **3–5 weeks
 part-time.** The language is the one thing that can balloon it — hold the v1

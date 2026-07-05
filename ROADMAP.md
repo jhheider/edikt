@@ -33,8 +33,24 @@ Release infra is intentionally **last** — build the capability, then ship it.
   data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
   preserve comments and layout; merge keys (`<<`) resolve in queries. Replaced
   the serde floor — the greenfield-CST / `yqlib-sys` paths are moot.
+- ⬜ **Output follows the format.** A structural query result should be returned
+  in the document's format, not compact JSON: a **pure-path** result (`.services`)
+  as the original **source slice** (exact bytes, comments, layout); a
+  **synthesized** result (`keys`, `.a + .b`, an object literal) emitted via the
+  input format's emitter (or the explicit `-T`/`-o` format). `--json` is the only
+  opt-out (the pipe-to-jq escape hatch). One seam serves all six formats.
+- ⬜ **Comment-preserving conversion.** Carry comments across `-T` via a **uniform
+  comment model** — parse comments *out* to a shared vocabulary (head / inline /
+  foot), and let each format's emitter decide per kind: place it, remap it to a
+  kind it supports (warn), or drop it (warn), via the same Feature-subtraction
+  path as other degradations. N-in + N-out against one model, not N×N per pair.
+  Needs `Value` enriched with optional comment metadata.
 - ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
   real queries demand.
+- ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
+  stripped for all six formats; the per-format delta doesn't justify a Cargo
+  feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`
+  build) if a concrete consumer needs a thinner binary.
 - ⬜ **Release infra — LAST.** Coverage (Coveralls), release workflow
   (cross-platform binaries + `publish-crates`), Homebrew/pkgx, man page,
   `--help` examples, shell completions.
@@ -42,8 +58,8 @@ Release infra is intentionally **last** — build the capability, then ship it.
 ## Format coverage
 
 edikt's niche is *lossless editing of key-value / config formats*. This tracks
-every popular one. **In scope** = a gap format nobody edits today without
-clobbering layout (edikt's reason to exist). **Served** = already has a good
+every popular one. **In scope** = a format edikt can edit losslessly, and where
+that lossless edit is its reason to exist. **Served** = already has a good
 lossless editor; we don't rebuild it (we may still *read* it for conversion).
 **Candidate** = plausible future addition, not yet committed.
 
@@ -79,9 +95,11 @@ Capture each quirk as a fixture under `fixtures/ini/` as it comes up:
   must parse → serialize byte-identically. New edge cases become new fixtures.
 - **Surgically touch any internal piece.** For each format, prove we can `set`/
   `del` any node and change *only* that node's bytes (one-line diffs).
-- **Parity with the competition.** Prove we do the queries jq/yq do.
-- **Anti-parity.** Prove we do what they *can't*: edit a commented `tsconfig`/
-  `settings.json` without clobbering comments, layout, or trailing commas.
+- **Query coverage.** Prove the query surface handles the common jq/yq-style
+  navigations users reach for.
+- **Lossless-edit proof.** Prove we can edit a commented `tsconfig`/
+  `settings.json` and change only the targeted bytes — comments, layout, and
+  trailing commas untouched.
 - **Library crates get first-class coverage**, fixture-driven where it fits.
 
 ## Conventions

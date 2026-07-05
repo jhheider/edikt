@@ -1,12 +1,13 @@
 # edikt
 
-*edit, meets edict.*
+**Edit config files without reflowing them.**
 
-A format-preserving structured-config editor for the formats the current tooling
-edits badly or not at all — **JSONC/JSON5**, **INI**, and sectionless key-value
-files (**`.env`**, **`.properties`**). It edits with a jq-flavored expression
-language and a sed-flavored execution model, and it **never reflows what it
-didn't touch**.
+*edit, meets edict.* A lossless, format-preserving config editor for
+**JSONC/JSON5**, **INI**, **TOML**, **YAML**, and sectionless key-value files
+(**`.env`**, **`.properties`**). It edits with a jq-flavored expression language
+and a sed-flavored execution model, changing only the bytes you target —
+comments, indentation, quoting, and trailing commas in every untouched region
+survive byte-for-byte.
 
 ```sh
 # query — reads like jq
@@ -14,6 +15,9 @@ edikt '.compilerOptions.strict' tsconfig.json
 
 # edit in place — comments, indent, comma style all preserved
 edikt -i '.compilerOptions.target = "ES2022"' tsconfig.json
+
+# edit YAML in place — anchors, flow style, and comments survive
+edikt -i '.services.web.replicas = 3' compose.yaml
 
 # compute, not just place
 edikt -i '.version |= . + "-dev"' package.jsonc
@@ -28,12 +32,15 @@ edikt -f release.edk -i config.jsonc
 edikt -t ini -T json app.cfg
 ```
 
-**The gap it fills:** jq has no concept of a comment; yq hard-errors on `//`;
-nothing edits JSONC (`settings.json`, `tsconfig.json`, `devcontainer.json`)
-without clobbering a human's formatting. That's the product.
+**What it does:** edits commented, hand-formatted config — `settings.json`,
+`tsconfig.json`, `devcontainer.json`, `compose.yaml`, `Cargo.toml` — and writes
+back a file that is byte-identical except for the one value you changed.
+Comments, trailing commas, indentation, and quoting all survive. Query it like
+jq; convert between formats with `-T`.
 
-Status: **pre-alpha, in design.** See [`CLAUDE.md`](./CLAUDE.md) for the build
-contract.
+Status: **alpha** — six formats with lossless in-place edit, query, and
+conversion; packaging and release infra are the remaining work. See
+[`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## License
 
