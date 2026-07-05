@@ -7,3 +7,6 @@ repository.workspace = true
 description = "Format-preserving structured-config editor for the gap formats (JSONC/JSON5, INI, .env)."
 
 [dependencies]
+edikt-core = { workspace = true }
+edikt-jsonc = { workspace = true }
+clap = { version = "4", features = ["derive"] }
