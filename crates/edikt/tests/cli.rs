@@ -295,6 +295,27 @@ fn convert_subtree_via_expr() {
 }
 
 #[test]
+fn ini_creates_new_section() {
+    let (out, _e, code) = run(&["-t", "ini", r#".db.url = "pg""#], "[server]\nhost = x\n");
+    assert_eq!(out, "[server]\nhost = x\n\n[db]\nurl = pg\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn object_literal_and_bracket_key() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".config = {}"], "{ \"config\": 1 }");
+    assert_eq!(out, "{ \"config\": {} }");
+    assert_eq!(code, 0);
+
+    let (out2, _e, code2) = run(
+        &["-t", "properties", r#"."app.name""#],
+        "app.name = edikt\n",
+    );
+    assert_eq!(out2, "edikt\n");
+    assert_eq!(code2, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

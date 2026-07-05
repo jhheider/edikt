@@ -111,6 +111,71 @@ fn find_entry(section: &SyntaxNode, key: &str) -> Option<SyntaxNode> {
 }
 
 /// A `Value` node wrapping the string `s` (empty node if `s` is empty).
+/// Insert a `key = value` entry into INI source at the right place: the end of
+/// the named section's content (creating the section at EOF if absent), or the
+/// preamble. The caller reparses the result.
+pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &str) -> String {
+    let new_line = format!("{key} = {value}\n");
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+
+    let (start, end) = match section {
+        None => {
+            let first = lines.iter().position(|l| l.trim_start().starts_with('['));
+            (0, first.unwrap_or(lines.len()))
+        }
+        Some(sec) => match lines.iter().position(|l| header_matches(l, sec)) {
+            Some(hi) => {
+                let end = lines[hi + 1..]
+                    .iter()
+                    .position(|l| l.trim_start().starts_with('['))
+                    .map(|p| hi + 1 + p)
+                    .unwrap_or(lines.len());
+                (hi + 1, end)
+            }
+            None => {
+                // Section absent — append `[section]\nkey = value\n` at EOF.
+                let mut out = String::from(src);
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[{sec}]\n{new_line}"));
+                return out;
+            }
+        },
+    };
+
+    // Insert after the last non-blank line within [start, end).
+    let mut content_end = start;
+    for (j, line) in lines.iter().enumerate().take(end).skip(start) {
+        if !line.trim().is_empty() {
+            content_end = j + 1;
+        }
+    }
+
+    let mut out = String::new();
+    for line in &lines[..content_end] {
+        out.push_str(line);
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&new_line);
+    for line in &lines[content_end..] {
+        out.push_str(line);
+    }
+    out
+}
+
+/// Does `line` open the section named `section` (`[section]`, ignoring
+/// trailing content)?
+fn header_matches(line: &str, section: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('[') && t[1..].split(']').next() == Some(section)
+}
+
 pub(crate) fn value_node_green(s: &str) -> GreenNode {
     let mut b = GreenNodeBuilder::new();
     b.start_node(sk(Sk::Value));

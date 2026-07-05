@@ -226,6 +226,7 @@ impl Parser {
                 self.expect(Lx::RBrack, "`]`")?;
                 Ok(Expr::Collect(Some(Box::new(inner))))
             }
+            Some(Lx::LBrace) => self.parse_object_construct(),
             Some(Lx::Num) => {
                 let v = number_value(self.text());
                 self.pos += 1;
@@ -239,6 +240,36 @@ impl Parser {
             Some(Lx::Ident) => self.parse_ident(),
             _ => Err(self.err_here("expected an expression")),
         }
+    }
+
+    fn parse_object_construct(&mut self) -> Result<Expr, ParseError> {
+        self.pos += 1; // `{`
+        let mut pairs = Vec::new();
+        if self.peek() == Some(Lx::RBrace) {
+            self.pos += 1;
+            return Ok(Expr::ObjectConstruct(pairs));
+        }
+        loop {
+            let key = match self.peek() {
+                Some(Lx::Ident) => self.text().to_string(),
+                Some(Lx::Str) => unescape(self.text()),
+                _ => return Err(self.err_here("expected an object key")),
+            };
+            self.pos += 1;
+            self.expect(Lx::Colon, "`:`")?;
+            // A comparison-level value keeps `,` free to separate entries.
+            let value = self.parse_cmp()?;
+            pairs.push((key, value));
+            match self.peek() {
+                Some(Lx::Comma) => self.pos += 1,
+                Some(Lx::RBrace) => {
+                    self.pos += 1;
+                    break;
+                }
+                _ => return Err(self.err_here("expected `,` or `}`")),
+            }
+        }
+        Ok(Expr::ObjectConstruct(pairs))
     }
 
     fn parse_path(&mut self) -> Result<Expr, ParseError> {
@@ -259,13 +290,19 @@ impl Parser {
                     if self.peek() == Some(Lx::RBrack) {
                         self.pos += 1;
                         steps.push(Step::Iterate);
+                    } else if self.peek() == Some(Lx::Str) {
+                        // `.["key"]` — a field by name (dotted/special keys).
+                        let key = unescape(self.text());
+                        self.pos += 1;
+                        self.expect(Lx::RBrack, "`]`")?;
+                        steps.push(Step::Field(key));
                     } else {
                         let neg = self.peek() == Some(Lx::Minus);
                         if neg {
                             self.pos += 1;
                         }
                         if self.peek() != Some(Lx::Num) {
-                            return Err(self.err_here("expected an array index"));
+                            return Err(self.err_here("expected an array index or a string key"));
                         }
                         let n = parse_i64(self.text())
                             .map_err(|_| self.err_here("array index out of range"))?;

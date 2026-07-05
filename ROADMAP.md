@@ -19,30 +19,22 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   env); Feature-driven warnings (comments dropped, nesting/arrays flattened),
   `--strict` promotes to error; `-e` converts a subtree.
 
-## Milestones
+## Milestones (upcoming, in order)
 
-- ✅ **M2 — Mutation + the format-preserving write path.** `set` (`=`, `|=`),
-  `del()`, `+=`/append, `-i`, and **new-key creation** (JSONC objects + `.env`).
-  Follow-ups: new-key creation for INI (section-aware), `-i.bak`,
-  iterate-in-assignment (`.a[] = x`), object literals `{...}`.
-- ⬜ **M3 — `select()` / iteration polish + more builtins** as real queries drive
-  demand. (Iteration and `select` already work; grow the builtin registry
-  deliberately.)
-- ✅ **M4 — INI format module.** Line-oriented lossless CST; `.section.key`
-  paths; inline-comment aware; `FEATURES = [Comments, Sections]`. Dialect quirks
-  (git config subsections, systemd duplicate keys) are follow-ups.
-- ✅ **M5 — `.env` / `.properties`.** Flat, string-valued, honest line-level
-  editing only; `#`/`!` comments; interpret-nothing (no inline comments, no
-  interpolation). `FEATURES = [Comments]`. Follow-up: `\` line-continuations.
-- ✅ **M6 — Format conversion (`-T`).** Feature-driven: warns per lost feature
-  (`--strict` errors), degrades by flattening to dotted keys. Emitters: JSON
-  (pretty), INI, env. Follow-up: dedicated emitters as new formats land.
-- ⬜ **M8 — YAML & TOML** (newly in scope). The brief called these "already
-  served" by yq/`toml_edit`; the plan now is to bring the common formats
-  in-house. TOML gets a `toml_edit`-style CST head start; YAML (comments +
-  layout) is the ambitious one. Both drop into the `Document`/`Feature` seams.
-- ⬜ **M7 — Release infra.** Coverage job (Coveralls), release workflow
-  (cross-platform binaries + `publish-crates`), man page, `--help` polish.
+Release infra is intentionally **last** — build the capability, then ship it.
+
+- ⬜ **Small fixes.** New-key creation for INI (section-aware), object literals
+  `{...}` and `.["key"]` bracket keys in the language, `-i.bak` backups,
+  iterate-in-assignment (`.a[] = x`).
+- ⬜ **M8 — YAML & TOML** (newly in scope). Bring the common formats in-house,
+  not just the gap ones. TOML gets a `toml_edit`-style lossless-CST head start;
+  YAML (comments + layout) is the ambitious one. Both drop into the
+  `Document`/`Feature` seams.
+- ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
+  real queries demand.
+- ⬜ **Release infra — LAST.** Coverage (Coveralls), release workflow
+  (cross-platform binaries + `publish-crates`), Homebrew/pkgx, man page,
+  `--help` examples, shell completions.
 
 ## Format coverage
 

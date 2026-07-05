@@ -19,6 +19,12 @@ pub enum Lx {
     LParen,
     #[token(")")]
     RParen,
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
+    #[token(":")]
+    Colon,
     #[token("|")]
     Pipe,
     #[token("|=")]
