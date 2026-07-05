@@ -1,6 +1,6 @@
 //! edikt `.env` / `.properties` format module.
 //!
-//! Flat, string-valued, honest line-level editing only — no grammar, no
+//! Flat, string-valued, honest line-level editing only - no grammar, no
 //! interpolation, no quoting semantics, no inline comments. `key=value` /
 //! `key:value` entries, `#`/`!` comments, and blanks round-trip byte-for-byte.
 //! Paths are a single `.key`; edits change only the targeted value or line.
@@ -18,12 +18,12 @@ pub use edit::apply;
 use edikt_core::{CommentKind, Document, Expr, Feature, Value};
 use syntax::{Sk, SyntaxNode};
 
-/// Comment kinds this format supports (empty ⇒ none); the comment
+/// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`. No inline: a `#`
 /// inside a value is data, not a comment.
 pub const COMMENT_KINDS: &[CommentKind] = &[CommentKind::Head, CommentKind::Foot];
 
-/// Capabilities: comments only. Flat and string-valued — no nesting, arrays,
+/// Capabilities: comments only. Flat and string-valued - no nesting, arrays,
 /// typed scalars, or sections.
 pub const FEATURES: &[Feature] = &[Feature::Comments];
 
@@ -196,7 +196,7 @@ mod tests {
             "# OLD\nK=v\n"
         );
         assert_eq!(cedit("# drop\nK=v\n", "del(.K.#)"), "K=v\n");
-        // Inline is refused — `.env` has no inline comments.
+        // Inline is refused - `.env` has no inline comments.
         let mut doc = parse("K=v\n").unwrap();
         let err = edikt_core::apply_comment_mutation(
             &mut doc,

@@ -2,7 +2,7 @@
 //!
 //! A lossless `rowan` + `logos` CST (the day-zero spike, productionized): parse
 //! JSONC into a tree that round-trips byte-for-byte, project it to
-//! [`edikt_core::Value`] for querying, and — with M2 — edit it in place touching
+//! [`edikt_core::Value`] for querying, and - with M2 - edit it in place touching
 //! only the targeted nodes. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
 
@@ -20,7 +20,7 @@ pub use edit::apply;
 use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value};
 use syntax::{Sk, SyntaxNode};
 
-/// Comment kinds this format supports (empty ⇒ none); the comment
+/// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
 pub const COMMENT_KINDS: &[CommentKind] =
     &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
@@ -113,7 +113,7 @@ impl Jsonc {
         };
         let root = self.root.clone_for_update();
         let Some(container) = edit::resolve_value_node(&root, parent) else {
-            return Ok(()); // parent path absent → nothing to delete
+            return Ok(()); // parent path absent -> nothing to delete
         };
         match last {
             Step::Field(k) => {
@@ -160,7 +160,7 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
     let green = parser::build(src);
     let root = SyntaxNode::new_root(green);
 
-    // An unrecognized byte is lexed as an error token — reject rather than
+    // An unrecognized byte is lexed as an error token - reject rather than
     // silently editing garbage.
     let has_error = root
         .descendants_with_tokens()
@@ -279,7 +279,7 @@ mod tests {
     fn source_slice_returns_exact_bytes() {
         let doc = parse(TSCONFIG).unwrap();
         let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
-        // A structural result is its exact source — comment and all.
+        // A structural result is its exact source - comment and all.
         assert_eq!(slice(".compilerOptions.lib"), vec!["[\"ES2020\", \"DOM\"]"]);
         // Iterate yields one slice per element, in order.
         assert_eq!(slice(".exclude[]"), vec!["\"node_modules\""]);
@@ -483,7 +483,7 @@ mod tests {
             "only the target line should change"
         );
         assert!(out.contains(r#""target": "ES2022""#));
-        // comments and trailing commas survive — the thing jq/yq can't do
+        // comments and trailing commas survive the edit
         assert!(out.contains("// TypeScript compiler configuration"));
         assert!(out.contains("/* language level */"));
         assert!(out.contains("\"dist\",\n\t],"));

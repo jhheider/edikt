@@ -1,6 +1,6 @@
 //! edikt TOML format module.
 //!
-//! Backed by `toml_edit`, whose whole purpose is format-preserving TOML edits —
+//! Backed by `toml_edit`, whose whole purpose is format-preserving TOML edits -
 //! so edikt gets lossless TOML (comments, spacing, table layout) essentially for
 //! free, and the moat holds without a hand-rolled CST.
 
@@ -15,7 +15,7 @@ pub use edit::{apply, emit};
 use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value, eval};
 use toml_edit::{DocumentMut, TableLike};
 
-/// Comment kinds this format supports (empty ⇒ none); the comment
+/// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
 pub const COMMENT_KINDS: &[CommentKind] =
     &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn value_editing_paths() {
-        // += and |= arithmetic; a pipe of edits; del — the apply arms.
+        // += and |= arithmetic; a pipe of edits; del - the apply arms.
         assert!(edit_src("n = 1\n", ".n += 4").contains("n = 5"));
         assert!(edit_src("n = 10\n", ".n |= . / 2").contains("n = 5"));
         assert_eq!(
@@ -349,7 +349,7 @@ mod tests {
         let edikt_core::CommentedNode::Object(pkg) = &top[0].1.node else {
             panic!("expected table object");
         };
-        // `version = "0.1.0"   # semver` — the entry's inline comment.
+        // `version = "0.1.0"   # semver` - the entry's inline comment.
         assert_eq!(pkg[1].0, "version");
         assert_eq!(pkg[1].1.comments.inline.as_deref(), Some("semver"));
     }

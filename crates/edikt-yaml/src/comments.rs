@@ -1,8 +1,8 @@
 //! YAML ↔ the uniform comment model, over the span tree.
 //!
 //! libyaml's event stream carries no comments, but the span tree carries every
-//! node's byte range — so **extraction** scans the source *between* spans:
-//! full-comment lines above a node are its head, a `# …` after a node's end
+//! node's byte range - so **extraction** scans the source *between* spans:
+//! full-comment lines above a node are its head, a `# ...` after a node's end
 //! (or after the `:` of an entry whose value opens on a later line) is its
 //! inline, and comment lines after the last node are the document's foot.
 //!
@@ -29,7 +29,7 @@ fn is_comment_line(line: &str) -> bool {
 /// Set the `kind` comment on the node at `path` (a value prefix), format-
 /// preserving via a byte-splice over the source. Head/foot go on own lines
 /// around the target's line; inline after its first line's content. A **flow**
-/// target (inside `[…]`/`{…}`, no own line) errors — that reflow is a follow-up.
+/// target (inside `[...]`/`{...}`, no own line) errors - that reflow is a follow-up.
 pub(crate) fn set_node_comment(
     source: &str,
     doc: &Node,
@@ -119,7 +119,7 @@ fn rewrite_inline(source: &str, anchor: usize, first_line_end: usize, set: Optio
 /// The comment indent for a **block** target: the leading whitespace of its
 /// line. `None` when the target is inside a **flow** collection (the text
 /// between the line start and the anchor holds more than whitespace and
-/// block-sequence `-` markers — e.g. `[`, `,`), which has no own line.
+/// block-sequence `-` markers - e.g. `[`, `,`), which has no own line.
 fn block_indent(source: &str, anchor: usize) -> Option<String> {
     let line_start = source[..anchor].rfind('\n').map(|i| i + 1).unwrap_or(0);
     // Block context: only whitespace and sequence dashes precede the anchor.
@@ -138,7 +138,7 @@ fn block_indent(source: &str, anchor: usize) -> Option<String> {
 }
 
 /// The byte index in `line` where an inline comment begins (a `#` at the start
-/// or after whitespace), if any. Imprecise on a `#` inside a quoted scalar —
+/// or after whitespace), if any. Imprecise on a `#` inside a quoted scalar -
 /// the same trade-off `has_comments` makes; only ever over-trims a rare case.
 fn inline_comment_start(line: &str) -> Option<usize> {
     let bytes = line.as_bytes();
@@ -190,7 +190,7 @@ fn resolve_anchor(source: &str, doc: &Node, path: &[Step]) -> Result<(usize, usi
 }
 
 /// Navigate the physical span tree along `path` (a merged-in key isn't
-/// physically present, so it isn't a comment target — consistent with edits).
+/// physically present, so it isn't a comment target - consistent with edits).
 fn descend<'a>(node: &'a Node, path: &[Step]) -> Result<&'a Node, EditError> {
     let mut cur = node;
     for step in path {
@@ -238,7 +238,7 @@ pub(crate) fn to_commented(src: &str, doc: &Node) -> Commented {
 }
 
 /// Where a node's *content* ends: the deepest last scalar (or key). Collection
-/// end marks are useless here — libyaml places them past any trailing
+/// end marks are useless here - libyaml places them past any trailing
 /// comments, at the token where it detected the dedent.
 fn content_end(node: &Node) -> usize {
     match &node.kind {
@@ -252,7 +252,7 @@ fn content_end(node: &Node) -> usize {
 }
 
 /// Compose a node's commented form. `floor` is where the previous sibling (or
-/// the owning entry's key) ended — the scan region for the first head comment.
+/// the owning entry's key) ended - the scan region for the first head comment.
 fn node_commented(src: &str, node: &Node, floor: usize) -> Commented {
     match &node.kind {
         NodeKind::Scalar(v) => Commented::scalar(v.clone()),
@@ -278,7 +278,7 @@ fn node_commented(src: &str, node: &Node, floor: usize) -> Commented {
             let mut floor = floor;
             for e in entries {
                 // A merge key (`<<`) is resolved away in the value projection;
-                // mirror that here (its comments go with it — they describe the
+                // mirror that here (its comments go with it - they describe the
                 // merge line, which won't exist in the converted output).
                 if e.key == "<<" {
                     compose::collect_merge(&compose::node_to_value(&e.value), &mut merged);
@@ -306,7 +306,7 @@ fn node_commented(src: &str, node: &Node, floor: usize) -> Commented {
 
 /// An entry's inline comment: after the value when it sits on the key's line,
 /// otherwise on the key line after the `:` (skipping anchors, tags, and block
-/// scalar indicators — `web: &a # c`, `text: | # c`).
+/// scalar indicators - `web: &a # c`, `text: | # c`).
 fn entry_inline(src: &str, e: &Entry) -> Option<String> {
     let same_line = !src[e.key_span.end..e.value.span.start.max(e.key_span.end)].contains('\n');
     if same_line {
@@ -334,7 +334,7 @@ fn entry_inline(src: &str, e: &Entry) -> Option<String> {
     }
 }
 
-/// A `# …` trailing `pos` on the same line (allowing one `,` first, so flow
+/// A `# ...` trailing `pos` on the same line (allowing one `,` first, so flow
 /// items like `[a, # c` still surface theirs).
 fn comment_after(src: &str, pos: usize) -> Option<String> {
     let seg = &src[pos..line_end(src, pos)];
@@ -342,7 +342,7 @@ fn comment_after(src: &str, pos: usize) -> Option<String> {
     rest.strip_prefix('#').map(|t| t.trim().to_string())
 }
 
-/// Full comment lines between two byte positions (whole lines only — partial
+/// Full comment lines between two byte positions (whole lines only - partial
 /// lines at either boundary belong to the nodes on them).
 fn comment_lines_between(src: &str, from: usize, to: usize) -> Vec<String> {
     if from >= to {

@@ -1,4 +1,4 @@
-//! Driving comment mutation (`.foo.# = …`, `|=`, `+=`, `del(.foo.#)`) through
+//! Driving comment mutation (`.foo.# = ...`, `|=`, `+=`, `del(.foo.#)`) through
 //! the format-agnostic [`Document::set_comment`] / [`Document::delete_comment`]
 //! write methods. The evaluator computes the new text in the value calculus
 //! (so `.foo.# |= gsub("a"; "b")` works); the format splices it in place.
@@ -7,7 +7,7 @@ use crate::{CommentKind, Document, EditError, Expr, Step, Value, eval};
 
 /// Apply a comment-mutation expression via the document's comment write
 /// methods, returning any warnings (layout expansion, kind remap). Comment-free
-/// mutations never reach here — the CLI routes on [`Expr::has_comment`].
+/// mutations never reach here - the CLI routes on [`Expr::has_comment`].
 pub fn apply_comment_mutation(
     doc: &mut dyn Document,
     expr: &Expr,
@@ -67,8 +67,8 @@ fn apply_inner(
             doc.delete_comment(prefix, kind)
         }
         _ => Err(EditError::new(
-            "unsupported comment edit — use `.path.# = …`, `|=`, `+=`, `del(.path.#)`, \
-             or the bulk `comments |= …` / `del(comments)`",
+            "unsupported comment edit - use `.path.# = ...`, `|=`, `+=`, `del(.path.#)`, \
+             or the bulk `comments |= ...` / `del(comments)`",
         )),
     }
 }
@@ -148,7 +148,7 @@ fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
 }
 
 /// Place (or clear) an own-line comment block around a node's line, on the
-/// source text — for the line-oriented formats (`.env`, INI). `target_line` is
+/// source text - for the line-oriented formats (`.env`, INI). `target_line` is
 /// the 0-based index of the node's own line; `is_head` puts the block above
 /// (else below, for foot). Contiguous existing comment lines on that side
 /// (detected by `is_comment_line`) are replaced; `wrapped == None` deletes.

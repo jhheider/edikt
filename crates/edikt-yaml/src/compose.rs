@@ -3,7 +3,7 @@
 //!
 //! This is the whole trick. One parse pass yields both the data model (fold the
 //! tree to a [`Value`] for query/convert) and the byte marks the lossless splice
-//! rides on (edit a node → replace exactly its bytes, leave every other byte
+//! rides on (edit a node -> replace exactly its bytes, leave every other byte
 //! untouched). No separate CST, no second parser.
 
 use edikt_core::Value;
@@ -233,13 +233,13 @@ fn key_string(node: &Node) -> String {
     node_to_value(node).to_raw_string()
 }
 
-/// Fold the span tree to the data-model [`Value`] (drops trivia — that is the
+/// Fold the span tree to the data-model [`Value`] (drops trivia - that is the
 /// query/convert view; the source view lives in the spans).
 ///
 /// Merge keys (`<<: *anchor`) are resolved here, so query/convert see the
 /// *effective* config the way yq does: explicit keys win over merged ones, and
 /// earlier merges win over later. The physical tree keeps the `<<` entry, so
-/// editing still targets real bytes (a merged-in key isn't physically present —
+/// editing still targets real bytes (a merged-in key isn't physically present -
 /// setting it creates an explicit override).
 pub(crate) fn node_to_value(node: &Node) -> Value {
     match &node.kind {
@@ -266,7 +266,7 @@ pub(crate) fn node_to_value(node: &Node) -> Value {
     }
 }
 
-/// Flatten a merge target — a mapping, or a sequence of mappings — into `out`,
+/// Flatten a merge target - a mapping, or a sequence of mappings - into `out`,
 /// keeping first-seen precedence.
 pub(crate) fn collect_merge(value: &Value, out: &mut Vec<(String, Value)>) {
     match value {

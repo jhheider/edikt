@@ -26,7 +26,7 @@ fn is_comment_line(line: &str) -> bool {
 
 /// Set the `kind` comment on the member/element at `path`, format-preserving.
 /// Head/foot go on own lines around it; inline after its value. A compact
-/// (single-line) container can't hold an own-line comment without expanding —
+/// (single-line) container can't hold an own-line comment without expanding -
 /// that reflow lands in a follow-up, so it errors here.
 pub(crate) fn set_node_comment(
     root: &SyntaxNode,
@@ -114,7 +114,7 @@ fn set_inline(
         .map(|i| end + i)
         .unwrap_or(source.len());
     // A container close (`}`/`]`) after the value on this line means it is
-    // compact — an inline comment would comment it out; that reflow is later.
+    // compact - an inline comment would comment it out; that reflow is later.
     if source[end..nl].contains(['}', ']', '{', '[']) {
         return Err(EditError::new(
             "adding an inline comment here needs layout expansion (a follow-up)",
@@ -281,7 +281,7 @@ fn container_commented(container: &SyntaxNode, is_object: bool) -> Commented {
 }
 
 /// One object member: its key, and its value with any member-internal comments
-/// attached (before the value → head; after it, e.g. `"a": 1 /* x */,` → inline).
+/// attached (before the value -> head; after it, e.g. `"a": 1 /* x */,` -> inline).
 fn member_commented(member: &SyntaxNode) -> (String, Commented) {
     let key = member
         .children_with_tokens()

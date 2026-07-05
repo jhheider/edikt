@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "Lossless, format-preserving config editor: JSONC/JSON5, INI, .env/.properties, TOML, YAML — jq-flavored expressions, sed-shaped I/O."
+description = "Lossless, format-preserving config editor: JSONC/JSON5, INI, .env/.properties, TOML, YAML - jq-flavored expressions, sed-shaped I/O."
 
 [dependencies]
 edikt-core = { workspace = true }

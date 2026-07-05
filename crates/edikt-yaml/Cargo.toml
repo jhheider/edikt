@@ -11,6 +11,6 @@ description = "edikt YAML format module: lossless in-place edit, query, and conv
 edikt-core = { workspace = true }
 # Pure-Rust libyaml port (safe API, zero transitive deps). We drive its event
 # stream for both the data model (query/convert) and byte-precise marks (the
-# lossless splice) — one parser, three jobs.
+# lossless splice) - one parser, three jobs.
 libyaml-safer = "0.3"
 thiserror = { workspace = true }

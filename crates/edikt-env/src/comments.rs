@@ -1,6 +1,6 @@
 //! `.env` / `.properties` ↔ the uniform comment model. Extraction is line-flat:
 //! own-line `#`/`!` comments attach to the next entry (head), trailing ones to
-//! the last entry (foot); there are no inline comments in this format — ever
+//! the last entry (foot); there are no inline comments in this format - ever
 //! (the `#` in `K=a#b` is value bytes). Emission therefore *remaps* an inline
 //! comment from another format onto its own line, with a warning.
 
@@ -20,7 +20,7 @@ fn is_comment_line(line: &str) -> bool {
     matches!(line.trim_start().as_bytes().first(), Some(b'#' | b'!'))
 }
 
-/// Set the `kind` comment on the entry for `key` (`.env` has head/foot only —
+/// Set the `kind` comment on the entry for `key` (`.env` has head/foot only -
 /// inline is refused, a `#` in a value is data). Returns warnings (none here).
 pub(crate) fn set_key_comment(
     root: &SyntaxNode,
@@ -60,7 +60,7 @@ pub(crate) fn delete_key_comment(
     }
     let source = edikt_syntax::to_source(root);
     let Ok((line, indent)) = entry_line(root, key, &source) else {
-        return Ok(source); // missing key → no-op
+        return Ok(source); // missing key -> no-op
     };
     Ok(place_line_comment(
         &source,
@@ -140,7 +140,7 @@ pub(crate) fn to_commented(root: &SyntaxNode) -> Commented {
     }
 }
 
-/// `# text` / `! text` → `text`.
+/// `# text` / `! text` -> `text`.
 fn strip_marker(text: &str) -> String {
     text.trim_start_matches(['#', '!']).trim().to_string()
 }
@@ -149,7 +149,7 @@ fn strip_marker(text: &str) -> String {
 
 /// Emit a commented value as a flat `.env`: every leaf becomes a `key=value`
 /// line (nesting flattened to dotted keys), head/foot comments as `# ` lines.
-/// An inline comment can't exist here, so it moves to a head line of its own —
+/// An inline comment can't exist here, so it moves to a head line of its own -
 /// with a warning, since that is a remap, not a placement.
 pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError> {
     if !matches!(c.node, CommentedNode::Object(_)) {

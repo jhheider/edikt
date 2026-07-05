@@ -99,7 +99,7 @@ pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
 }
 
 /// Emit a value as TOML: top-level objects become `[table]`s (nested-in-value
-/// objects stay inline). Returns text and warnings (none — TOML holds nesting,
+/// objects stay inline). Returns text and warnings (none - TOML holds nesting,
 /// arrays, and typed scalars).
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
     let Value::Object(m) = value else {

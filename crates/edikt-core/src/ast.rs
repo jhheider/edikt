@@ -2,7 +2,7 @@
 //!
 //! The v1 query language desugars dotted/indexed paths into a `Path` of steps,
 //! so the evaluator only deals with a handful of node kinds. Mutation forms
-//! (`=`, `|=`, `+=`, `del`) are not parsed yet — they arrive with M2.
+//! (`=`, `|=`, `+=`, `del`) are not parsed yet - they arrive with M2.
 
 use crate::comment::CommentKind;
 use crate::value::Value;
@@ -10,13 +10,13 @@ use crate::value::Value;
 /// One navigation step within a path, applied to the current input.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
-    /// `.field` or `."quoted"` — object member access.
+    /// `.field` or `."quoted"` - object member access.
     Field(String),
-    /// `[n]` — array index (negative counts from the end).
+    /// `[n]` - array index (negative counts from the end).
     Index(i64),
-    /// `[]` — iterate array elements / object values.
+    /// `[]` - iterate array elements / object values.
     Iterate,
-    /// `#` (head) / `#.head` / `#.inline` / `#.foot` — the comment of the node
+    /// `#` (head) / `#.head` / `#.inline` / `#.foot` - the comment of the node
     /// reached by the preceding steps. Terminal: no step may follow it.
     Comment(CommentKind),
 }
@@ -48,24 +48,24 @@ pub enum Expr {
     Neg(Box<Expr>),
     /// A binary operation.
     Binary(BinOp, Box<Expr>, Box<Expr>),
-    /// `left | right` — pipe each output of `left` into `right`.
+    /// `left | right` - pipe each output of `left` into `right`.
     Pipe(Box<Expr>, Box<Expr>),
-    /// `left // right` — jq's alternative: `left`'s truthy outputs, or —
-    /// when there are none (a miss, `null`, `false`) — `right`'s.
+    /// `left // right` - jq's alternative: `left`'s truthy outputs, or -
+    /// when there are none (a miss, `null`, `false`) - `right`'s.
     Alternative(Box<Expr>, Box<Expr>),
-    /// `a, b, c` — concatenate output streams.
+    /// `a, b, c` - concatenate output streams.
     Comma(Vec<Expr>),
     /// A function call, e.g. `length`, `select(.x == 1)`, `ltrimstr("pre")`.
     Call(String, Vec<Expr>),
-    /// `[ expr ]` — collect the inner stream into an array (`None` = `[]`).
+    /// `[ expr ]` - collect the inner stream into an array (`None` = `[]`).
     Collect(Option<Box<Expr>>),
-    /// `{ key: expr, ... }` — construct an object.
+    /// `{ key: expr, ... }` - construct an object.
     ObjectConstruct(Vec<(String, Expr)>),
-    /// `path = rhs` — assign; `rhs` is evaluated against the whole input.
+    /// `path = rhs` - assign; `rhs` is evaluated against the whole input.
     Assign(Box<Expr>, Box<Expr>),
-    /// `path |= rhs` — update-assign; `rhs` sees the current value at `path`.
+    /// `path |= rhs` - update-assign; `rhs` sees the current value at `path`.
     UpdateAssign(Box<Expr>, Box<Expr>),
-    /// `path += rhs` — add-assign; `path = path + rhs` (numeric add, string/array
+    /// `path += rhs` - add-assign; `path = path + rhs` (numeric add, string/array
     /// concat). `rhs` is evaluated against the whole input.
     AddAssign(Box<Expr>, Box<Expr>),
 }
@@ -173,7 +173,7 @@ mod tests {
             render_path(&[Step::Field("xs".into()), Step::Iterate]),
             ".xs[]"
         );
-        // A dotted key can't be a bare identifier — bracket-quote it.
+        // A dotted key can't be a bare identifier - bracket-quote it.
         assert_eq!(render_path(&[Step::Field("a.b".into())]), ".[\"a.b\"]");
         // The comment step renders back to its accessor form.
         assert_eq!(

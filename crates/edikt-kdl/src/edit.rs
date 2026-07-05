@@ -3,7 +3,7 @@
 //! Edits are surgical: set an argument or property in place (only its value
 //! text changes), create a leaf node, delete a node/prop/argument, extend a
 //! run of repeated nodes. Replacing a whole node body wholesale is refused
-//! rather than reflowed — same policy as YAML.
+//! rather than reflowed - same policy as YAML.
 
 use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
@@ -358,13 +358,13 @@ fn remove_arg(node: &mut KdlNode, i: i64) {
 
 /// A value as fresh node(s) named `name`, inverting the projection:
 ///
-/// - an array whose elements are **all scalars** → one node carrying them as
-///   positional arguments (`["a","b"]` → `name "a" "b"`);
-/// - an array with any **object or array** element → one node per element (a
-///   run of repeated nodes), each object→node, each inner array→that node's
-///   arguments, each scalar→a one-argument node;
-/// - an object → one node (args under `"-"`, then props, then children);
-/// - a scalar → a one-argument node; `null` → a bare node.
+/// - an array whose elements are **all scalars** -> one node carrying them as
+///   positional arguments (`["a","b"]` -> `name "a" "b"`);
+/// - an array with any **object or array** element -> one node per element (a
+///   run of repeated nodes), each object->node, each inner array->that node's
+///   arguments, each scalar->a one-argument node;
+/// - an object -> one node (args under `"-"`, then props, then children);
+/// - a scalar -> a one-argument node; `null` -> a bare node.
 ///
 /// A triply-nested array (an array element that is itself an array of arrays)
 /// has no KDL spelling and errors cleanly.
@@ -428,7 +428,7 @@ fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: us
 
 // --- emit -------------------------------------------------------------------
 
-/// Emit a value as a fresh KDL document (autoformatted — there is no layout to
+/// Emit a value as a fresh KDL document (autoformatted - there is no layout to
 /// preserve on this path). Returns text and warnings (none: KDL holds every
 /// feature).
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {

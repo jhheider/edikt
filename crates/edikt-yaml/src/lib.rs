@@ -1,4 +1,4 @@
-//! edikt YAML format module — **lossless in-place edit, query, and conversion**,
+//! edikt YAML format module - **lossless in-place edit, query, and conversion**,
 //! pure Rust.
 //!
 //! YAML is driven by [`libyaml-safer`](https://crates.io/crates/libyaml-safer), a
@@ -10,7 +10,7 @@
 //! The moat holds: an edit replaces exactly the targeted node's bytes; comments,
 //! indentation, quote style, and layout of every untouched region survive
 //! byte-for-byte. Restructuring a block in place (replacing a whole
-//! mapping/sequence, or creating nested keys) is refused rather than reflowed —
+//! mapping/sequence, or creating nested keys) is refused rather than reflowed -
 //! edikt never rewrites what it didn't target.
 
 mod comments;
@@ -25,7 +25,7 @@ use edikt_core::{CommentKind, Document, EditError, Expr, Feature, Value};
 pub use comments::emit_commented;
 pub use emit::emit;
 
-/// Comment kinds this format supports (empty ⇒ none); the comment
+/// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
 pub const COMMENT_KINDS: &[CommentKind] =
     &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
@@ -76,7 +76,7 @@ impl Document for Yaml {
     fn has_comments(&self) -> bool {
         // A `#` at line start or after whitespace opens a comment. This can
         // false-positive on a `#` inside a quoted scalar, which only ever
-        // over-warns on conversion — acceptable, and never wrong the other way.
+        // over-warns on conversion - acceptable, and never wrong the other way.
         self.source
             .lines()
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
@@ -206,8 +206,8 @@ mod tests {
 
     #[test]
     fn set_scalar_touches_only_that_value() {
-        // Change one scalar; every other byte — comments, indent, the pinned
-        // comment on the same line — stays put.
+        // Change one scalar; every other byte - comments, indent, the pinned
+        // comment on the same line - stays put.
         let out = edit(SAMPLE, ".web.replicas = 5");
         assert_eq!(
             out,
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn append_after_block_scalar_item() {
-        // The last item is a block literal — its span starts at the content, not
+        // The last item is a block literal - its span starts at the content, not
         // the dash. Appending must still work (derive the dash from the seq mark).
         let src = "items:\n  - |\n    literal\n  - plain\n";
         let out = edit(src, ".items += [\"x\"]");
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn unrelated_edit_preserves_scalar_spelling() {
         // `True` is core-schema bool, but editing a *different* key must not
-        // re-spell it — to_source returns spliced bytes, not a re-emit.
+        // re-spell it - to_source returns spliced bytes, not a re-emit.
         let src = "e: True\no: 1\n";
         let out = edit(src, ".o = 2");
         assert_eq!(out, "e: True\no: 2\n");
@@ -530,7 +530,7 @@ mod tests {
         let c = parse(SAMPLE).unwrap().to_commented().unwrap();
         let (out, warnings) = emit_commented(&c).unwrap();
         assert!(warnings.is_empty());
-        // (Sequence items sit at their key's indent — libyaml's block style,
+        // (Sequence items sit at their key's indent - libyaml's block style,
         // same as the plain emitter.)
         assert_eq!(
             out,
@@ -546,7 +546,7 @@ mod tests {
         let value = parse(SAMPLE).unwrap().to_value();
         let (plain, _) = emit(&value).unwrap();
         let (commented, _) = emit_commented(&edikt_core::Commented::from_value(&value)).unwrap();
-        assert_eq!(plain, commented, "no comments → byte-identical to today");
+        assert_eq!(plain, commented, "no comments -> byte-identical to today");
     }
 
     #[test]

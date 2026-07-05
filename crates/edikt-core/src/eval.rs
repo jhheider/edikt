@@ -3,10 +3,10 @@
 //! jq-style generator semantics: every expression maps one input value to a
 //! *stream* of output values (0, 1, or many), collected here into a `Vec`.
 //! A miss (missing key, out-of-range index) yields an **empty stream**, not
-//! `null` — the CLI renders it as a silent no-op (sed-shaped), and `//`
+//! `null` - the CLI renders it as a silent no-op (sed-shaped), and `//`
 //! supplies defaults. An explicit `null` in the document still yields `null`.
 //!
-//! Mutation `=`, `|=`, and `del` are handled here at the value level — this
+//! Mutation `=`, `|=`, and `del` are handled here at the value level - this
 //! defines the *semantics* (what value ends up where). The format-preserving CST
 //! *write* path lives in the format modules and mirrors these rules. `+=`
 //! arrives in a later slice.
@@ -135,8 +135,8 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
             Ok(out)
         }
         Expr::Alternative(l, r) => {
-            // jq's `//`: the left side's truthy outputs; if there are none —
-            // a miss, `null`, or `false` — the right side's. A type *error*
+            // jq's `//`: the left side's truthy outputs; if there are none -
+            // a miss, `null`, or `false` - the right side's. A type *error*
             // on the left still propagates: a miss falls back, a mistake
             // doesn't hide.
             let truthy: Vec<Value> = eval(l, input)?
@@ -393,7 +393,7 @@ fn apply_step(step: &Step, v: &Value) -> Result<Vec<Value>, EvalError> {
             ))),
         },
         // A comment step is resolved against the document's commented
-        // projection, not the value stream — see `eval_with_comments`. Reaching
+        // projection, not the value stream - see `eval_with_comments`. Reaching
         // it here means it was used in a spot the value evaluator can't serve.
         Step::Comment(_) => Err(EvalError::new(
             "comment access (`#`) resolves only as a whole path like `.foo.#`, \
@@ -525,7 +525,7 @@ fn eval_call(name: &str, args: &[Expr], input: &Value) -> Result<Vec<Value>, Eva
             Ok(())
         } else {
             Err(EvalError::new(format!(
-                "{name} takes {min}–{max} arguments, got {}",
+                "{name} takes {min}-{max} arguments, got {}",
                 args.len()
             )))
         }
@@ -786,7 +786,7 @@ fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
 
 /// The message for a comment edit, which lands in v0.2 Phase 2.
 fn comment_mutation_unsupported() -> &'static str {
-    "editing comments (`#`) is not supported yet (planned for v0.2); reading works — e.g. `edikt '.foo.#' file`"
+    "editing comments (`#`) is not supported yet (planned for v0.2); reading works - e.g. `edikt '.foo.#' file`"
 }
 
 fn length(v: &Value) -> Result<Value, EvalError> {
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn missing_is_empty_stream() {
-        // A missing key (or OOB index) is a miss → empty stream. Indexing a
+        // A missing key (or OOB index) is a miss -> empty stream. Indexing a
         // scalar is a *type error*, tested separately in `type_errors`.
         let doc = obj(&[("a", obj(&[("x", Value::Int(1))]))]);
         assert!(run(".nope", &doc).is_empty());
@@ -1141,8 +1141,8 @@ mod tests {
         assert_eq!(one("3 - 1", &Value::Null), Value::Int(2));
         assert_eq!(one("3 * 4", &Value::Null), Value::Int(12));
         assert_eq!(one("7 % 3", &Value::Null), Value::Int(1));
-        assert_eq!(one("6 / 2", &Value::Null), Value::Int(3)); // even → int
-        assert_eq!(one("7 / 2", &Value::Null), Value::Float(3.5)); // uneven → float
+        assert_eq!(one("6 / 2", &Value::Null), Value::Int(3)); // even -> int
+        assert_eq!(one("7 / 2", &Value::Null), Value::Float(3.5)); // uneven -> float
         assert_eq!(one("2.5 + 0.5", &Value::Null), Value::Int(3)); // 3.0 prints as int
         // Comparisons.
         assert_eq!(one("1 < 2", &Value::Null), Value::Bool(true));
@@ -1227,7 +1227,7 @@ mod tests {
             Value::Array(vec![Value::Bool(false), Value::Int(7), Value::Null]),
         )]);
         assert_eq!(run(r#".xs[] // "d""#, &items), vec![Value::Int(7)]);
-        // A type error on the left still propagates — a miss falls back, a
+        // A type error on the left still propagates - a miss falls back, a
         // mistake doesn't hide.
         assert!(eval(&parse(r#".a.b // "d""#).unwrap(), &doc).is_err());
     }
@@ -1268,7 +1268,7 @@ mod tests {
         // The stream yields one record per comment, in document order.
         let recs = comment_records(&root);
         assert_eq!(recs.len(), 3);
-        // comment → key: which paths carry a TODO?
+        // comment -> key: which paths carry a TODO?
         let todos = eval_with_comments(
             &parse(r#"comments | select(.text | test("TODO")) | .path"#).unwrap(),
             &root,
@@ -1300,7 +1300,7 @@ mod tests {
         // The `;`-separated flags argument, jq-style.
         assert_eq!(one(r#"test("^NGINX"; "i")"#, &s), Value::Bool(true));
 
-        // match: no match → empty stream (a silent miss at the CLI); `g`
+        // match: no match -> empty stream (a silent miss at the CLI); `g`
         // streams every match.
         assert!(run(r#"match("\\d+"; "g")"#, &Value::Str("a1b22".into())).len() == 2);
         assert!(run(r#"match("z")"#, &s).is_empty());
@@ -1432,7 +1432,7 @@ mod tests {
 
     #[test]
     fn assign_lhs_must_be_path() {
-        // `1 = 2` — the left side is a literal, not a path.
+        // `1 = 2` - the left side is a literal, not a path.
         assert!(eval(&parse("1 = 2").unwrap(), &Value::Null).is_err());
     }
 
