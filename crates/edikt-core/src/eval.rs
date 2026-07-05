@@ -2,10 +2,9 @@
 //!
 //! jq-style generator semantics: every expression maps one input value to a
 //! *stream* of output values (0, 1, or many), collected here into a `Vec`.
-//! Miss semantics are grep-shaped, not jq-shaped: a path that resolves to
-//! nothing (missing key, out-of-range index) yields an **empty stream** (→ the
-//! CLI's exit-1 "miss"), not `null`. An explicit `null` in the document still
-//! yields `null`.
+//! A miss (missing key, out-of-range index) yields an **empty stream**, not
+//! `null` — the CLI renders it as a silent no-op (sed-shaped), and `//`
+//! supplies defaults. An explicit `null` in the document still yields `null`.
 //!
 //! Mutation `=`, `|=`, and `del` are handled here at the value level — this
 //! defines the *semantics* (what value ends up where). The format-preserving CST
@@ -59,6 +58,21 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
                 out.extend(eval(r, &v)?);
             }
             Ok(out)
+        }
+        Expr::Alternative(l, r) => {
+            // jq's `//`: the left side's truthy outputs; if there are none —
+            // a miss, `null`, or `false` — the right side's. A type *error*
+            // on the left still propagates: a miss falls back, a mistake
+            // doesn't hide.
+            let truthy: Vec<Value> = eval(l, input)?
+                .into_iter()
+                .filter(Value::is_truthy)
+                .collect();
+            if truthy.is_empty() {
+                eval(r, input)
+            } else {
+                Ok(truthy)
+            }
         }
         Expr::Comma(items) => {
             let mut out = Vec::new();
@@ -962,6 +976,40 @@ mod tests {
     }
 
     #[test]
+    fn alternative_operator() {
+        let doc = obj(&[
+            ("a", Value::Int(1)),
+            ("z", Value::Null),
+            ("f", Value::Bool(false)),
+        ]);
+        // A present, truthy value wins.
+        assert_eq!(one(r#".a // "d""#, &doc), Value::Int(1));
+        // A miss, null, and false all fall back.
+        assert_eq!(one(r#".nope // "d""#, &doc), Value::Str("d".into()));
+        assert_eq!(one(r#".z // "d""#, &doc), Value::Str("d".into()));
+        assert_eq!(one(r#".f // "d""#, &doc), Value::Str("d".into()));
+        // Right-associative chain.
+        assert_eq!(
+            one(r#".x // .y // "last""#, &doc),
+            Value::Str("last".into())
+        );
+        // Binds tighter than `=`: the RHS gets the default.
+        let r = run(r#".k = .nope // "d""#, &doc);
+        assert_eq!(one(".k", &r[0]), Value::Str("d".into()));
+        // Binds looser than comparison: `.a == 2 // "d"` is ((.a == 2)) // "d".
+        assert_eq!(one(r#".a == 2 // "d""#, &doc), Value::Str("d".into()));
+        // Filters a stream to its truthy members before falling back.
+        let items = obj(&[(
+            "xs",
+            Value::Array(vec![Value::Bool(false), Value::Int(7), Value::Null]),
+        )]);
+        assert_eq!(run(r#".xs[] // "d""#, &items), vec![Value::Int(7)]);
+        // A type error on the left still propagates — a miss falls back, a
+        // mistake doesn't hide.
+        assert!(eval(&parse(r#".a.b // "d""#).unwrap(), &doc).is_err());
+    }
+
+    #[test]
     fn regex_test_match_capture() {
         let s = Value::Str("nginx:1.25".into());
         assert_eq!(one(r#"test("^nginx")"#, &s), Value::Bool(true));
@@ -969,7 +1017,7 @@ mod tests {
         // The `;`-separated flags argument, jq-style.
         assert_eq!(one(r#"test("^NGINX"; "i")"#, &s), Value::Bool(true));
 
-        // match: no match → empty stream (the CLI's grep-shaped miss); `g`
+        // match: no match → empty stream (a silent miss at the CLI); `g`
         // streams every match.
         assert!(run(r#"match("\\d+"; "g")"#, &Value::Str("a1b22".into())).len() == 2);
         assert!(run(r#"match("z")"#, &s).is_empty());

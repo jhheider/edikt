@@ -57,6 +57,8 @@ pub enum Lx {
     Star,
     #[token("/")]
     Slash,
+    #[token("//")]
+    Alt,
     #[token("%")]
     Percent,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]

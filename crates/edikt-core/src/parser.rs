@@ -125,7 +125,7 @@ impl Parser {
     }
 
     fn parse_assign(&mut self) -> Result<Expr, ParseError> {
-        let lhs = self.parse_cmp()?;
+        let lhs = self.parse_alt()?;
         match self.peek() {
             Some(Lx::Assign) => {
                 self.pos += 1;
@@ -144,6 +144,18 @@ impl Parser {
             }
             _ => Ok(lhs),
         }
+    }
+
+    /// `a // b` — right-associative, binding tighter than `=` (so
+    /// `.k = .a // "d"` defaults the RHS) and looser than comparison.
+    fn parse_alt(&mut self) -> Result<Expr, ParseError> {
+        let left = self.parse_cmp()?;
+        if self.peek() == Some(Lx::Alt) {
+            self.pos += 1;
+            let right = self.parse_alt()?;
+            return Ok(Expr::Alternative(Box::new(left), Box::new(right)));
+        }
+        Ok(left)
     }
 
     fn parse_cmp(&mut self) -> Result<Expr, ParseError> {

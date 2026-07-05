@@ -4,7 +4,7 @@
 //! jq-named and jq-shaped: `match` yields jq's match objects (`offset` /
 //! `length` / `string` / `captures`, with codepoint offsets), flags are jq's
 //! (`i`, `x`, plus `s`/`m`, and `g` for global), and no match means an empty
-//! stream — which the CLI already maps to the grep-shaped exit 1. The one
+//! stream — a silent miss at the CLI (or exit 1 under `--exit-status`). The one
 //! deliberate divergence: jq splices captures into replacements with string
 //! interpolation, which edikt's expression language doesn't have; `sub`/`gsub`
 //! use `$1` / `$name` references instead (sed-flavored, like the rest of the
