@@ -44,10 +44,12 @@ edikt -f script.edk [-f …] [FILE...]
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin |
 | `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`toml`\|`yaml`) |
 | `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` are shorthands for `-T <fmt>` |
+| `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
 
-**Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) → script
-`toFormat:` directive → the input format, preserved. Input-format precedence:
+**Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) →
+`-o` FILE's extension → script `toFormat:` directive → the input format,
+preserved. Input-format precedence:
 `-t` → script `type:` → filename detection. `json` and `jsonc` are distinct
 formats sharing one engine — JSON has no `Comments` capability, so JSONC → JSON
 is a real conversion that warns and drops comments.

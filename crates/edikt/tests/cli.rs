@@ -482,6 +482,48 @@ fn to_with_expression_and_file() {
 }
 
 #[test]
+fn output_file_infers_format_from_extension() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let out = format!("{dir}/o1.json");
+    // YAML in, -o file.json → JSON written to the file, nothing on stdout.
+    let (stdout, _e, code) = run(&["-t", "yaml", "-o", &out, ".a"], "a:\n  b: 1\n");
+    assert_eq!(stdout, "");
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "{\n  \"b\": 1\n}\n");
+
+    // Explicit -T beats the extension.
+    let out2 = format!("{dir}/o2.json");
+    let (_s, _e, c2) = run(
+        &["-t", "yaml", "-T", "yaml", "-o", &out2, ".a"],
+        "a:\n  b: 1\n",
+    );
+    assert_eq!(c2, 0);
+    assert_eq!(std::fs::read_to_string(&out2).unwrap(), "b: 1\n");
+}
+
+#[test]
+fn output_file_takes_mutation_result() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let out = format!("{dir}/edited.yaml");
+    // A mutation with -o writes the edited document to FILE (extension is a
+    // sink here, not a conversion).
+    let (stdout, _e, code) = run(&["-t", "yaml", "-o", &out, ".a = 2"], "# keep\na: 1\n");
+    assert_eq!(stdout, "");
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "# keep\na: 2\n");
+}
+
+#[test]
+fn output_file_untouched_on_miss() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let out = format!("{dir}/miss.json");
+    let _ = std::fs::remove_file(&out);
+    let (_s, _e, code) = run(&["-t", "yaml", "-o", &out, ".nope"], "a: 1\n");
+    assert_eq!(code, 1); // grep-shaped miss
+    assert!(!std::path::Path::new(&out).exists(), "no file on a miss");
+}
+
+#[test]
 fn helpful_error_messages() {
     // Unknown format names the valid choices.
     let (_o, err, code) = run(&["-t", "bogus", "."], "a: 1\n");
