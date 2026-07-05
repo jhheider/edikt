@@ -138,6 +138,23 @@ impl Document for Toml {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.doc))
     }
+    fn set_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let warnings = comments::set_node_comment(&mut self.doc, path, kind, text)?;
+        self.had_comments = true;
+        Ok(warnings)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        comments::delete_node_comment(&mut self.doc, path, kind)
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +172,57 @@ mod tests {
         let mut doc = parse(src).unwrap();
         apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    /// Apply a comment mutation through the Document write methods.
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_set_edit_delete() {
+        // Set a head comment above a value; surrounding bytes untouched.
+        assert_eq!(
+            cedit(
+                "# banner\n[a]\nx = 1  # inline x\ny = 2\n",
+                ".a.y.# = \"note\""
+            ),
+            "# banner\n[a]\nx = 1  # inline x\n# note\ny = 2\n"
+        );
+        // Set an inline comment on a value.
+        assert_eq!(
+            cedit("[s]\nport = 8080\n", ".s.port.#.inline = \"listen\""),
+            "[s]\nport = 8080 # listen\n"
+        );
+        // Set a head comment on a table header.
+        assert_eq!(
+            cedit("[a]\nx = 1\n", ".a.# = \"the a table\""),
+            "# the a table\n[a]\nx = 1\n"
+        );
+        // Edit an existing comment via `|=`, then read it back.
+        let edited = cedit("# old\nk = 1\n", ".k.# |= ascii_upcase");
+        assert_eq!(edited, "# OLD\nk = 1\n");
+        // Delete a comment, keeping the value and layout.
+        assert_eq!(cedit("# drop\nk = 1\n", "del(.k.#)"), "k = 1\n");
+    }
+
+    #[test]
+    fn comment_wraps_to_the_envelope() {
+        // Longest line is short, so head wraps at the 80 floor.
+        let long = "this is a fairly long explanatory comment that should wrap to the file width envelope and not run off forever";
+        let out = cedit("k = 1\n", &format!(".k.# = \"{long}\""));
+        for line in out.lines().filter(|l| l.starts_with("# ")) {
+            assert!(line.chars().count() <= 80, "line too wide: {line:?}");
+        }
+        // And it re-reads (unwrapped) as the same text.
+        let commented = parse(&out).unwrap().to_commented().unwrap();
+        let path = parse_expr(".k.#").unwrap();
+        assert_eq!(
+            commented.resolve_comment(path.as_path().unwrap()),
+            vec![Value::Str(long.into())]
+        );
     }
 
     #[test]

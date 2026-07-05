@@ -11,6 +11,7 @@
 
 mod ast;
 mod comment;
+mod comment_edit;
 pub mod convert;
 mod document;
 mod error;
@@ -20,9 +21,11 @@ mod lexer;
 mod parser;
 mod strings;
 mod value;
+pub mod wrap;
 
 pub use ast::{BinOp, Expr, Step, render_path};
 pub use comment::{CommentKind, Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
+pub use comment_edit::apply_comment_mutation;
 pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval, eval_with_comments};

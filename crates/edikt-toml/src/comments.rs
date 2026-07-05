@@ -15,8 +15,146 @@
 //! with a warning.
 
 use crate::{edit, project};
-use edikt_core::{Commented, CommentedNode, Comments, EditError, Value};
+use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value};
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value as TomlValue};
+
+// --- in-place comment write-back ---------------------------------------
+
+/// Set the `kind` comment on the node at `path` (a value prefix, no `#` step)
+/// to `text`, format-preserving. Head comments wrap to the document's width;
+/// inline never wraps. Foot and document-level (`.#`) are follow-ups.
+pub(crate) fn set_node_comment(
+    doc: &mut DocumentMut,
+    path: &[Step],
+    kind: CommentKind,
+    text: &str,
+) -> Result<Vec<String>, EditError> {
+    let width = wrap_width(&doc.to_string());
+    write_comment(doc, path, kind, Some((text, width)))
+}
+
+/// Delete the `kind` comment on the node at `path` (a miss is a no-op).
+pub(crate) fn delete_node_comment(
+    doc: &mut DocumentMut,
+    path: &[Step],
+    kind: CommentKind,
+) -> Result<(), EditError> {
+    write_comment(doc, path, kind, None).map(|_| ())
+}
+
+/// Shared navigation + decor write. `set` is `Some((text, width))` to set/wrap,
+/// or `None` to clear.
+fn write_comment(
+    doc: &mut DocumentMut,
+    path: &[Step],
+    kind: CommentKind,
+    set: Option<(&str, usize)>,
+) -> Result<Vec<String>, EditError> {
+    if matches!(kind, CommentKind::Foot) {
+        return Err(EditError::new(
+            "setting a foot comment isn't supported for TOML yet",
+        ));
+    }
+    let Some((Step::Field(key), parent)) = path.split_last() else {
+        return Err(EditError::new(
+            "document-level (`.#`) comment editing for TOML is a follow-up",
+        ));
+    };
+    let mut current: &mut dyn TableLike = doc.as_table_mut();
+    for step in parent {
+        let Step::Field(k) = step else {
+            return Err(EditError::new("TOML comment paths are object keys"));
+        };
+        current = current
+            .get_mut(k)
+            .and_then(|i| i.as_table_like_mut())
+            .ok_or_else(|| EditError::new(format!("no table `{k}`")))?;
+    }
+    let is_table = current
+        .get(key)
+        .map(|i| i.is_table_like())
+        .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
+
+    match kind {
+        CommentKind::Head => {
+            // TOML keys sit at column 0 (even inside a table); indent = 0.
+            let block = |existing: &str| match set {
+                Some((text, width)) => rebuild_head(existing, &wrap_comment(text, width, 0, 2)),
+                None => rebuild_head(existing, &[]),
+            };
+            if is_table {
+                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
+                let existing = decor_prefix(t.decor());
+                t.decor_mut().set_prefix(block(&existing));
+            } else {
+                let existing = current
+                    .key(key)
+                    .and_then(|k| k.leaf_decor().prefix())
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut kmut = current
+                    .key_mut(key)
+                    .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
+                kmut.leaf_decor_mut().set_prefix(block(&existing));
+            }
+        }
+        CommentKind::Inline => {
+            let suffix = match set {
+                Some((text, _)) => format!(" # {}", sanitize(text)),
+                None => String::new(),
+            };
+            if is_table {
+                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
+                t.decor_mut().set_suffix(suffix);
+            } else {
+                let v = current
+                    .get_mut(key)
+                    .unwrap()
+                    .as_value_mut()
+                    .ok_or_else(|| EditError::new(format!("`{key}` has no inline slot")))?;
+                v.decor_mut().set_suffix(suffix);
+            }
+        }
+        CommentKind::Foot => unreachable!(),
+    }
+    Ok(Vec::new())
+}
+
+fn decor_prefix(decor: &toml_edit::Decor) -> String {
+    decor
+        .prefix()
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Rebuild a decor prefix with `wrapped` as its comment block: keep the leading
+/// blank lines and the trailing indent (before the key/header), drop the old
+/// comment lines. Empty `wrapped` clears the comment while preserving spacing.
+fn rebuild_head(existing: &str, wrapped: &[String]) -> String {
+    let end_indent: String = existing
+        .rsplit('\n')
+        .next()
+        .filter(|s| s.chars().all(|c| c == ' ' || c == '\t'))
+        .unwrap_or("")
+        .to_string();
+    let mut out = String::new();
+    // Preserve leading blank lines up to the first comment / content line.
+    for line in existing.split_inclusive('\n') {
+        if line.ends_with('\n') && line.trim().is_empty() {
+            out.push_str(line);
+        } else {
+            break;
+        }
+    }
+    for w in wrapped {
+        out.push_str(&format!("{end_indent}# {w}\n"));
+    }
+    out.push_str(&end_indent);
+    out
+}
 
 // --- extraction ---------------------------------------------------------
 

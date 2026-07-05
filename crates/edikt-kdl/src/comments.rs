@@ -7,8 +7,162 @@
 //! convention (grouping, the `"-"` args key) with [`crate::project`].
 
 use crate::project;
-use edikt_core::{Commented, CommentedNode, Comments, EditError};
+use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step};
 use kdl::{KdlDocument, KdlNode};
+
+// --- in-place comment write-back ---------------------------------------
+
+/// Set the `kind` comment on the node at `path` (a value prefix, no `#` step)
+/// to `text`, format-preserving. Head wraps to the document width; inline never
+/// wraps. Foot and document-level (`.#`) are follow-ups; comments attach to
+/// nodes, not properties/arguments.
+pub(crate) fn set_node_comment(
+    doc: &mut KdlDocument,
+    path: &[Step],
+    kind: CommentKind,
+    text: &str,
+) -> Result<Vec<String>, EditError> {
+    if matches!(kind, CommentKind::Foot) {
+        return Err(EditError::new(
+            "setting a foot comment isn't supported for KDL yet",
+        ));
+    }
+    let width = wrap_width(&doc.to_string());
+    let node = resolve_node(doc, path)?;
+    let indent = leading_indent(node);
+    match kind {
+        CommentKind::Head => {
+            let wrapped = wrap_comment(text, width, indent.chars().count(), 3);
+            let existing = node.format().map(|f| f.leading.clone()).unwrap_or_default();
+            let leading = rebuild_leading(&existing, &wrapped, &indent);
+            ensure_format(node).leading = leading;
+        }
+        CommentKind::Inline => {
+            let ending = node
+                .format()
+                .map(|f| line_ending(&f.terminator))
+                .unwrap_or("\n");
+            ensure_format(node).terminator = format!(" // {}{ending}", sanitize(text));
+        }
+        CommentKind::Foot => unreachable!(),
+    }
+    Ok(Vec::new())
+}
+
+/// Delete the `kind` comment on the node at `path` (a miss is a no-op).
+pub(crate) fn delete_node_comment(
+    doc: &mut KdlDocument,
+    path: &[Step],
+    kind: CommentKind,
+) -> Result<(), EditError> {
+    if matches!(kind, CommentKind::Foot) {
+        return Err(EditError::new(
+            "deleting a foot comment isn't supported for KDL yet",
+        ));
+    }
+    let node = resolve_node(doc, path)?;
+    let indent = leading_indent(node);
+    match kind {
+        CommentKind::Head => {
+            let existing = node.format().map(|f| f.leading.clone()).unwrap_or_default();
+            let leading = rebuild_leading(&existing, &[], &indent);
+            ensure_format(node).leading = leading;
+        }
+        CommentKind::Inline => {
+            let ending = node
+                .format()
+                .map(|f| line_ending(&f.terminator))
+                .unwrap_or("\n")
+                .to_string();
+            ensure_format(node).terminator = ending;
+        }
+        CommentKind::Foot => unreachable!(),
+    }
+    Ok(())
+}
+
+/// Resolve a value path to the `&mut KdlNode` it names (`.foo`, `.foo.child`,
+/// `.name[i]`, `.name[i].child`). Errors if the path lands on a property/arg
+/// (comments attach to nodes) or an ambiguous repeated node.
+fn resolve_node<'a>(doc: &'a mut KdlDocument, path: &[Step]) -> Result<&'a mut KdlNode, EditError> {
+    let Some((Step::Field(name), rest)) = path.split_first() else {
+        return Err(EditError::new(
+            "document-level (`.#`) comment editing for KDL is a follow-up",
+        ));
+    };
+    let occ: Vec<usize> = (0..doc.nodes().len())
+        .filter(|&i| doc.nodes()[i].name().value() == name)
+        .collect();
+    if occ.is_empty() {
+        return Err(EditError::new(format!("no node `{name}`")));
+    }
+    let (idx, rest) = match rest.split_first() {
+        Some((Step::Index(i), r)) => {
+            let n = occ.len() as i64;
+            let resolved = if *i < 0 { n + i } else { *i };
+            if resolved < 0 || resolved >= n {
+                return Err(EditError::new(format!("`{name}` index out of range")));
+            }
+            (occ[resolved as usize], r)
+        }
+        _ => {
+            if occ.len() != 1 {
+                return Err(EditError::new(format!(
+                    "`{name}` is repeated: address one occurrence (.{name}[i])"
+                )));
+            }
+            (occ[0], rest)
+        }
+    };
+    if rest.is_empty() {
+        return Ok(&mut doc.nodes_mut()[idx]);
+    }
+    let children = doc.nodes_mut()[idx]
+        .children_mut()
+        .as_mut()
+        .ok_or_else(|| {
+            EditError::new(format!(
+                "`{name}` has no child nodes (comments attach to nodes)"
+            ))
+        })?;
+    resolve_node(children, rest)
+}
+
+fn ensure_format(node: &mut KdlNode) -> &mut kdl::KdlNodeFormat {
+    if node.format().is_none() {
+        node.set_format(kdl::KdlNodeFormat::default());
+    }
+    node.format_mut().unwrap()
+}
+
+/// Rebuild a `leading` decor with `wrapped` as its comment block: keep leading
+/// blank lines and the trailing indent, drop old comments. Empty `wrapped`
+/// clears the comment while preserving spacing and indent.
+fn rebuild_leading(existing: &str, wrapped: &[String], indent: &str) -> String {
+    let mut out = String::new();
+    for line in existing.split_inclusive('\n') {
+        if line.ends_with('\n') && line.trim().is_empty() {
+            out.push_str(line);
+        } else {
+            break;
+        }
+    }
+    for w in wrapped {
+        out.push_str(&format!("{indent}// {w}\n"));
+    }
+    out.push_str(indent);
+    out
+}
+
+/// The line ending of a node terminator (`\r\n`, else `\n`).
+fn line_ending(terminator: &str) -> &'static str {
+    if terminator.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
 
 // --- extraction ------------------------------------------------------------
 

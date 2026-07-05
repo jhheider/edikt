@@ -557,11 +557,33 @@ fn comment_query_reads_by_kind() {
 }
 
 #[test]
-fn comment_mutation_is_guarded_until_phase_2() {
-    let (_o, err, code) = run(&["-t", "jsonc", r#".a.# = "x""#], "{ \"a\": 1 }");
-    assert_eq!(code, 2);
-    assert!(err.contains("not supported yet"), "got: {err}");
-    assert!(err.contains("v0.2"), "got: {err}");
+fn comment_mutation_on_decor_formats() {
+    // TOML: set a head comment in place, everything else byte-identical.
+    let (out, _e, code) = run(
+        &["-t", "toml", r#".b.z.# = "annotated""#],
+        "# banner\n[a]\nx = 1  # inline x\n[b]\nz = 3\n",
+    );
+    assert_eq!(
+        out,
+        "# banner\n[a]\nx = 1  # inline x\n[b]\n# annotated\nz = 3\n"
+    );
+    assert_eq!(code, 0);
+
+    // KDL: inline comment, then read it back through a pipe.
+    let (out2, _e, c2) = run(
+        &["-t", "kdl", r#".server.port.#.inline = "listen""#],
+        "server {\n    port 8080\n}\n",
+    );
+    assert_eq!(out2, "server {\n    port 8080 // listen\n}\n");
+    assert_eq!(c2, 0);
+
+    // A format without a comment write path yet errors clearly (not a panic).
+    let (_o, err, c3) = run(&["-t", "jsonc", r#".a.# = "x""#], "{ \"a\": 1 }");
+    assert_eq!(c3, 2);
+    assert!(
+        err.contains("isn't supported for this format yet"),
+        "got: {err}"
+    );
 }
 
 #[test]
