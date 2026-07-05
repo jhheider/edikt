@@ -13,12 +13,13 @@ fn run(args: &[&str], stdin: &str) -> (String, String, i32) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn edikt");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    {
+        // The child may exit before reading stdin (e.g. a bad expression or -i
+        // error, which are detected first). A broken pipe on the write is then
+        // expected — ignore it. Dropping the handle closes stdin (EOF).
+        let mut sin = child.stdin.take().unwrap();
+        let _ = sin.write_all(stdin.as_bytes());
+    }
     let out = child.wait_with_output().unwrap();
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
