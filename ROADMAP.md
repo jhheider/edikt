@@ -63,7 +63,8 @@ Release infra is intentionally **last** — build the capability, then ship it.
   clean exit-2 error; a no-match `match`/`capture` is an empty stream (a miss).
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
-- ⬜ **v0.2.0 — comments as first-class content** (design accepted — see
+- 🚧 **v0.2.0 — comments as first-class content** (query + edit **done**; the
+  bulk `comments` stream remains — see
   [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
   Make comments **addressable and editable**, not just preserved/carried:
   query them (`.foo.#` → head comment, `.foo.#.inline`, a document-wide
@@ -81,10 +82,12 @@ Release infra is intentionally **last** — build the capability, then ship it.
   derived check conversion already uses. Multi-line comments are **wrapped
   strings** (not line arrays), wrapped to the file's own envelope —
   `clamp(longest source line, 80, 100)` — so a comment tracks the document's
-  width without going tiny on a flat `.env` or huge on a wide file; a comment
-  that a compact JSON object or a YAML flow list can't hold forces structural
-  expansion, which **warns**. Sequenced query → mutate → bulk. An identity shift:
-  "edit values, preserve comments" → "edit the document, comments included."
+  width without going tiny on a flat `.env` or huge on a wide file. A comment
+  that a compact JSON object or a YAML flow list can't hold **errors cleanly**
+  ("needs layout expansion") rather than reflowing untouched bytes — the
+  auto-expand path was reconsidered and deferred. Sequenced query → mutate →
+  bulk. An identity shift: "edit values, preserve comments" → "edit the
+  document, comments included."
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
   stripped for all seven formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`

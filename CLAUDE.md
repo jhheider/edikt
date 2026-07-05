@@ -82,13 +82,14 @@ an *edit* language, not a general-purpose one.
 - comment `.foo.#` — the head comment of a node as a string; `.foo.#.head`
   / `.foo.#.inline` / `.foo.#.foot` pick a kind, `.#` is the document banner,
   `.items[].#` reads each element's. Terminal (nothing navigates past it); a
-  missing comment is a miss. **Read** everywhere; **edit** (`.foo.# = "TODO"`,
-  `.foo.# |= gsub(…)`, `del(.foo.#)`) on TOML, KDL, JSONC, INI, and `.env` —
-  head/foot wrap to the file's width envelope, inline never wraps. Only YAML's
-  write path and the compact-JSON / YAML-flow layout-reflow warnings remain (see
-  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md));
-  a compact JSONC target errors "needs layout expansion" until then, and a
-  format without a write path yet errors cleanly.
+  missing comment is a miss. **Read and edit everywhere** (`.foo.# = "TODO"`,
+  `.foo.# |= gsub(…)`, `del(.foo.#)`), across all seven formats — head/foot wrap
+  to the file's width envelope, inline never wraps, and only the targeted
+  comment's bytes change. The one boundary: a **compact/single-line** target
+  (minified JSON, a YAML flow `[…]`) has no own line to hang an own-line comment,
+  so it **errors cleanly** ("needs layout expansion") rather than reflowing bytes
+  the user didn't touch — auto-expansion is deferred, revisit-reactively (see
+  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
 - filter `.items[] | select(.enabled == true)`
 
 **Mutation**

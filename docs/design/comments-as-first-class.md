@@ -294,9 +294,21 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
     array elements. A **compact / single-line JSONC** target (no line to hang an
     own-line comment, or a container-close that an inline would swallow) errors
     with a clear "needs layout expansion" — that reflow is 2c.
-  - ⬜ **2c — YAML** (span-tree byte-splice) + the layout-reflow warnings
-    (compact JSON → pretty, YAML flow → block) that turn 2b's clean errors into
-    warn-and-expand.
+  - ✅ **2c — YAML** (span-tree byte-splice). **Shipped.** Head/foot/inline on
+    block mappings and sequences (dashes handled: a sequence item's head sits at
+    the dash's indent); re-parses to a fresh span tree. Flow collections
+    (`[…]`/`{…}`) get the same clean "needs block-style expansion" error as
+    compact JSONC.
+
+  **Layout reflow — reconsidered.** The original design said a compact-JSON /
+  YAML-flow target should **warn and auto-expand** (`--strict` promotes). Having
+  built it, that call is **reversed**: edikt now **errors cleanly** instead.
+  Auto-reflowing a user's compact/minified structure to insert one comment
+  rewrites many bytes they never targeted — a *larger* moat violation than
+  refusing — and the demand (comment a minified file, expecting prettification)
+  is near-zero. So the reflow-and-expand path is **deferred, revisit-reactively**
+  (like per-format feature flags): the error names the situation, and a user who
+  wants it can prettify first. Reopen if a real consumer asks.
 - **Phase 3 — document-wide `comments` + bulk edit + comment→key.** Requires the
   key-carrying-iteration primitive; the largest and least-certain piece, so it
   goes last and its shape is confirmed by what Phase 1/2 usage actually demands.
