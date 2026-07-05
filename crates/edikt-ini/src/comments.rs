@@ -223,7 +223,7 @@ fn node_inline(node: &SyntaxNode) -> Option<String> {
         .map(|t| strip_marker(t.text()))
 }
 
-/// `; text` / `# text` → `text`.
+/// `; text` / `# text` -> `text`.
 fn strip_marker(text: &str) -> String {
     text.trim_start_matches([';', '#']).trim().to_string()
 }
@@ -232,8 +232,8 @@ fn strip_marker(text: &str) -> String {
 
 /// Emit a commented value as INI: top-level scalars become preamble entries,
 /// top-level objects become `[section]`s (deeper nesting flattened to dotted
-/// keys), arrays flatten to indexed dotted keys. Comments place natively —
-/// head/foot as `; ` lines, inline after the value — so nothing warns beyond
+/// keys), arrays flatten to indexed dotted keys. Comments place natively -
+/// head/foot as `; ` lines, inline after the value - so nothing warns beyond
 /// the flatten warning.
 pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError> {
     let CommentedNode::Object(entries) = &c.node else {

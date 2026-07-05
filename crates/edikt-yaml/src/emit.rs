@@ -1,8 +1,8 @@
 //! Emit a [`Value`] as a fresh YAML document, for conversion targets (`-T yaml`).
 //!
-//! This is the *data-model* path — trivia is already gone by the time we get a
+//! This is the *data-model* path - trivia is already gone by the time we get a
 //! `Value`, so there is nothing to preserve. We drive libyaml-safer's emitter
-//! (block style), which gets scalar quoting right for free — the reason we lean
+//! (block style), which gets scalar quoting right for free - the reason we lean
 //! on its emitter here rather than hand-roll one.
 
 use edikt_core::{EditError, Value};
@@ -10,7 +10,7 @@ use libyaml_safer::{Emitter, Encoding, Event, MappingStyle, ScalarStyle, Sequenc
 
 use crate::scalar::{format_float, needs_quoting};
 
-/// Emit `value` as YAML. Returns the text and (always empty — YAML holds every
+/// Emit `value` as YAML. Returns the text and (always empty - YAML holds every
 /// feature) the lossy-conversion warnings, matching the other emitters' shape.
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
     let mut out: Vec<u8> = Vec::new();

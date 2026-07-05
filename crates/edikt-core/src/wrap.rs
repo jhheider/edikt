@@ -1,9 +1,9 @@
-//! Comment wrapping — the shared "use the space as it exists" rule.
+//! Comment wrapping - the shared "use the space as it exists" rule.
 //!
 //! Head/foot comment text wraps to the document's own width envelope so a
 //! comment never makes the file wider than it already is; the caller supplies
 //! the node's indent and the delimiter width (`"# "` = 2, `"// "` = 3). Inline
-//! comments never wrap — the caller skips this. See the wrapping section of
+//! comments never wrap - the caller skips this. See the wrapping section of
 //! `docs/design/comments-as-first-class.md`.
 
 /// The absolute wrap column for `source`: `clamp(longest line, 80, 100)`. The
@@ -48,15 +48,15 @@ mod tests {
 
     #[test]
     fn width_clamps_to_the_band() {
-        assert_eq!(wrap_width("PORT=8080\n"), 80); // narrow → floor
+        assert_eq!(wrap_width("PORT=8080\n"), 80); // narrow -> floor
         assert_eq!(wrap_width(&format!("{}\n", "x".repeat(90))), 90); // tracks
         assert_eq!(wrap_width(&format!("{}\n", "x".repeat(200))), 100); // ceiling
-        assert_eq!(wrap_width(""), 80); // empty → floor
+        assert_eq!(wrap_width(""), 80); // empty -> floor
     }
 
     #[test]
     fn wraps_greedily_to_the_budget() {
-        // width 20, indent 0, delim "# " (2) → budget 18.
+        // width 20, indent 0, delim "# " (2) -> budget 18.
         let out = wrap_comment("the quick brown fox jumps", 20, 0, 2);
         assert_eq!(out, vec!["the quick brown", "fox jumps"]);
     }

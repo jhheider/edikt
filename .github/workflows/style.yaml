@@ -1,0 +1,48 @@
+name: Style
+
+# Runs on every change (no paths-ignore) so docs are gated too. Keeps the
+# repo's prose in plain ASCII: no em-dashes or en-dashes, which read as an
+# authoring "tell" and complicate diffs/greps. Use `-` (or `--`) instead.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-em-dash:
+    name: no em-dashes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reject em-dashes and en-dashes
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+          # Reference the chars by codepoint so this workflow stays ASCII-clean
+          # and does not trip its own gate. U+2014 em-dash, U+2013 en-dash.
+          em, en = chr(0x2014), chr(0x2013)
+          files = subprocess.check_output(["git", "ls-files"]).decode().splitlines()
+          bad = []
+          for f in files:
+              # Canonical license text is verbatim; test fixtures are authentic
+              # sample data (and edikt must preserve whatever bytes they hold).
+              if f.startswith("LICENSE") or f.startswith("fixtures/"):
+                  continue
+              try:
+                  text = open(f, encoding="utf-8").read()
+              except (UnicodeDecodeError, IsADirectoryError):
+                  continue
+              for n, line in enumerate(text.splitlines(), 1):
+                  if em in line or en in line:
+                      bad.append(f"{f}:{n}: {line.strip()[:100]}")
+          if bad:
+              print("Em-dash or en-dash found; use ASCII '-' instead:\n")
+              print("\n".join(bad))
+              sys.exit(1)
+          print("clean: no em-dashes or en-dashes")
+          PY

@@ -1,7 +1,7 @@
 //! Recursive-descent parser building a lossless rowan green tree.
 //!
 //! Every token (including trivia) is added to the tree in lexical order, so the
-//! green tree round-trips byte-for-byte. The grammar is deliberately lenient —
+//! green tree round-trips byte-for-byte. The grammar is deliberately lenient -
 //! trailing commas are accepted, and the tree is always well-formed enough to
 //! serialize; structural validity is checked separately in `lib::parse`.
 
@@ -121,7 +121,7 @@ impl Parser<'_> {
                         self.bump();
                     }
                     self.value();
-                    // Absorb the trailing comma into the member — but only if one
+                    // Absorb the trailing comma into the member - but only if one
                     // actually follows, so a last member does not swallow the
                     // whitespace before `}` (which would break clean deletion).
                     if self.next_significant() == Some(Sk::Comma) {

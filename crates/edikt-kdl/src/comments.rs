@@ -1,8 +1,8 @@
 //! KDL ↔ the uniform comment model, over `kdl-rs`'s per-node decor.
 //!
 //! A node's `leading` decor holds the whitespace and `//`/`/* */` comments
-//! before it — its head; the segment of `before_terminator` after the node's
-//! content holds a trailing `//` comment — its inline. The document's
+//! before it - its head; the segment of `before_terminator` after the node's
+//! content holds a trailing `//` comment - its inline. The document's
 //! `trailing` decor is the foot. Extraction and emission share the projection
 //! convention (grouping, the `"-"` args key) with [`crate::project`].
 
@@ -183,7 +183,7 @@ fn doc_commented(doc: &KdlDocument) -> Commented {
             let v = if nodes.len() == 1 {
                 node_commented(nodes[0])
             } else {
-                // A repeated node → array; each occurrence carries its own decor.
+                // A repeated node -> array; each occurrence carries its own decor.
                 Commented {
                     comments: Comments::default(),
                     node: CommentedNode::Array(nodes.iter().map(|n| node_commented(n)).collect()),
@@ -202,7 +202,7 @@ fn node_commented(node: &KdlNode) -> Commented {
     let mut c = Commented::from_value(&project::node_to_value(node));
     if let Some(fmt) = node.format() {
         c.comments.head = own_line_comments(&fmt.leading);
-        // A trailing `// …` on the node's line rides in the terminator decor
+        // A trailing `// ...` on the node's line rides in the terminator decor
         // (`"// pinned\n"`), before the newline.
         c.comments.inline = trailing_comment(&fmt.terminator);
     }
@@ -224,7 +224,7 @@ fn own_line_comments(decor: &str) -> Vec<String> {
     out
 }
 
-/// A trailing `// …` comment on the node's own line (before its terminator).
+/// A trailing `// ...` comment on the node's own line (before its terminator).
 fn trailing_comment(decor: &str) -> Option<String> {
     let seg = decor.split('\n').next().unwrap_or("");
     seg.find("//").map(|i| seg[i + 2..].trim().to_string())

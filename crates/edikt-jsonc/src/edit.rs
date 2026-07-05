@@ -3,7 +3,7 @@
 //! An edit resolves the target *value node* in the CST and swaps it for a fresh
 //! subtree; rowan shares every untouched green node, so serialization stays
 //! byte-identical everywhere except the value we replaced. The replacement's own
-//! bytes are compact JSON — we format what we insert, never what we didn't touch.
+//! bytes are compact JSON - we format what we insert, never what we didn't touch.
 //!
 //! Supports `set` (`=`, `|=`), `+=`/append, `del`, and new-key creation
 //! (inserting a member into the deepest existing object, matching its style).
@@ -42,9 +42,9 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
             let whole = doc.to_value();
             let addend = eval_one(rhs, &whole)?;
             match (&current, &addend) {
-                // Array + array → format-preserving element insert.
+                // Array + array -> format-preserving element insert.
                 (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
-                // Everything else (number, string) → compute and replace the node.
+                // Everything else (number, string) -> compute and replace the node.
                 _ => doc.set(steps, &add_values(&current, &addend)?),
             }
         }
@@ -92,7 +92,7 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
 
 /// The original source text of each value node selected by `path`, in document
 /// order (aligned with the evaluator). A structural result is returned as its
-/// exact bytes — comments, layout, trailing commas — not a re-serialization.
+/// exact bytes - comments, layout, trailing commas - not a re-serialization.
 pub fn source_slice(root: &SyntaxNode, path: &[Step]) -> Vec<String> {
     let Some(top) = root.children().find(|n| n.kind() == Sk::Value) else {
         return Vec::new();
@@ -240,7 +240,7 @@ fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
 
 /// Insert `items` at the end of an array's source text, matching its existing
 /// style (single-line `, x`; multi-line newline + indent + trailing comma). All
-/// original bytes are preserved — only the new elements are added.
+/// original bytes are preserved - only the new elements are added.
 pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
     let elems: Vec<String> = items.iter().map(|v| v.to_json()).collect();
     insert_elements(orig, &elems)
@@ -363,7 +363,7 @@ pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditErr
 }
 
 /// Build a `Value`-node green subtree by rendering `value` as compact JSON and
-/// reparsing it — the inserted bytes are formatted; surrounding layout is not.
+/// reparsing it - the inserted bytes are formatted; surrounding layout is not.
 pub(crate) fn value_green(value: &Value) -> GreenNode {
     let json = value.to_json();
     let root = SyntaxNode::new_root(parser::build(&json));

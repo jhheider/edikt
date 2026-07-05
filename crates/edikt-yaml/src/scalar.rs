@@ -5,7 +5,7 @@
 //! (quoted scalars are always strings). serde_yaml used to do this for us; doing
 //! it ourselves is ~a screenful and strictly more controllable.
 //!
-//! The inverse — turning a `Value` back into scalar bytes for an edit — must
+//! The inverse - turning a `Value` back into scalar bytes for an edit - must
 //! round-trip the *type*: a string that looks like a number (`"3"`) is quoted so
 //! it re-reads as a string, a `Float(1.0)` keeps its `.0`, etc.
 
@@ -43,7 +43,7 @@ fn resolve_plain(s: &str) -> Value {
     }
 }
 
-/// Core-schema integer: decimal (`[-+]?[0-9]+`), `0x…` hex, `0o…` octal.
+/// Core-schema integer: decimal (`[-+]?[0-9]+`), `0x...` hex, `0o...` octal.
 fn parse_int(s: &str) -> Option<i64> {
     if let Some(hex) = s.strip_prefix("0x") {
         return i64::from_str_radix(hex, 16).ok();
@@ -62,7 +62,7 @@ fn parse_int(s: &str) -> Option<i64> {
 
 /// Core-schema float: `.inf`/`.nan` variants, or a decimal with a `.` or exponent.
 /// Deliberately does *not* accept bare `inf`/`nan`/`infinity` (those are strings
-/// in YAML — only the `.`-prefixed forms are floats).
+/// in YAML - only the `.`-prefixed forms are floats).
 fn parse_float(s: &str) -> Option<f64> {
     match s {
         ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => return Some(f64::INFINITY),
@@ -85,7 +85,7 @@ fn parse_float(s: &str) -> Option<f64> {
 }
 
 /// Render a scalar [`Value`] to inline YAML bytes suitable for splicing in place
-/// of an existing scalar. Collections error — restructuring a block in place
+/// of an existing scalar. Collections error - restructuring a block in place
 /// isn't lossless, so edikt refuses rather than reflow.
 pub(crate) fn emit_scalar_inline(value: &Value) -> Result<String, EditError> {
     match value {

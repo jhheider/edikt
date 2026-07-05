@@ -58,7 +58,7 @@ jobs:
           mkdir -p coverage
           cargo llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info
       # The upload is advisory: the repo not yet being enrolled on
-      # coveralls.io (or an outage there) must not redden CI — the lcov
+      # coveralls.io (or an outage there) must not redden CI - the lcov
       # generation above already gates real failures.
       - uses: coverallsapp/github-action@v2
         with:

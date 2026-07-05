@@ -58,8 +58,8 @@ fn indent_by(level: usize, out: &mut String) {
     }
 }
 
-/// Flatten a value to `(dotted.key, string)` pairs (`{a:{b:1}}` → `a.b = "1"`;
-/// arrays index: `{a:[1,2]}` → `a.0`, `a.1`). Used by the flat emitters.
+/// Flatten a value to `(dotted.key, string)` pairs (`{a:{b:1}}` -> `a.b = "1"`;
+/// arrays index: `{a:[1,2]}` -> `a.0`, `a.1`). Used by the flat emitters.
 pub fn flatten(value: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     walk("", value, &mut out);

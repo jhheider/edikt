@@ -4,7 +4,7 @@
 //! its head lines, a value's (or table header's) suffix holds its inline
 //! comment, and the document trailing holds the foot. Inside arrays,
 //! `toml_edit` stores a comment written after `elem,` in the *next* element's
-//! prefix — the segment before that prefix's first newline is really the
+//! prefix - the segment before that prefix's first newline is really the
 //! previous element's inline comment, and extraction reassigns it.
 //!
 //! Emission builds the same `DocumentMut` the plain emitter would (identical
@@ -269,7 +269,7 @@ fn raw(s: Option<&str>) -> &str {
     s.unwrap_or("")
 }
 
-/// Every `# …` line in a decor string, delimiter-stripped and trimmed.
+/// Every `# ...` line in a decor string, delimiter-stripped and trimmed.
 fn own_line_comments(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|l| {
@@ -280,7 +280,7 @@ fn own_line_comments(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// A `# …` comment with no newline before it (i.e. trailing on the same line).
+/// A `# ...` comment with no newline before it (i.e. trailing on the same line).
 fn same_line_comment(text: &str) -> Option<String> {
     let first = text.split('\n').next().unwrap_or("");
     let t = first.trim();
@@ -478,7 +478,7 @@ fn collect_comments(c: &Commented, out: &mut Vec<String>) {
     out.extend(c.comments.foot.iter().cloned());
 }
 
-/// Render comment lines as a `# …\n` block, each line prefixed by `indent`.
+/// Render comment lines as a `# ...\n` block, each line prefixed by `indent`.
 fn comment_block(lines: &[String], indent: &str) -> String {
     let mut out = String::new();
     for l in lines {

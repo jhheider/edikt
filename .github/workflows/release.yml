@@ -2,7 +2,7 @@ name: Release
 
 # Fires when a GitHub Release is published. The full release ceremony:
 #   gh release create vX.Y.Z --generate-notes
-# (version must already be committed in the Cargo.tomls) — this builds the
+# (version must already be committed in the Cargo.tomls) - this builds the
 # platform binaries, attaches them, and publishes the workspace crates.
 on:
   release:
@@ -94,8 +94,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Publishes workspace crates in dependency order (core/syntax → the
-      # format crates → the edikt bin), waiting for the index between steps.
+      # Publishes workspace crates in dependency order (core/syntax -> the
+      # format crates -> the edikt bin), waiting for the index between steps.
       - uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

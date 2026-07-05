@@ -147,7 +147,7 @@ impl Parser {
         }
     }
 
-    /// `a // b` — right-associative, binding tighter than `=` (so
+    /// `a // b` - right-associative, binding tighter than `=` (so
     /// `.k = .a // "d"` defaults the RHS) and looser than comparison.
     fn parse_alt(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_cmp()?;
@@ -298,7 +298,7 @@ impl Parser {
                         self.pos += 1;
                         steps.push(Step::Iterate);
                     } else if self.peek() == Some(Lx::Str) {
-                        // `.["key"]` — a field by name (dotted/special keys).
+                        // `.["key"]` - a field by name (dotted/special keys).
                         let key = unescape(self.text());
                         self.pos += 1;
                         self.expect(Lx::RBrack, "`]`")?;
@@ -321,7 +321,7 @@ impl Parser {
                 Some(Lx::Hash) => {
                     // `#` addresses the current node's comment. `#` alone is the
                     // head comment; `#.head`/`#.inline`/`#.foot` pick a kind.
-                    // Terminal — no navigation follows a comment.
+                    // Terminal - no navigation follows a comment.
                     self.pos += 1;
                     let mut kind = CommentKind::Head;
                     if self.peek() == Some(Lx::Dot)
@@ -573,7 +573,7 @@ mod tests {
                 Step::Comment(CommentKind::Head)
             ])
         );
-        // Comment is terminal — nothing may navigate past it.
+        // Comment is terminal - nothing may navigate past it.
         assert!(parse(".foo.#.bar").is_err());
     }
 }

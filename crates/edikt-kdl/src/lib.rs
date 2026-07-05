@@ -1,13 +1,13 @@
 //! edikt KDL format module.
 //!
 //! Backed by [`kdl`](https://crates.io/crates/kdl) (kdl-rs), whose document is
-//! format-preserving by construction — the `toml_edit` of KDL — so edikt gets
+//! format-preserving by construction - the `toml_edit` of KDL - so edikt gets
 //! lossless KDL (comments, spacing, node layout) without a hand-rolled CST.
 //!
 //! KDL nodes carry positional **arguments**, `key=value` **properties**, and a
 //! **children** block, none of which the flat `Value` model has a slot for
 //! directly. The projection convention (documented in CLAUDE.md and
-//! implemented in [`project`]) maps them: nodes group by name (repeats →
+//! implemented in [`project`]) maps them: nodes group by name (repeats ->
 //! arrays), a node is its children object / lone scalar / argument array, and a
 //! node mixing arguments with props/children puts the arguments under the
 //! reserved key `"-"`.
@@ -23,7 +23,7 @@ pub use edit::{apply, emit};
 use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value};
 use kdl::KdlDocument;
 
-/// Comment kinds this format supports (empty ⇒ none); the comment
+/// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
 pub const COMMENT_KINDS: &[CommentKind] =
     &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
@@ -208,14 +208,14 @@ mod tests {
 
     #[test]
     fn projects_args_props_children() {
-        // `layout` mixes an argument with a property + children → object, with
+        // `layout` mixes an argument with a property + children -> object, with
         // the argument under the reserved "-" key.
         assert_eq!(
             q(SAMPLE, ".layout.[\"-\"]"),
             vec![Value::Str("tall".into())]
         );
         assert_eq!(q(SAMPLE, ".layout.gaps"), vec![Value::Int(8)]);
-        // Nested child node → nested object.
+        // Nested child node -> nested object.
         assert_eq!(q(SAMPLE, ".layout.border.width"), vec![Value::Int(2)]);
         // `bind` is arguments-only, so each occurrence is a plain array; the
         // repeated name makes `.bind` an array of those arrays.
@@ -279,11 +279,11 @@ mod tests {
     #[test]
     fn append_repeated_node() {
         // `.bind` is a two-element array of arrays; appending a third arg-list
-        // adds a node. The new bind re-reads with the right args…
+        // adds a node. The new bind re-reads with the right args...
         let out = edit_src(SAMPLE, ".bind += [[\"Mod+j\", \"focus-down\"]]");
         assert_eq!(q(&out, ".bind | length"), vec![Value::Int(3)]);
         assert_eq!(q(&out, ".bind[2][0]"), vec![Value::Str("Mod+j".into())]);
-        // …and the existing binds are untouched byte-for-byte.
+        // ...and the existing binds are untouched byte-for-byte.
         assert!(out.contains("bind \"Mod+h\" \"focus-left\""));
         assert!(out.contains("bind \"Mod+l\" \"focus-right\""));
     }
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn rejects_unrepresentable_and_missing() {
-        // A null value → a bare node; a scalar arg that's a container errors.
+        // A null value -> a bare node; a scalar arg that's a container errors.
         assert!(edit_src("a 1\n", ".b = null").contains("b"));
         let mut doc = parse("a 1\n").unwrap();
         // Setting an argument index to a container is refused.

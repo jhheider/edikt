@@ -4,7 +4,7 @@
 //! jq-named and jq-shaped: `match` yields jq's match objects (`offset` /
 //! `length` / `string` / `captures`, with codepoint offsets), flags are jq's
 //! (`i`, `x`, plus `s`/`m`, and `g` for global), and no match means an empty
-//! stream — a silent miss at the CLI (or exit 1 under `--exit-status`). The one
+//! stream - a silent miss at the CLI (or exit 1 under `--exit-status`). The one
 //! deliberate divergence: jq splices captures into replacements with string
 //! interpolation, which edikt's expression language doesn't have; `sub`/`gsub`
 //! use `$1` / `$name` references instead (sed-flavored, like the rest of the
@@ -47,13 +47,13 @@ pub(crate) fn build(re: &str, flags: &str) -> Result<(Regex, bool), EvalError> {
     Ok((re, global))
 }
 
-/// `test(re; flags)` — does the input match?
+/// `test(re; flags)` - does the input match?
 pub(crate) fn test(s: &str, re: &str, flags: &str) -> Result<Value, EvalError> {
     let (re, _) = build(re, flags)?;
     Ok(Value::Bool(re.is_match(s)))
 }
 
-/// `match(re; flags)` — jq match objects, one per match (all of them under
+/// `match(re; flags)` - jq match objects, one per match (all of them under
 /// `g`, else just the first); no match is an empty stream.
 pub(crate) fn find(s: &str, re: &str, flags: &str) -> Result<Vec<Value>, EvalError> {
     let (re, global) = build(re, flags)?;
@@ -67,7 +67,7 @@ pub(crate) fn find(s: &str, re: &str, flags: &str) -> Result<Vec<Value>, EvalErr
     Ok(out)
 }
 
-/// `capture(re; flags)` — an object of the named captures, one per match
+/// `capture(re; flags)` - an object of the named captures, one per match
 /// (stream under `g`); unmatched named groups are null.
 pub(crate) fn capture(s: &str, re: &str, flags: &str) -> Result<Vec<Value>, EvalError> {
     let (re, global) = build(re, flags)?;
@@ -92,7 +92,7 @@ pub(crate) fn capture(s: &str, re: &str, flags: &str) -> Result<Vec<Value>, Eval
     Ok(out)
 }
 
-/// `sub(re; repl; flags)` / `gsub(re; repl)` — replace the first match (or
+/// `sub(re; repl; flags)` / `gsub(re; repl)` - replace the first match (or
 /// every match under `g`). `repl` may reference captures as `$1` / `$name`.
 pub(crate) fn sub(s: &str, re: &str, repl: &str, flags: &str) -> Result<Value, EvalError> {
     let (re, global) = build(re, flags)?;
@@ -105,7 +105,7 @@ pub(crate) fn sub(s: &str, re: &str, repl: &str, flags: &str) -> Result<Value, E
 }
 
 /// One jq match object: codepoint offsets, the matched string, and every
-/// capture group (unmatched groups: offset -1, string null — jq's convention).
+/// capture group (unmatched groups: offset -1, string null - jq's convention).
 fn match_object(s: &str, re: &Regex, caps: &regex::Captures) -> Value {
     let whole = caps.get(0).expect("group 0 always participates");
     let names: Vec<Option<&str>> = re.capture_names().collect();
@@ -150,7 +150,7 @@ fn char_offset(s: &str, byte: usize) -> i64 {
     s[..byte].chars().count() as i64
 }
 
-/// `split(sep)` — literal separator (jq's 1-arg form); `split(re; flags)` —
+/// `split(sep)` - literal separator (jq's 1-arg form); `split(re; flags)` -
 /// regex separator (jq's 2-arg form).
 pub(crate) fn split(s: &str, sep: &str, regex_flags: Option<&str>) -> Result<Value, EvalError> {
     let parts: Vec<Value> = match regex_flags {
@@ -163,7 +163,7 @@ pub(crate) fn split(s: &str, sep: &str, regex_flags: Option<&str>) -> Result<Val
     Ok(Value::Array(parts))
 }
 
-/// `join(sep)` — stringify scalars, render null as empty, reject containers
+/// `join(sep)` - stringify scalars, render null as empty, reject containers
 /// (jq semantics).
 pub(crate) fn join(items: &[Value], sep: &str) -> Result<Value, EvalError> {
     let mut parts = Vec::with_capacity(items.len());

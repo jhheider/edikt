@@ -7,7 +7,7 @@
 /// A capability a config format may or may not support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
-    /// Comments / trivia the CST preserves (JSONC, INI, `.env` — not plain JSON).
+    /// Comments / trivia the CST preserves (JSONC, INI, `.env` - not plain JSON).
     Comments,
     /// Nested containers beyond a single level (JSON objects/arrays).
     Nesting,

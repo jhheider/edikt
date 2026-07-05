@@ -16,7 +16,7 @@ fn run(args: &[&str], stdin: &str) -> (String, String, i32) {
     {
         // The child may exit before reading stdin (e.g. a bad expression or -i
         // error, which are detected first). A broken pipe on the write is then
-        // expected — ignore it. Dropping the handle closes stdin (EOF).
+        // expected - ignore it. Dropping the handle closes stdin (EOF).
         let mut sin = child.stdin.take().unwrap();
         let _ = sin.write_all(stdin.as_bytes());
     }
@@ -79,7 +79,7 @@ fn computed_value() {
 
 #[test]
 fn miss_is_a_silent_noop() {
-    // sed-shaped: no match, no output, no error — exit 0.
+    // sed-shaped: no match, no output, no error - exit 0.
     let (out, err, code) = run(&["-t", "jsonc", ".nope"], TSCONFIG);
     assert_eq!(out, "");
     assert_eq!(err, "");
@@ -296,7 +296,7 @@ fn creates_new_key_jsonc() {
 
 #[test]
 fn creates_new_key_env() {
-    // The exact case the demo hit — now works.
+    // The exact case the demo hit - now works.
     let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");
     assert_eq!(out, "K=v\nK2=x\n");
     assert_eq!(code, 0);
@@ -370,7 +370,7 @@ fn regex_builtins_via_cli() {
 
 #[test]
 fn convert_carries_comments_across_formats() {
-    // JSONC → YAML: head and inline comments arrive in YAML syntax, silently
+    // JSONC -> YAML: head and inline comments arrive in YAML syntax, silently
     // (nothing was lost, so nothing warns).
     let src =
         "{\n  // compiler settings\n  \"opts\": { \"target\": \"ES2020\" /* language level */ }\n}";
@@ -382,7 +382,7 @@ fn convert_carries_comments_across_formats() {
     assert_eq!(err, "", "a fully-carried conversion must not warn");
     assert_eq!(code, 0);
 
-    // YAML → TOML and YAML → JSONC carry them too.
+    // YAML -> TOML and YAML -> JSONC carry them too.
     let y = "# stack\nweb:\n  image: nginx # pinned\n";
     let (toml, err2, c2) = run(&["-t", "yaml", "-T", "toml"], y);
     assert!(toml.contains("# stack\n[web]"), "got: {toml}");
@@ -523,7 +523,7 @@ fn yaml_edit_is_lossless() {
 
 #[test]
 fn comments_stream_query_and_bulk_edit() {
-    // comment → key: which keys carry a TODO?
+    // comment -> key: which keys carry a TODO?
     let y =
         "web:\n  image: nginx  # TODO pin\n  port: 80  # ok\ndb:\n  image: pg  # TODO upgrade\n";
     let (out, _e, code) = run(
@@ -537,7 +537,7 @@ fn comments_stream_query_and_bulk_edit() {
     assert_eq!(out, ".web.image\n.db.image\n");
     assert_eq!(code, 0);
 
-    // Bulk edit every comment's text (TODO → DONE), format-preserving.
+    // Bulk edit every comment's text (TODO -> DONE), format-preserving.
     let (edited, _e, c2) = run(
         &["-t", "yaml", r#"comments |= gsub("TODO"; "DONE")"#],
         "a: 1  # TODO a\nb: 2  # TODO b\n",
@@ -672,7 +672,7 @@ fn kdl_query_edit_and_convert() {
     assert_eq!(edited, "// prod\nserver {\n    port 9090 // listen\n}\n");
     assert_eq!(c2, 0);
 
-    // KDL → JSON and JSON → KDL.
+    // KDL -> JSON and JSON -> KDL.
     let (json, _e, c3) = run(&["-t", "kdl", "-T", "json"], src);
     assert_eq!(
         json,
@@ -688,7 +688,7 @@ fn kdl_query_edit_and_convert() {
     assert!(kdl.contains("name edikt"), "got: {kdl}");
     assert_eq!(c4, 0);
 
-    // Comment carries KDL → YAML (`//` becomes `#`).
+    // Comment carries KDL -> YAML (`//` becomes `#`).
     let (yaml, err, c5) = run(
         &["-t", "kdl", "-T", "yaml"],
         "// the server\nserver {\n    port 8080\n}\n",
@@ -737,7 +737,7 @@ fn unknown_extension_errors() {
 #[test]
 fn structural_query_returns_source_slice() {
     // A pure-path structural query stays in-format: exact source bytes,
-    // comments included — not re-serialized JSON.
+    // comments included - not re-serialized JSON.
     let src = "{\n  \"lib\": [\"ES2020\", \"DOM\"], // pinned\n  \"opts\": { \"strict\": true }\n}";
     let (out, _e, code) = run(&["-t", "jsonc", ".lib"], src);
     assert_eq!(out, "[\"ES2020\", \"DOM\"]\n");
@@ -753,7 +753,7 @@ fn structural_query_returns_source_slice() {
 #[test]
 fn synthesized_query_stays_in_format() {
     // A computed result has no source slice; it renders via the input format's
-    // emitter — YAML in, YAML out.
+    // emitter - YAML in, YAML out.
     let y = "web:\n  image: nginx\n  ports:\n    - 80\n";
     let (out, _e, code) = run(&["-t", "yaml", ".web | keys"], y);
     assert_eq!(out, "- image\n- ports\n");
@@ -810,7 +810,7 @@ fn to_with_expression_and_file() {
 fn output_file_infers_format_from_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let out = format!("{dir}/o1.json");
-    // YAML in, -o file.json → JSON written to the file, nothing on stdout.
+    // YAML in, -o file.json -> JSON written to the file, nothing on stdout.
     let (stdout, _e, code) = run(&["-t", "yaml", "-o", &out, ".a"], "a:\n  b: 1\n");
     assert_eq!(stdout, "");
     assert_eq!(code, 0);
@@ -844,14 +844,17 @@ fn output_file_untouched_on_miss() {
     let out = format!("{dir}/miss.json");
     let _ = std::fs::remove_file(&out);
     let (_s, _e, code) = run(&["-t", "yaml", "-o", &out, ".nope"], "a: 1\n");
-    assert_eq!(code, 0); // a miss is a silent no-op…
-    assert!(!std::path::Path::new(&out).exists(), "…and writes no file");
+    assert_eq!(code, 0); // a miss is a silent no-op...
+    assert!(
+        !std::path::Path::new(&out).exists(),
+        "...and writes no file"
+    );
 }
 
 #[test]
 fn identity_expression_is_never_a_directory() {
     // `.` names a directory that always exists, but as an operand it is the
-    // identity *expression* — with -T it must convert stdin, not try to read
+    // identity *expression* - with -T it must convert stdin, not try to read
     // the current directory.
     let (out, _e, code) = run(&["-t", "jsonc", "-T", "json", "."], "{ \"a\": 1 }");
     assert_eq!(out, "{\n  \"a\": 1\n}\n");
@@ -880,7 +883,7 @@ fn helpful_error_messages() {
     assert!(err.contains("jsonc") && err.contains("yaml"), "got: {err}");
 
     // A failed edit path is named in the error. (Deleting a *missing* key is a
-    // no-op, jq-style — so use a create-through-scalar, which genuinely fails.)
+    // no-op, jq-style - so use a create-through-scalar, which genuinely fails.)
     let (_o, err2, c2) = run(&["-t", "yaml", ".a.b = 1"], "a: 1\n");
     assert_eq!(c2, 2);
     assert!(err2.contains(".a.b"), "got: {err2}");

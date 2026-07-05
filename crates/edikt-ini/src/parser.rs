@@ -54,7 +54,7 @@ fn process_line(b: &mut GreenNodeBuilder<'static>, content: &str, term: &str) {
             b.token(sk(Sk::Comment), rest);
             emit_newline(b, term);
         }
-        // Section header — close the current section, open a new one.
+        // Section header - close the current section, open a new one.
         b'[' => {
             b.finish_node(); // close current Section
             b.start_node(sk(Sk::Section));
@@ -87,7 +87,7 @@ fn build_header(b: &mut GreenNodeBuilder<'static>, rest: &str) {
         b.token(sk(Sk::Close), "]");
         emit_trailing(b, &after[close + 1..]);
     } else {
-        // No closing bracket — keep the bytes so round-trip holds.
+        // No closing bracket - keep the bytes so round-trip holds.
         if !after.is_empty() {
             b.token(sk(Sk::Error), after);
         }
@@ -96,7 +96,7 @@ fn build_header(b: &mut GreenNodeBuilder<'static>, rest: &str) {
 
 fn build_entry(b: &mut GreenNodeBuilder<'static>, rest: &str) {
     let Some(sep_idx) = rest.find(['=', ':']) else {
-        // No separator — not a valid entry; keep the bytes losslessly.
+        // No separator - not a valid entry; keep the bytes losslessly.
         b.token(sk(Sk::Error), rest);
         return;
     };
