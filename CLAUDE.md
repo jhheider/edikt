@@ -314,8 +314,9 @@ Live status and the full backlog live in [`ROADMAP.md`](./ROADMAP.md). In brief:
   `libyaml-safer` span-tree splice) — edit + query + convert.
 - ✅ **Comment-preserving conversion** — the uniform head/inline/foot comment
   model, extracted and re-emitted by all six formats.
-- **M3** builtin/query polish and **M7** release infra remain (release infra is
-  intentionally last — see ROADMAP).
+- ✅ **M3** builtin/query polish (the regex family, `split`/`join`, affix
+  predicates) and ✅ **M7** release infra (coverage, release workflow,
+  packaging hooks — the release *ceremony* steps live in ROADMAP).
 
 Realistic effort with fuller language + both formats + conversion: **3–5 weeks
 part-time.** The language is the one thing that can balloon it — hold the v1

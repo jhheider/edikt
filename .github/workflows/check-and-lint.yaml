@@ -1,10 +1,10 @@
 on:
   pull_request:
-    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "LICENSE*", ".gitignore"]
   push:
     branches:
       - main
-    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "LICENSE*", ".gitignore"]
 
 # Cancel a superseded in-progress run when a new commit lands on the same ref
 concurrency:

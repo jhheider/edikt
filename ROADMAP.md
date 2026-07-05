@@ -67,9 +67,23 @@ Release infra is intentionally **last** — build the capability, then ship it.
   stripped for all six formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`
   build) if a concrete consumer needs a thinner binary.
-- ⬜ **Release infra — LAST.** Coverage (Coveralls), release workflow
-  (cross-platform binaries + `publish-crates`), Homebrew/pkgx, man page,
-  `--help` examples, shell completions.
+- ✅ **Release infra.** Coverage job (cargo-llvm-cov → Coveralls) on the test
+  workflow; `release.yml` on a published GitHub Release — five-target binary
+  matrix (linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64) with the
+  man page + bash/zsh/fish completions inside each unix archive, then
+  `katyo/publish-crates` in dependency order; `homebrew-bump.yml` PRs
+  jhheider/homebrew-tap. The binary is its own doc generator (hidden
+  `--manpage` / `--completions SHELL` flags, for packagers); `--help` closes
+  with examples. Crates are at 0.1.0, dual-licensed MIT OR Apache-2.0.
+
+  **Release ceremony** (the remaining manual steps, in order):
+  1. repo secrets: `CARGO_REGISTRY_TOKEN` (crates.io), `HOMEBREW_TAP_TOKEN`
+     (PAT, `public_repo`+`workflow`); enable the repo in Coveralls.
+  2. `gh release create v0.1.0 --generate-notes` — binaries, crates, and the
+     tap bump all flow from that one event.
+  3. after the release exists: seed the `edikt` formula in jhheider/homebrew-tap
+     (the bump action only updates an existing formula) and open the pkgx
+     pantry PR.
 
 ## Format coverage
 

@@ -1,9 +1,10 @@
 [package]
 name = "edikt-env"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "edikt .env/.properties format module: flat, line-level lossless CST implementing Document."
 
 [dependencies]

@@ -1,0 +1,29 @@
+name: Bump Homebrew formula
+
+on:
+  release:
+    types: [published]
+
+# The bump runs against jhheider/homebrew-tap using HOMEBREW_TAP_TOKEN
+# (a personal access token with `public_repo` + `workflow` scopes), not the
+# default GITHUB_TOKEN, which cannot push to another repository. Until the
+# formula exists in the tap, this job simply fails without blocking the
+# release assets or the crates.io publish.
+permissions:
+  contents: read
+
+jobs:
+  homebrew-bump:
+    name: Bump jhheider/homebrew-tap
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.release.prerelease }}
+    steps:
+      - name: Open bump PR on the tap
+        uses: dawidd6/action-homebrew-bump-formula@v8
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          tap: jhheider/homebrew-tap
+          formula: edikt
+          tag: ${{ github.event.release.tag_name }}
+          no_fork: true
+          force: false
