@@ -5,8 +5,10 @@
 //! byte-identical everywhere except the value we replaced. The replacement's own
 //! bytes are compact JSON — we format what we insert, never what we didn't touch.
 //!
-//! M2 scope: `set` (`=` / `|=`) on existing, concrete paths. `del`, append, and
-//! new-key creation arrive in later slices.
+//! Supports `set` (`=`, `|=`), `+=`/append, `del`, and new-key creation
+//! (inserting a member into the deepest existing object, matching its style).
+//! Not yet: creating through an array index, and iterate-in-assignment
+//! (`.a[] = x`).
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
@@ -202,17 +204,32 @@ fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
 /// style (single-line `, x`; multi-line newline + indent + trailing comma). All
 /// original bytes are preserved — only the new elements are added.
 pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
-    let new_elems: Vec<String> = items.iter().map(|v| v.to_json()).collect();
-    // `orig` is exactly an array node: starts with `[`, ends with `]` (both ASCII).
+    let elems: Vec<String> = items.iter().map(|v| v.to_json()).collect();
+    insert_elements(orig, &elems)
+}
+
+/// Insert `"key": value` as a new member of an object's source text.
+pub(crate) fn insert_into_object(orig: &str, key: &str, value: &Value) -> String {
+    let member = format!("{}: {}", json_string(key), value.to_json());
+    insert_elements(orig, &[member])
+}
+
+/// Insert `new_elems` before the closing bracket of a `[...]`/`{...}` text,
+/// matching its style (single-line `, x`; multi-line newline + indent + trailing
+/// comma). Every original byte is preserved.
+fn insert_elements(orig: &str, new_elems: &[String]) -> String {
+    // Brackets are single ASCII bytes at each end.
+    let open = &orig[..1];
+    let close = &orig[orig.len() - 1..];
     let inner = &orig[1..orig.len() - 1];
     let body = inner.trim_end();
     let close_ws = &inner[body.len()..];
 
     if body.is_empty() {
-        return format!("[{}]", new_elems.join(", "));
+        return format!("{open}{}{close}", new_elems.join(", "));
     }
 
-    let mut out = String::from("[");
+    let mut out = String::from(open);
     out.push_str(body);
     let has_trailing_comma = body.ends_with(',');
     if inner.contains('\n') {
@@ -220,30 +237,30 @@ pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
         if !has_trailing_comma {
             out.push(',');
         }
-        for elem in &new_elems {
+        for elem in new_elems {
             out.push('\n');
             out.push_str(&indent);
             out.push_str(elem);
             out.push(',');
         }
     } else if has_trailing_comma {
-        for elem in &new_elems {
+        for elem in new_elems {
             out.push(' ');
             out.push_str(elem);
             out.push(',');
         }
     } else {
-        for elem in &new_elems {
+        for elem in new_elems {
             out.push_str(", ");
             out.push_str(elem);
         }
     }
     out.push_str(close_ws);
-    out.push(']');
+    out.push_str(close);
     out
 }
 
-/// The indentation of the first non-blank line inside an array body.
+/// The indentation of the first non-blank line inside a container body.
 fn detect_indent(inner: &str) -> String {
     for line in inner.split('\n') {
         let trimmed = line.trim_start();
@@ -254,14 +271,54 @@ fn detect_indent(inner: &str) -> String {
     "  ".to_string()
 }
 
+/// A JSON-quoted, escaped object key.
+fn json_string(s: &str) -> String {
+    Value::Str(s.to_string()).to_json()
+}
+
 /// Parse array source text and return its `Array` node's green subtree.
 pub(crate) fn array_green_from_text(text: &str) -> GreenNode {
+    node_green_from_text(text, Sk::Array)
+}
+
+/// Parse object source text and return its `Object` node's green subtree.
+pub(crate) fn object_green_from_text(text: &str) -> GreenNode {
+    node_green_from_text(text, Sk::Object)
+}
+
+fn node_green_from_text(text: &str, kind: Sk) -> GreenNode {
     let root = SyntaxNode::new_root(parser::build(text));
     root.descendants()
-        .find(|n| n.kind() == Sk::Array)
-        .expect("array text always has an array node")
+        .find(|n| n.kind() == kind)
+        .expect("reparsed text contains the expected node")
         .green()
         .into_owned()
+}
+
+/// Walk `path` from `top` as far as it resolves; return the deepest reached value
+/// node and the still-unresolved steps (empty if the whole path resolved).
+pub(crate) fn walk_partial(top: SyntaxNode, path: &[Step]) -> (SyntaxNode, &[Step]) {
+    let mut current = top;
+    for (i, step) in path.iter().enumerate() {
+        match step_into(&current, step) {
+            Some(next) => current = next,
+            None => return (current, &path[i..]),
+        }
+    }
+    (current, &[])
+}
+
+/// Build a nested value for the not-yet-existing tail of a path (`[.b, .c]` with
+/// value `v` becomes `{ "b": { "c": v } }`).
+pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditError> {
+    match steps.split_first() {
+        None => Ok(value.clone()),
+        Some((Step::Field(k), rest)) => {
+            Ok(Value::Object(vec![(k.clone(), nest_value(rest, value)?)]))
+        }
+        Some((Step::Index(_), _)) => Err(EditError::new("cannot create array elements by index")),
+        Some((Step::Iterate, _)) => Err(EditError::new("cannot create through `[]`")),
+    }
 }
 
 /// Build a `Value`-node green subtree by rendering `value` as compact JSON and
