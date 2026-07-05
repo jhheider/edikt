@@ -43,12 +43,18 @@ Release infra is intentionally **last** — build the capability, then ship it.
   are now distinct formats (JSON lacks Comments). `-o FILE` writes to a file,
   inferring the output format from its extension (`-T` wins; mutations treat it
   as a sink; nothing is written on a query miss).
-- ⬜ **Comment-preserving conversion.** Carry comments across `-T` via a **uniform
-  comment model** — parse comments *out* to a shared vocabulary (head / inline /
-  foot), and let each format's emitter decide per kind: place it, remap it to a
-  kind it supports (warn), or drop it (warn), via the same Feature-subtraction
-  path as other degradations. N-in + N-out against one model, not N×N per pair.
-  Needs `Value` enriched with optional comment metadata.
+- ✅ **Comment-preserving conversion.** Comments carry across `-T` via a **uniform
+  comment model** — `Commented` in `edikt-core` (a `Value` enriched with per-node
+  head / inline / foot comments), `Document::to_commented` extraction in all six
+  formats, and per-format commented emitters that place each kind natively
+  (`//`, `;`, `#`), remap a kind the grammar can't hold (env inline → own line,
+  warned), or drop for a `Comments`-less target (JSON, warned) — the same
+  Feature-subtraction path as other degradations. N-in + N-out against one
+  model, not N×N per pair. Comments ride pure-path selections (aligned 1:1 with
+  the evaluator); synthesized results have none, and converting a commented
+  source through one still warns. YAML emits by splicing comments into the
+  libyaml output at span-tree positions, so comment-free output stays
+  byte-identical.
 - ⬜ **Language polish.** Grow the builtin registry, regex (`test`/`match`), as
   real queries demand.
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB

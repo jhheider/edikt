@@ -74,7 +74,7 @@ pub(crate) fn value_to_item(value: &Value) -> Result<Item, EditError> {
     Ok(Item::Value(value_to_toml(value)?))
 }
 
-fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
+pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
     Ok(match value {
         Value::Null => return Err(EditError::new("TOML has no null value")),
         Value::Bool(b) => TomlValue::from(*b),

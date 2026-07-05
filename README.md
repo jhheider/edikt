@@ -28,8 +28,8 @@ cat settings.jsonc | edikt 'del(.telemetry) | .theme = "dark"'
 # script from a file
 edikt -f release.edk -i config.jsonc
 
-# convert, where feasible (data-model; trivia dropped)
-edikt -t ini -T json app.cfg
+# convert, where feasible — comments carried across, in the target's syntax
+edikt -T yaml tsconfig.jsonc
 ```
 
 **What it does:** edits commented, hand-formatted config — `settings.json`,

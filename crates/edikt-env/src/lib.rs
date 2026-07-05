@@ -5,11 +5,13 @@
 //! `key:value` entries, `#`/`!` comments, and blanks round-trip byte-for-byte.
 //! Paths are a single `.key`; edits change only the targeted value or line.
 
+mod comments;
 mod edit;
 mod parser;
 mod project;
 mod syntax;
 
+pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::apply;
 
@@ -113,25 +115,16 @@ impl Document for Env {
             .filter_map(|e| e.into_token())
             .any(|t| t.kind() == Sk::Comment)
     }
+    fn to_commented(&self) -> Option<edikt_core::Commented> {
+        Some(comments::to_commented(&self.root))
+    }
 }
 
 /// Emit a value as a flat `.env`: every leaf becomes a `key=value` line, with
 /// nested objects/arrays flattened to dotted keys. Returns the text and warnings.
+/// (The comment-free case of [`emit_commented`].)
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
-    if !matches!(value, Value::Object(_)) {
-        return Err(EditError::new("env output requires a top-level object"));
-    }
-    let pairs = edikt_core::convert::flatten(value);
-    let flattened = pairs.iter().any(|(k, _)| k.contains('.'));
-    let mut out = String::new();
-    for (k, v) in &pairs {
-        out.push_str(&format!("{k}={v}\n"));
-    }
-    let mut warnings = Vec::new();
-    if flattened {
-        warnings.push("nested/array values were flattened to dotted keys".to_string());
-    }
-    Ok((out, warnings))
+    comments::emit_commented(&edikt_core::Commented::from_value(value))
 }
 
 #[cfg(test)]
@@ -232,6 +225,48 @@ mod tests {
         assert_eq!(q(src, r#"."app.name""#), vec![Value::Str("edikt".into())]);
         assert_eq!(q(src, r#"."server.port""#), vec![Value::Str("8080".into())]);
         assert!(edit_src(src, r#"."server.port" = "9090""#).contains("server.port: 9090"));
+    }
+
+    // --- comment model (extraction + commented emit) -----------------------
+
+    #[test]
+    fn extracts_head_comments_and_trailing_foot() {
+        let src = "# service env\nDATABASE_URL=x\n# stop here\n";
+        let doc = parse(src).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(entries[0].1.comments.head, vec!["service env"]);
+        assert_eq!(entries[0].1.comments.foot, vec!["stop here"]);
+    }
+
+    #[test]
+    fn commented_emit_round_trips_and_remaps_inline() {
+        let c = parse(SAMPLE).unwrap().to_commented().unwrap();
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert!(warnings.is_empty());
+        assert!(out.starts_with("# service env\nDATABASE_URL="));
+        assert_eq!(parse(&out).unwrap().to_commented().unwrap(), c);
+
+        // An inline comment (from a richer format) moves to its own line, and
+        // that remap warns.
+        let mut inline = edikt_core::Commented::from_value(&Value::Object(vec![(
+            "PORT".into(),
+            Value::Str("80".into()),
+        )]));
+        let edikt_core::CommentedNode::Object(entries) = &mut inline.node else {
+            unreachable!();
+        };
+        entries[0].1.comments.inline = Some("the listen port".into());
+        let (out2, warnings2) = emit_commented(&inline).unwrap();
+        assert_eq!(out2, "# the listen port\nPORT=80\n");
+        assert_eq!(warnings2.len(), 1);
+        assert!(
+            warnings2[0].contains("inline comments moved"),
+            "got: {warnings2:?}"
+        );
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub(crate) fn item_to_value(item: &Item) -> Value {
     }
 }
 
-fn toml_value_to_value(v: &TomlValue) -> Value {
+pub(crate) fn toml_value_to_value(v: &TomlValue) -> Value {
     match v {
         TomlValue::String(s) => Value::Str(s.value().clone()),
         TomlValue::Integer(i) => Value::Int(*i.value()),

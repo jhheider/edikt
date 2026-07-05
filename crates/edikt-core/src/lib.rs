@@ -10,6 +10,7 @@
 //! slice, once there is a concrete CST to shape them against.
 
 mod ast;
+mod comment;
 pub mod convert;
 mod document;
 mod error;
@@ -20,6 +21,7 @@ mod parser;
 mod value;
 
 pub use ast::{BinOp, Expr, Step, render_path};
+pub use comment::{Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
 pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval};

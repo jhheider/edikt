@@ -268,7 +268,7 @@ pub(crate) fn node_to_value(node: &Node) -> Value {
 
 /// Flatten a merge target — a mapping, or a sequence of mappings — into `out`,
 /// keeping first-seen precedence.
-fn collect_merge(value: &Value, out: &mut Vec<(String, Value)>) {
+pub(crate) fn collect_merge(value: &Value, out: &mut Vec<(String, Value)>) {
     match value {
         Value::Object(pairs) => {
             for (k, v) in pairs {

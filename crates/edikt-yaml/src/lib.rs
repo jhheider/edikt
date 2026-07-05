@@ -13,6 +13,7 @@
 //! mapping/sequence, or creating nested keys) is refused rather than reflowed —
 //! edikt never rewrites what it didn't target.
 
+mod comments;
 mod compose;
 mod edit;
 mod emit;
@@ -21,6 +22,7 @@ mod scalar;
 use compose::{Node, node_to_value};
 use edikt_core::{Document, EditError, Expr, Feature, Value};
 
+pub use comments::emit_commented;
 pub use emit::emit;
 
 /// Capabilities of YAML: everything but sections.
@@ -73,6 +75,9 @@ impl Document for Yaml {
         self.source
             .lines()
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
+    }
+    fn to_commented(&self) -> Option<edikt_core::Commented> {
+        Some(comments::to_commented(&self.source, &self.doc))
     }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
         edit::source_slices(&self.source, &self.doc, path)
@@ -349,6 +354,92 @@ mod tests {
         // A flow sequence/mapping comes back verbatim (already self-contained).
         assert_eq!(slice(".production.flags"), vec!["[ssl, verify, fast]"]);
         assert_eq!(slice(".production.meta"), vec!["{ owner: ops, tier: 1 }"]);
+    }
+
+    // --- comment model (extraction + commented emit) -----------------------
+
+    #[test]
+    fn extracts_comments_by_kind() {
+        let doc = parse(SAMPLE).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        // `# services` is the banner above the first key.
+        assert_eq!(top[0].0, "web");
+        assert_eq!(top[0].1.comments.head, vec!["services"]);
+        let edikt_core::CommentedNode::Object(web) = &top[0].1.node else {
+            panic!("expected mapping");
+        };
+        // `image: nginx:1.25   # pinned`
+        assert_eq!(web[0].1.comments.inline.as_deref(), Some("pinned"));
+    }
+
+    #[test]
+    fn extracts_container_entry_inline_and_item_comments() {
+        let src = "web: # svc\n  # first port\n  ports:\n    - 80 # http\n    - 443\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        // Inline on a key whose value is a container.
+        assert_eq!(top[0].1.comments.inline.as_deref(), Some("svc"));
+        let edikt_core::CommentedNode::Object(web) = &top[0].1.node else {
+            panic!("expected mapping");
+        };
+        assert_eq!(web[0].1.comments.head, vec!["first port"]);
+        let edikt_core::CommentedNode::Array(ports) = &web[0].1.node else {
+            panic!("expected sequence");
+        };
+        assert_eq!(ports[0].comments.inline.as_deref(), Some("http"));
+    }
+
+    #[test]
+    fn extracts_trailing_foot_and_comment_only_doc() {
+        let c = parse("a: 1\n# the end\n").unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.foot, vec!["the end"]);
+        // A comment-only document keeps its comments (as the null's head).
+        let c2 = parse("# just a comment\n").unwrap().to_commented().unwrap();
+        assert_eq!(c2.comments.head, vec!["just a comment"]);
+    }
+
+    #[test]
+    fn commented_emit_places_all_kinds() {
+        let c = parse(SAMPLE).unwrap().to_commented().unwrap();
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert!(warnings.is_empty());
+        // (Sequence items sit at their key's indent — libyaml's block style,
+        // same as the plain emitter.)
+        assert_eq!(
+            out,
+            "# services\nweb:\n  image: nginx:1.25 # pinned\n  ports:\n  - 80\n  - 443\n  replicas: 3\ndebug: false\n"
+        );
+        // The emitted YAML re-parses with the same comments and values.
+        let again = parse(&out).unwrap().to_commented().unwrap();
+        assert_eq!(again, c);
+    }
+
+    #[test]
+    fn commented_emit_matches_plain_emit_without_comments() {
+        let value = parse(SAMPLE).unwrap().to_value();
+        let (plain, _) = emit(&value).unwrap();
+        let (commented, _) = emit_commented(&edikt_core::Commented::from_value(&value)).unwrap();
+        assert_eq!(plain, commented, "no comments → byte-identical to today");
+    }
+
+    #[test]
+    fn compose_fixture_comments_survive_extraction_and_emit() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
+        let src = std::fs::read_to_string(dir.join("compose.yaml")).unwrap();
+        let doc = parse(&src).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        assert!(c.has_comments());
+        let (out, _) = emit_commented(&c).unwrap();
+        // The emitted YAML re-reads to the same value and keeps the comments.
+        assert_eq!(parse(&out).unwrap().to_value(), doc.to_value());
+        assert!(parse(&out).unwrap().to_commented().unwrap().has_comments());
     }
 
     #[test]

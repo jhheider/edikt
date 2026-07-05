@@ -1,6 +1,6 @@
 //! The format-agnostic document seam.
 
-use crate::{EditError, Expr, Feature, Value};
+use crate::{Commented, EditError, Expr, Feature, Value};
 
 /// A parsed config document.
 ///
@@ -31,6 +31,16 @@ pub trait Document {
     /// Whether the source contains any comments — used to warn on conversion,
     /// which drops them.
     fn has_comments(&self) -> bool;
+
+    /// Project to the comment-annotated value model ([`Commented`]) so
+    /// conversion can carry comments across formats. Shape and order must match
+    /// [`Document::to_value`] exactly (same keys, same merge/resolution rules) —
+    /// the CLI pairs the two projections by position. `None` means the format
+    /// doesn't extract comments; conversion then falls back to the plain value
+    /// path and warns that comments were dropped.
+    fn to_commented(&self) -> Option<Commented> {
+        None
+    }
 
     /// The **original source text** of each node selected by `path`, in document
     /// order (aligned 1:1 with [`crate::eval`]'s results for the same path). This
