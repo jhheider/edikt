@@ -18,6 +18,7 @@ mod eval;
 mod feature;
 mod lexer;
 mod parser;
+mod strings;
 mod value;
 
 pub use ast::{BinOp, Expr, Step, render_path};

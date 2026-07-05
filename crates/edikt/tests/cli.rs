@@ -276,6 +276,53 @@ fn convert_jsonc_to_env_flattens_with_warning() {
 }
 
 #[test]
+fn regex_builtins_via_cli() {
+    // select + test: the filter real configs reach for.
+    let y = "services:\n  web:\n    image: nginx:1.25\n  db:\n    image: postgres:16\n";
+    let (out, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            r#".services[] | select(.image | test("^nginx")) | .image"#,
+        ],
+        y,
+    );
+    assert_eq!(out, "nginx:1.25\n");
+    assert_eq!(code, 0);
+
+    // sub on the right side of a format-preserving mutation.
+    let (out2, _e, c2) = run(
+        &["-t", "env", r#".VERSION |= sub("^v"; "")"#],
+        "# release\nVERSION=v1.2.3\n",
+    );
+    assert_eq!(out2, "# release\nVERSION=1.2.3\n");
+    assert_eq!(c2, 0);
+
+    // split / join round trip in an edit.
+    let (out3, _e, c3) = run(
+        &["-t", "env", r#".P |= (split(":") + ["/sbin"] | join(":"))"#],
+        "P=/usr/bin:/bin\n",
+    );
+    assert_eq!(out3, "P=/usr/bin:/bin:/sbin\n");
+    assert_eq!(c3, 0);
+
+    // capture extracts named groups; a no-match is a grep-shaped miss.
+    let (out4, _e, c4) = run(
+        &["-t", "json", r#".image | capture("(?<tag>[^:]+$)") | .tag"#],
+        "{\"image\": \"nginx:1.25\"}",
+    );
+    assert_eq!(out4, "1.25\n");
+    assert_eq!(c4, 0);
+    let (_o, _e, c5) = run(&["-t", "json", r#".a | match("z")"#], "{\"a\": \"x\"}");
+    assert_eq!(c5, 1);
+
+    // A bad regex is a clean expression error.
+    let (_o, err, c6) = run(&["-t", "json", r#".a | test("(")"#], "{\"a\": \"x\"}");
+    assert_eq!(c6, 2);
+    assert!(err.contains("invalid regex"), "got: {err}");
+}
+
+#[test]
 fn convert_carries_comments_across_formats() {
     // JSONC → YAML: head and inline comments arrive in YAML syntax, silently
     // (nothing was lost, so nothing warns).

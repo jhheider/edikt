@@ -13,6 +13,7 @@
 //! arrives in a later slice.
 
 use crate::ast::{BinOp, Expr, Step};
+use crate::strings;
 use crate::value::Value;
 use std::cmp::Ordering;
 
@@ -24,7 +25,7 @@ pub struct EvalError {
 }
 
 impl EvalError {
-    fn new(msg: impl Into<String>) -> EvalError {
+    pub(crate) fn new(msg: impl Into<String>) -> EvalError {
         EvalError { msg: msg.into() }
     }
 }
@@ -420,6 +421,24 @@ fn eval_call(name: &str, args: &[Expr], input: &Value) -> Result<Vec<Value>, Eva
             )))
         }
     };
+    // For builtins with a trailing optional argument (regex flags).
+    let arity_between = |min: usize, max: usize| -> Result<(), EvalError> {
+        if (min..=max).contains(&args.len()) {
+            Ok(())
+        } else {
+            Err(EvalError::new(format!(
+                "{name} takes {min}–{max} arguments, got {}",
+                args.len()
+            )))
+        }
+    };
+    // The optional flags argument, defaulting to none.
+    let flags_arg = |at: usize| -> Result<String, EvalError> {
+        match args.get(at) {
+            Some(a) => str_arg(a, input, "flags"),
+            None => Ok(String::new()),
+        }
+    };
 
     match name {
         "select" => {
@@ -475,6 +494,77 @@ fn eval_call(name: &str, args: &[Expr], input: &Value) -> Result<Vec<Value>, Eva
         "rtrimstr" => {
             arity(1)?;
             trim_str(input, &args[0], false)
+        }
+        "startswith" | "endswith" => {
+            arity(1)?;
+            let s = str_input(input, name)?;
+            let affix = str_arg(&args[0], input, "the affix")?;
+            let hit = if name == "startswith" {
+                s.starts_with(&affix)
+            } else {
+                s.ends_with(&affix)
+            };
+            Ok(vec![Value::Bool(hit)])
+        }
+        "test" => {
+            arity_between(1, 2)?;
+            let re = str_arg(&args[0], input, "the regex")?;
+            Ok(vec![strings::test(
+                str_input(input, name)?,
+                &re,
+                &flags_arg(1)?,
+            )?])
+        }
+        "match" => {
+            arity_between(1, 2)?;
+            let re = str_arg(&args[0], input, "the regex")?;
+            strings::find(str_input(input, name)?, &re, &flags_arg(1)?)
+        }
+        "capture" => {
+            arity_between(1, 2)?;
+            let re = str_arg(&args[0], input, "the regex")?;
+            strings::capture(str_input(input, name)?, &re, &flags_arg(1)?)
+        }
+        "sub" | "gsub" => {
+            arity_between(2, 3)?;
+            let re = str_arg(&args[0], input, "the regex")?;
+            let repl = str_arg(&args[1], input, "the replacement")?;
+            let mut flags = flags_arg(2)?;
+            if name == "gsub" {
+                flags.push('g');
+            }
+            Ok(vec![strings::sub(
+                str_input(input, name)?,
+                &re,
+                &repl,
+                &flags,
+            )?])
+        }
+        "split" => {
+            arity_between(1, 2)?;
+            let sep = str_arg(&args[0], input, "the separator")?;
+            // jq's shape: 1-arg splits on a literal, 2-arg on a regex.
+            let regex_flags = if args.len() == 2 {
+                Some(flags_arg(1)?)
+            } else {
+                None
+            };
+            Ok(vec![strings::split(
+                str_input(input, name)?,
+                &sep,
+                regex_flags.as_deref(),
+            )?])
+        }
+        "join" => {
+            arity(1)?;
+            let Value::Array(items) = input else {
+                return Err(EvalError::new(format!(
+                    "join requires an array input, got {}",
+                    input.type_name()
+                )));
+            };
+            let sep = str_arg(&args[0], input, "the separator")?;
+            Ok(vec![strings::join(items, &sep)?])
         }
         "del" => {
             arity(1)?;
@@ -639,6 +729,29 @@ fn tonumber(v: &Value) -> Result<Value, EvalError> {
             "cannot parse {} as a number",
             other.type_name()
         ))),
+    }
+}
+
+/// The input as a string, for string-only builtins.
+fn str_input<'a>(input: &'a Value, name: &str) -> Result<&'a str, EvalError> {
+    match input {
+        Value::Str(s) => Ok(s),
+        other => Err(EvalError::new(format!(
+            "{name} requires a string input, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Evaluate an argument expression to a single string (its first value).
+fn str_arg(arg: &Expr, input: &Value, what: &str) -> Result<String, EvalError> {
+    match eval(arg, input)?.into_iter().next() {
+        Some(Value::Str(s)) => Ok(s),
+        Some(other) => Err(EvalError::new(format!(
+            "{what} must be a string, got {}",
+            other.type_name()
+        ))),
+        None => Err(EvalError::new(format!("{what} produced no value"))),
     }
 }
 
@@ -846,6 +959,91 @@ mod tests {
         assert!(eval(&parse(".a").unwrap(), &Value::Int(3)).is_err());
         assert!(eval(&parse(".[]").unwrap(), &Value::Int(3)).is_err());
         assert!(eval(&parse("length").unwrap(), &Value::Int(3)).is_err());
+    }
+
+    #[test]
+    fn regex_test_match_capture() {
+        let s = Value::Str("nginx:1.25".into());
+        assert_eq!(one(r#"test("^nginx")"#, &s), Value::Bool(true));
+        assert_eq!(one(r#"test("^NGINX")"#, &s), Value::Bool(false));
+        // The `;`-separated flags argument, jq-style.
+        assert_eq!(one(r#"test("^NGINX"; "i")"#, &s), Value::Bool(true));
+
+        // match: no match → empty stream (the CLI's grep-shaped miss); `g`
+        // streams every match.
+        assert!(run(r#"match("\\d+"; "g")"#, &Value::Str("a1b22".into())).len() == 2);
+        assert!(run(r#"match("z")"#, &s).is_empty());
+        let m = one(r#"match(":(\\d+)")"#, &s);
+        assert_eq!(one(".offset", &m), Value::Int(5));
+        assert_eq!(one(".string", &m), Value::Str(":1".into()));
+        assert_eq!(one(".captures[0].string", &m), Value::Str("1".into()));
+
+        // capture: named groups as an object.
+        assert_eq!(
+            one(r#"capture("(?<img>\\w+):(?<tag>.+)")"#, &s),
+            obj(&[
+                ("img", Value::Str("nginx".into())),
+                ("tag", Value::Str("1.25".into())),
+            ])
+        );
+
+        // errors: bad regex, bad flag, non-string input
+        assert!(eval(&parse(r#"test("(")"#).unwrap(), &s).is_err());
+        assert!(eval(&parse(r#"test("a"; "q")"#).unwrap(), &s).is_err());
+        assert!(eval(&parse(r#"test("a")"#).unwrap(), &Value::Int(1)).is_err());
+    }
+
+    #[test]
+    fn regex_sub_and_gsub() {
+        let v = Value::Str("v1.2.3".into());
+        assert_eq!(one(r#"sub("^v"; "")"#, &v), Value::Str("1.2.3".into()));
+        // sub replaces the first; gsub all; `$name` references captures.
+        let s = Value::Str("a-b-c".into());
+        assert_eq!(one(r#"sub("-"; "_")"#, &s), Value::Str("a_b-c".into()));
+        assert_eq!(one(r#"gsub("-"; "_")"#, &s), Value::Str("a_b_c".into()));
+        assert_eq!(
+            one(
+                r#"sub("(?<k>\\w+)=(?<v>\\w+)"; "${v}:${k}")"#,
+                &Value::Str("port=80".into())
+            ),
+            Value::Str("80:port".into())
+        );
+    }
+
+    #[test]
+    fn split_join_and_affixes() {
+        let path = Value::Str("/usr/bin:/bin".into());
+        assert_eq!(
+            one(r#"split(":")"#, &path),
+            Value::Array(vec![
+                Value::Str("/usr/bin".into()),
+                Value::Str("/bin".into()),
+            ])
+        );
+        // The round trip real configs want: split, extend, join.
+        assert_eq!(
+            one(r#"split(":") + ["/sbin"] | join(":")"#, &path),
+            Value::Str("/usr/bin:/bin:/sbin".into())
+        );
+        // 2-arg split is regex (jq's shape).
+        assert_eq!(
+            one(r#""a1b22c" | split("\\d+"; "")"#, &Value::Null),
+            Value::Array(vec![
+                Value::Str("a".into()),
+                Value::Str("b".into()),
+                Value::Str("c".into()),
+            ])
+        );
+        assert_eq!(
+            one(r#""VITE_PORT" | startswith("VITE_")"#, &Value::Null),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            one(r#""app.log" | endswith(".log")"#, &Value::Null),
+            Value::Bool(true)
+        );
+        // join stringifies scalars and rejects containers.
+        assert!(eval(&parse(r#"join(",")"#).unwrap(), &Value::Str("x".into())).is_err());
     }
 
     // --- mutation (Value-level semantics) ---------------------------------

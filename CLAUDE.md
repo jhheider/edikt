@@ -90,10 +90,16 @@ doesn't just place literals):
 - JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[…]`, `{…}`
 - arithmetic on numbers: `+ - * / %`
 - string concat with `+`
-- a small function registry, jq-named: `length`, `ascii_upcase`,
-  `ascii_downcase`, `ltrimstr`, `rtrimstr`, `test`/`match` (regex, later),
-  `tonumber`, `tostring`, `keys`, `has`, `type`. Grow this list deliberately,
-  never speculatively.
+- a small function registry, jq-named: `length`, `keys`, `has`, `type`,
+  `tostring`, `tonumber`, `ascii_upcase`, `ascii_downcase`, `ltrimstr`,
+  `rtrimstr`, `startswith`, `endswith`, `split`, `join`, and the regex family
+  `test`, `match`, `capture`, `sub`, `gsub` (args `;`-separated, jq-style;
+  optional trailing flags from `g i x s m`; `match` yields jq's match objects
+  with codepoint offsets, and no match is an empty stream → exit 1). One
+  deliberate divergence: jq splices captures into `sub` replacements by string
+  interpolation, which this language doesn't have — replacements use `$1` /
+  `$name` references instead (sed-flavored; `$$` is a literal `$`). Grow this
+  list deliberately, never speculatively.
 
 **Value semantics differ by format.** JSON-family values are typed. INI/`.env`
 values are strings. So `.count + 1` on `.env` coerces on demand
