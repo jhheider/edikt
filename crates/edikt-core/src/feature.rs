@@ -31,3 +31,17 @@ impl Feature {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names() {
+        assert_eq!(Feature::Comments.as_str(), "comments");
+        assert_eq!(Feature::Nesting.as_str(), "nesting");
+        assert_eq!(Feature::Arrays.as_str(), "arrays");
+        assert_eq!(Feature::TypedScalars.as_str(), "typed scalars");
+        assert_eq!(Feature::Sections.as_str(), "sections");
+    }
+}

@@ -82,3 +82,39 @@ pub trait Document {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal document that overrides only the required methods, so the
+    /// trait defaults (no comment extraction, no source slices, comment editing
+    /// rejected) are exercised.
+    struct Bare;
+    impl Document for Bare {
+        fn to_source(&self) -> String {
+            String::new()
+        }
+        fn to_value(&self) -> Value {
+            Value::Null
+        }
+        fn features(&self) -> &'static [Feature] {
+            &[]
+        }
+        fn apply(&mut self, _expr: &Expr) -> Result<(), EditError> {
+            Ok(())
+        }
+        fn has_comments(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn trait_defaults() {
+        let mut d = Bare;
+        assert!(d.to_commented().is_none());
+        assert!(d.source_slice(&[]).is_empty());
+        assert!(d.set_comment(&[], CommentKind::Head, "x").is_err());
+        assert!(d.delete_comment(&[], CommentKind::Head).is_err());
+    }
+}

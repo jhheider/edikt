@@ -30,7 +30,6 @@ impl EvalError {
     }
 }
 
-/// Evaluate `expr` against `input`, returning the output stream.
 /// Evaluate a query that may address comments (`#`) against the document's
 /// commented projection. Comment-free sub-expressions fall back to the plain
 /// value evaluator; a comment path resolves the comment text of each selected
@@ -105,6 +104,7 @@ fn comment_records(root: &Commented) -> Vec<Value> {
         .collect()
 }
 
+/// Evaluate `expr` against `input`, returning the output stream.
 pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
     match expr {
         Expr::Path(steps) => eval_path(steps, input),
@@ -1064,6 +1064,138 @@ mod tests {
         assert!(eval(&parse(".a").unwrap(), &Value::Int(3)).is_err());
         assert!(eval(&parse(".[]").unwrap(), &Value::Int(3)).is_err());
         assert!(eval(&parse("length").unwrap(), &Value::Int(3)).is_err());
+    }
+
+    #[test]
+    fn value_level_set_paths() {
+        // Create nested keys through null / missing; extend arrays with nulls.
+        let r = run(".a.b.c = 1", &Value::Null);
+        assert_eq!(one(".a.b.c", &r[0]), Value::Int(1));
+        let arr = run(
+            ".xs[2] = 9",
+            &obj(&[("xs", Value::Array(vec![Value::Int(0)]))]),
+        );
+        assert_eq!(
+            one(".xs", &arr[0]),
+            Value::Array(vec![Value::Int(0), Value::Null, Value::Int(9)])
+        );
+        // Iterate-assignment sets every element / value.
+        let it = run(".[] = 0", &Value::Array(vec![Value::Int(1), Value::Int(2)]));
+        assert_eq!(it[0], Value::Array(vec![Value::Int(0), Value::Int(0)]));
+        let ito = run(
+            ".[] = 0",
+            &obj(&[("a", Value::Int(1)), ("b", Value::Int(2))]),
+        );
+        assert_eq!(ito[0], obj(&[("a", Value::Int(0)), ("b", Value::Int(0))]));
+        // Negative index out of range, and setting through the wrong type, error.
+        assert!(
+            eval(
+                &parse(".xs[-9] = 1").unwrap(),
+                &obj(&[("xs", Value::Array(vec![]))])
+            )
+            .is_err()
+        );
+        assert!(eval(&parse(".a = 1").unwrap(), &Value::Int(3)).is_err());
+        assert!(eval(&parse(".[0] = 1").unwrap(), &Value::Str("x".into())).is_err());
+    }
+
+    #[test]
+    fn value_level_update_and_delete() {
+        // |= over a field, an index, and an iterate.
+        assert_eq!(
+            one(".a |= . + 1", &obj(&[("a", Value::Int(1))])),
+            obj(&[("a", Value::Int(2))])
+        );
+        let xs = obj(&[("xs", Value::Array(vec![Value::Int(1), Value::Int(2)]))]);
+        assert_eq!(
+            one(".xs[0] |= . * 10", &xs),
+            obj(&[("xs", Value::Array(vec![Value::Int(10), Value::Int(2)]))])
+        );
+        assert_eq!(
+            one(".xs[] |= . + 1", &xs),
+            obj(&[("xs", Value::Array(vec![Value::Int(2), Value::Int(3)]))])
+        );
+        // del of a nested key, an index, an iterate, and a miss (no-op).
+        assert_eq!(
+            one(
+                "del(.a.b)",
+                &obj(&[("a", obj(&[("b", Value::Int(1)), ("c", Value::Int(2))]))])
+            ),
+            obj(&[("a", obj(&[("c", Value::Int(2))]))])
+        );
+        assert_eq!(
+            one("del(.xs[0])", &xs),
+            obj(&[("xs", Value::Array(vec![Value::Int(2)]))])
+        );
+        assert_eq!(one("del(.xs[])", &xs), obj(&[("xs", Value::Array(vec![]))]));
+        assert_eq!(
+            one("del(.nope)", &obj(&[("a", Value::Int(1))])),
+            obj(&[("a", Value::Int(1))])
+        );
+        // Update through the wrong type errors.
+        assert!(eval(&parse(".a |= .").unwrap(), &Value::Int(3)).is_err());
+    }
+
+    #[test]
+    fn arithmetic_and_its_errors() {
+        assert_eq!(one("3 - 1", &Value::Null), Value::Int(2));
+        assert_eq!(one("3 * 4", &Value::Null), Value::Int(12));
+        assert_eq!(one("7 % 3", &Value::Null), Value::Int(1));
+        assert_eq!(one("6 / 2", &Value::Null), Value::Int(3)); // even → int
+        assert_eq!(one("7 / 2", &Value::Null), Value::Float(3.5)); // uneven → float
+        assert_eq!(one("2.5 + 0.5", &Value::Null), Value::Int(3)); // 3.0 prints as int
+        // Comparisons.
+        assert_eq!(one("1 < 2", &Value::Null), Value::Bool(true));
+        assert_eq!(one("2 <= 2", &Value::Null), Value::Bool(true));
+        assert_eq!(one("3 >= 4", &Value::Null), Value::Bool(false));
+        assert_eq!(one("1 != 2", &Value::Null), Value::Bool(true));
+        // Division / modulo by zero, and non-numeric arithmetic, error.
+        assert!(eval(&parse("1 / 0").unwrap(), &Value::Null).is_err());
+        assert!(eval(&parse("1 % 0").unwrap(), &Value::Null).is_err());
+        assert!(eval(&parse("\"a\" - 1").unwrap(), &Value::Null).is_err());
+        assert!(eval(&parse("-\"a\"").unwrap(), &Value::Null).is_err());
+        // Overflow promotes to float rather than panicking.
+        assert!(matches!(
+            one("9223372036854775807 + 1", &Value::Null),
+            Value::Float(_)
+        ));
+    }
+
+    #[test]
+    fn add_is_overloaded() {
+        assert_eq!(one("null + 5", &Value::Null), Value::Int(5));
+        assert_eq!(one("5 + null", &Value::Null), Value::Int(5));
+        assert_eq!(one("\"a\" + \"b\"", &Value::Null), Value::Str("ab".into()));
+        assert_eq!(
+            one("[1] + [2]", &Value::Null),
+            Value::Array(vec![Value::Int(1), Value::Int(2)])
+        );
+    }
+
+    #[test]
+    fn builtin_error_and_edge_paths() {
+        // has / keys / length on the wrong type, and ltrimstr/rtrimstr edges.
+        assert!(eval(&parse("has(\"a\")").unwrap(), &Value::Int(1)).is_err());
+        assert!(eval(&parse("keys").unwrap(), &Value::Int(1)).is_err());
+        assert_eq!(
+            one("has(1)", &Value::Array(vec![Value::Int(0), Value::Int(0)])),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            one("\"abc\" | ltrimstr(\"x\")", &Value::Null),
+            Value::Str("abc".into())
+        );
+        assert_eq!(
+            one("\"abc\" | rtrimstr(\"bc\")", &Value::Null),
+            Value::Str("a".into())
+        );
+        assert_eq!(one("\"42\" | tonumber", &Value::Null), Value::Int(42));
+        assert!(eval(&parse("\"x\" | tonumber").unwrap(), &Value::Null).is_err());
+        assert_eq!(one("length", &Value::Str("héllo".into())), Value::Int(5));
+        assert_eq!(one("length", &Value::Null), Value::Int(0));
+        // Unknown function and wrong arity.
+        assert!(eval(&parse("nope").unwrap(), &Value::Null).is_err());
+        assert!(eval(&parse("length(1)").unwrap(), &Value::Null).is_err());
     }
 
     #[test]
