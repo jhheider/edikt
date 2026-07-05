@@ -9,7 +9,7 @@
 //! results), 2 = parse / evaluation / I/O error.
 
 use clap::Parser;
-use edikt_core::{Document, Value};
+use edikt_core::{Document, Expr, Value};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -41,9 +41,18 @@ struct Args {
     #[arg(short = 'i', long = "in-place")]
     in_place: bool,
 
-    /// Force the input format: jsonc | json5 | json (ini/env coming).
+    /// Force the input format: jsonc | json5 | json | ini | env | properties.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
+
+    /// Convert to this output format (data-model; drops comments/trivia).
+    #[arg(short = 'T', long = "to", value_name = "FMT")]
+    to: Option<String>,
+
+    /// In conversion, treat lossy degradations (dropped comments, flattening) as
+    /// errors instead of warnings.
+    #[arg(long)]
+    strict: bool,
 
     /// Output JSON-encoded values.
     #[arg(long, conflicts_with = "raw")]
@@ -66,10 +75,21 @@ fn main() -> ExitCode {
 }
 
 /// The supported formats.
+#[derive(Clone, Copy)]
 enum Format {
     Jsonc,
     Ini,
     Env,
+}
+
+/// Resolve a `-t`/`-T` format name.
+fn format_from_name(name: &str) -> Result<Format, String> {
+    match name.to_ascii_lowercase().as_str() {
+        "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
+        "ini" | "cfg" | "conf" => Ok(Format::Ini),
+        "env" | "properties" | "props" => Ok(Format::Env),
+        other => Err(format!("unknown format `{other}`")),
+    }
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
@@ -83,7 +103,19 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String
     }
 }
 
+/// Emit a value in the target format, returning the text and any lossy-conversion
+/// warnings.
+fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>), String> {
+    match format {
+        Format::Jsonc => Ok((edikt_jsonc::emit(value), Vec::new())),
+        Format::Ini => edikt_ini::emit(value).map_err(|e| e.to_string()),
+        Format::Env => edikt_env::emit(value).map_err(|e| e.to_string()),
+    }
+}
+
 fn run(args: Args) -> Result<ExitCode, String> {
+    let to_format = args.to.as_deref().map(format_from_name).transpose()?;
+
     // Resolve the program and the file list. Expression sources (-f then -e) win
     // over the positional; when any are present, every operand is a file.
     let mut sources: Vec<String> = Vec::new();
@@ -94,24 +126,32 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
     sources.extend(args.exprs.iter().cloned());
 
-    let (program, files): (String, Vec<String>) = if sources.is_empty() {
-        let mut it = args.operands.iter().cloned();
-        let program = it.next().ok_or("no expression given")?;
-        (program, it.collect())
-    } else {
+    let (program, files): (String, Vec<String>) = if !sources.is_empty() {
         // M1 composes multiple expression sources with a pipe (natural for
         // queries); the sed-style sequence semantics finalize with mutation.
         (join_pipe(&sources), args.operands.clone())
+    } else if to_format.is_some() {
+        // Conversion defaults to whole-document (`.`); all operands are files.
+        (".".to_string(), args.operands.clone())
+    } else {
+        let mut it = args.operands.iter().cloned();
+        let program = it.next().ok_or("no expression given")?;
+        (program, it.collect())
     };
 
     let expr = edikt_core::parse(&program).map_err(|e| format!("bad expression: {e}"))?;
     let is_mutation = expr.is_mutation();
 
-    if args.in_place && !is_mutation {
-        return Err("in-place (-i) needs a mutating expression, e.g. `.a.b = false`".to_string());
+    if args.in_place && !is_mutation && to_format.is_none() {
+        return Err("in-place (-i) needs a mutating expression or a conversion (-T)".to_string());
     }
 
     let inputs = read_inputs(&files)?;
+
+    if let Some(target) = to_format {
+        return convert(&args, &expr, &inputs, target);
+    }
+
     let as_json = matches!((args.json, args.raw), (true, _));
 
     let mut emitted = false;
@@ -149,6 +189,54 @@ fn run(args: Args) -> Result<ExitCode, String> {
     })
 }
 
+/// Conversion mode: parse each input, evaluate `expr` against its value model,
+/// and emit the result in `target`. Warns (or errors, with `--strict`) on lossy
+/// degradations.
+fn convert(
+    args: &Args,
+    expr: &Expr,
+    inputs: &[(Option<PathBuf>, String)],
+    target: Format,
+) -> Result<ExitCode, String> {
+    let mut emitted = false;
+    for (path, src) in inputs {
+        let loc = display_path(path.as_deref());
+        let format = detect_format(path.as_deref(), args.format.as_deref())?;
+        let doc = parse_document(format, src).map_err(|e| format!("{loc}: {e}"))?;
+        let out_value = edikt_core::eval(expr, &doc.to_value())
+            .map_err(|e| format!("{loc}: {e}"))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("{loc}: expression produced no value to convert"))?;
+
+        let (output, mut warnings) = emit(target, &out_value).map_err(|e| format!("{loc}: {e}"))?;
+        if doc.has_comments() {
+            warnings.insert(0, "comments were dropped".to_string());
+        }
+        if args.strict && !warnings.is_empty() {
+            return Err(format!("{loc}: {} (--strict)", warnings.join("; ")));
+        }
+        for w in &warnings {
+            eprintln!("edikt: warning: {loc}: {w}");
+        }
+
+        if args.in_place {
+            let p = path
+                .as_ref()
+                .ok_or("cannot convert stdin in place; pass a file")?;
+            std::fs::write(p, output).map_err(|e| format!("writing {}: {e}", p.display()))?;
+        } else {
+            print!("{output}");
+        }
+        emitted = true;
+    }
+    Ok(if emitted {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
 /// Read each input as (path, contents). No files (or `-`) means stdin.
 fn read_inputs(files: &[String]) -> Result<Vec<(Option<PathBuf>, String)>, String> {
     if files.is_empty() {
@@ -178,12 +266,7 @@ fn read_stdin() -> Result<String, String> {
 
 fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, String> {
     if let Some(t) = forced {
-        return match t.to_ascii_lowercase().as_str() {
-            "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
-            "ini" | "cfg" | "conf" => Ok(Format::Ini),
-            "env" | "properties" | "props" => Ok(Format::Env),
-            other => Err(format!("unknown format `{other}`")),
-        };
+        return format_from_name(t);
     }
     // `.env` (and `.env.local`, …) are dotfiles with no extension — match by name.
     if let Some(name) = path.and_then(|p| p.file_name()).and_then(|n| n.to_str())

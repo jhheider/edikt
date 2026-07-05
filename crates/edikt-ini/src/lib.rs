@@ -105,6 +105,63 @@ impl Document for Ini {
     fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
         edit::apply(self, expr)
     }
+    fn has_comments(&self) -> bool {
+        self.root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == Sk::Comment)
+    }
+}
+
+/// Emit a value as INI: top-level scalars become preamble entries, top-level
+/// objects become `[section]`s (deeper nesting flattened to dotted keys), and
+/// arrays flatten to indexed dotted keys. Returns the text and any warnings.
+pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
+    let Value::Object(obj) = value else {
+        return Err(EditError::new("INI output requires a top-level object"));
+    };
+    let mut preamble: Vec<(String, String)> = Vec::new();
+    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut flattened = false;
+
+    for (key, v) in obj {
+        match v {
+            Value::Object(_) => {
+                let entries = edikt_core::convert::flatten(v);
+                if entries.iter().any(|(k, _)| k.contains('.')) {
+                    flattened = true;
+                }
+                sections.push((key.clone(), entries));
+            }
+            Value::Array(_) => {
+                flattened = true;
+                for (dk, dv) in edikt_core::convert::flatten(v) {
+                    preamble.push((format!("{key}.{dk}"), dv));
+                }
+            }
+            _ => preamble.push((key.clone(), edikt_core::convert::scalar_string(v))),
+        }
+    }
+
+    let mut out = String::new();
+    for (k, v) in &preamble {
+        out.push_str(&format!("{k} = {v}\n"));
+    }
+    for (name, entries) in &sections {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("[{name}]\n"));
+        for (k, v) in entries {
+            out.push_str(&format!("{k} = {v}\n"));
+        }
+    }
+
+    let mut warnings = Vec::new();
+    if flattened {
+        warnings.push("nested/array values were flattened to dotted keys".to_string());
+    }
+    Ok((out, warnings))
 }
 
 #[cfg(test)]

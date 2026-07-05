@@ -113,6 +113,31 @@ impl Document for Env {
     fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
         edit::apply(self, expr)
     }
+    fn has_comments(&self) -> bool {
+        self.root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == Sk::Comment)
+    }
+}
+
+/// Emit a value as a flat `.env`: every leaf becomes a `key=value` line, with
+/// nested objects/arrays flattened to dotted keys. Returns the text and warnings.
+pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
+    if !matches!(value, Value::Object(_)) {
+        return Err(EditError::new("env output requires a top-level object"));
+    }
+    let pairs = edikt_core::convert::flatten(value);
+    let flattened = pairs.iter().any(|(k, _)| k.contains('.'));
+    let mut out = String::new();
+    for (k, v) in &pairs {
+        out.push_str(&format!("{k}={v}\n"));
+    }
+    let mut warnings = Vec::new();
+    if flattened {
+        warnings.push("nested/array values were flattened to dotted keys".to_string());
+    }
+    Ok((out, warnings))
 }
 
 #[cfg(test)]

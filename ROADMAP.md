@@ -15,6 +15,9 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   comments, set/del, `FEATURES = [Comments, Sections]`.
 - ✅ **M5 — `.env` / `.properties`.** Flat, string-valued, line-level editing,
   interpret-nothing; `.env` dotfile detection; `FEATURES = [Comments]`.
+- ✅ **M6 — Conversion (`-T`).** Parse → value → emit target (JSON pretty, INI,
+  env); Feature-driven warnings (comments dropped, nesting/arrays flattened),
+  `--strict` promotes to error; `-e` converts a subtree.
 
 ## Milestones
 
@@ -31,9 +34,13 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 - ✅ **M5 — `.env` / `.properties`.** Flat, string-valued, honest line-level
   editing only; `#`/`!` comments; interpret-nothing (no inline comments, no
   interpolation). `FEATURES = [Comments]`. Follow-up: `\` line-continuations.
-- ⬜ **M6 — Format conversion (`-T`).** Feature-driven: derive the source's used
-  features, subtract the target's `FEATURES`, warn (or `--strict` error) per lost
-  feature, degrade per the table in `CLAUDE.md`.
+- ✅ **M6 — Format conversion (`-T`).** Feature-driven: warns per lost feature
+  (`--strict` errors), degrades by flattening to dotted keys. Emitters: JSON
+  (pretty), INI, env. Follow-up: dedicated emitters as new formats land.
+- ⬜ **M8 — YAML & TOML** (newly in scope). The brief called these "already
+  served" by yq/`toml_edit`; the plan now is to bring the common formats
+  in-house. TOML gets a `toml_edit`-style CST head start; YAML (comments +
+  layout) is the ambitious one. Both drop into the `Document`/`Feature` seams.
 - ⬜ **M7 — Release infra.** Coverage job (Coveralls), release workflow
   (cross-platform binaries + `publish-crates`), man page, `--help` polish.
 
@@ -53,8 +60,8 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | `.env` | ✅ in scope (done) | flat, line-level only, interpret nothing |
 | `.properties` (Java) | ✅ in scope (done) | `key=value` / `key:value`; `\` continuations are a follow-up |
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
-| TOML | 🔵 served (`toml_edit`, yq) | KV, but already lossless-editable |
-| YAML | 🔵 served (yq) | comments + mostly layout |
+| TOML | 🟡 planned (M8) | `toml_edit` gives a lossless-CST head start |
+| YAML | 🟡 planned (M8) | comments + layout — the ambitious one (currently served by yq) |
 | XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |
 | HCL (Terraform) | 🟡 candidate | structured devops config |
 | KDL | 🟡 candidate | newer config language |

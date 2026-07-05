@@ -252,6 +252,49 @@ fn creates_new_key_env() {
 }
 
 #[test]
+fn convert_ini_to_json() {
+    let (out, _e, code) = run(&["-t", "ini", "-T", "json"], "[a]\nb = c\n");
+    assert_eq!(out, "{\n  \"a\": {\n    \"b\": \"c\"\n  }\n}\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn convert_jsonc_to_env_flattens_with_warning() {
+    let (out, err, code) = run(&["-t", "jsonc", "-T", "env"], "{ \"A\": { \"B\": 1 } }");
+    assert_eq!(out, "A.B=1\n");
+    assert!(err.contains("flattened"));
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn convert_warns_on_dropped_comments() {
+    let (out, err, code) = run(&["-t", "jsonc", "-T", "json"], "{ /* c */ \"a\": 1 }");
+    assert_eq!(out, "{\n  \"a\": 1\n}\n");
+    assert!(err.contains("comments were dropped"));
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn convert_strict_errors_on_loss() {
+    let (_o, err, code) = run(
+        &["-t", "jsonc", "-T", "json", "--strict"],
+        "{ /* c */ \"a\": 1 }",
+    );
+    assert_eq!(code, 2);
+    assert!(err.contains("comments"));
+}
+
+#[test]
+fn convert_subtree_via_expr() {
+    let (out, _e, code) = run(
+        &["-t", "ini", "-T", "env", "-e", ".server"],
+        "[server]\nhost=x\nport=8080\n",
+    );
+    assert_eq!(out, "host=x\nport=8080\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

@@ -204,6 +204,18 @@ impl Document for Jsonc {
     fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
         edit::apply(self, expr)
     }
+    fn has_comments(&self) -> bool {
+        self.root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| matches!(t.kind(), Sk::LineComment | Sk::BlockComment))
+    }
+}
+
+/// Emit a value as pretty JSON (the JSON/JSONC conversion target). JSON has no
+/// comments, so nothing is dropped here beyond what the source already lost.
+pub fn emit(value: &Value) -> String {
+    edikt_core::convert::to_pretty_json(value)
 }
 
 #[cfg(test)]
