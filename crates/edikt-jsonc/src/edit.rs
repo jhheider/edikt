@@ -8,10 +8,10 @@
 //! M2 scope: `set` (`=` / `|=`) on existing, concrete paths. `del`, append, and
 //! new-key creation arrive in later slices.
 
-use crate::syntax::{Sk, SyntaxNode};
+use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
 use edikt_core::{Document, Expr, Step, Value, eval};
-use rowan::GreenNode;
+use rowan::{GreenNode, NodeOrToken};
 
 /// An edit failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,11 +54,17 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
             apply(doc, a)?;
             apply(doc, b)
         }
-        Expr::Call(name, _) if name == "del" => Err(EditError::new(
-            "del(...) is not supported yet (arrives in a later slice)",
-        )),
+        Expr::Call(name, args) if name == "del" => {
+            if args.len() != 1 {
+                return Err(EditError::new("del(...) takes one path argument"));
+            }
+            let steps = args[0]
+                .as_path()
+                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
+            doc.delete(steps)
+        }
         _ => Err(EditError::new(
-            "expected an assignment: `path = value` or `path |= expr`",
+            "expected an assignment (`path = value`, `path |= expr`) or `del(path)`",
         )),
     }
 }
@@ -116,6 +122,73 @@ fn step_into(value_node: &SyntaxNode, step: &Step) -> Option<SyntaxNode> {
         }
         // Setting through `[]` (all elements) needs multi-target splicing; later.
         Step::Iterate => None,
+    }
+}
+
+/// Find the member with `key` inside an object node.
+pub(crate) fn find_member(object: &SyntaxNode, key: &str) -> Option<SyntaxNode> {
+    object
+        .children()
+        .filter(|n| n.kind() == Sk::Member)
+        .find(|member| {
+            member
+                .children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| t.kind() == Sk::Str)
+                .map(|t| project::unescape(t.text()))
+                .as_deref()
+                == Some(key)
+        })
+}
+
+/// Detach a member together with the whitespace before it (its line indent), so
+/// the whole line disappears. The member owns its trailing comma, so that goes
+/// with it. Operates on a `clone_for_update` tree.
+pub(crate) fn delete_member(member: &SyntaxNode) {
+    let leading_ws = leading_ws_of(&member.prev_sibling_or_token());
+    member.detach();
+    if let Some(ws) = leading_ws {
+        ws.detach();
+    }
+}
+
+/// Detach an array element with exactly one comma+whitespace separator, so no
+/// dangling comma or doubled space is left. Operates on a `clone_for_update` tree.
+pub(crate) fn delete_element(value: &SyntaxNode) {
+    match value.next_sibling_or_token() {
+        // Not the last element: drop this value + the following comma + its ws.
+        Some(NodeOrToken::Token(comma)) if comma.kind() == Sk::Comma => {
+            let trailing_ws = leading_ws_of(&comma.next_sibling_or_token());
+            value.detach();
+            comma.detach();
+            if let Some(ws) = trailing_ws {
+                ws.detach();
+            }
+        }
+        // Last element: drop the preceding whitespace and comma instead.
+        _ => {
+            let leading_ws = leading_ws_of(&value.prev_sibling_or_token());
+            let preceding_comma = match &leading_ws {
+                Some(ws) => ws.prev_sibling_or_token(),
+                None => value.prev_sibling_or_token(),
+            };
+            value.detach();
+            if let Some(ws) = leading_ws {
+                ws.detach();
+            }
+            match preceding_comma {
+                Some(NodeOrToken::Token(comma)) if comma.kind() == Sk::Comma => comma.detach(),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// If the element is a whitespace token, return it.
+fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
+    match elem {
+        Some(NodeOrToken::Token(t)) if t.kind() == Sk::Ws => Some(t.clone()),
+        _ => None,
     }
 }
 

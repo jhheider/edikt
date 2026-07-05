@@ -69,6 +69,8 @@ impl Language for JsoncLang {
 }
 
 pub type SyntaxNode = rowan::SyntaxNode<JsoncLang>;
+pub type SyntaxToken = rowan::SyntaxToken<JsoncLang>;
+pub(crate) type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
 
 /// Raw kind for the green-tree builder.
 pub(crate) fn sk(kind: Sk) -> rowan::SyntaxKind {

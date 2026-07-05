@@ -80,6 +80,14 @@ impl Parser<'_> {
         }
     }
 
+    /// The next non-trivia kind at or after the cursor, without consuming.
+    fn next_significant(&self) -> Option<Sk> {
+        self.toks[self.pos..]
+            .iter()
+            .map(|(k, _)| *k)
+            .find(|k| !is_trivia(*k))
+    }
+
     fn value(&mut self) {
         self.skip_trivia();
         self.builder.start_node(sk(Sk::Value));
@@ -113,9 +121,12 @@ impl Parser<'_> {
                         self.bump();
                     }
                     self.value();
-                    self.skip_trivia();
-                    if self.cur() == Some(Sk::Comma) {
-                        self.bump();
+                    // Absorb the trailing comma into the member — but only if one
+                    // actually follows, so a last member does not swallow the
+                    // whitespace before `}` (which would break clean deletion).
+                    if self.next_significant() == Some(Sk::Comma) {
+                        self.skip_trivia();
+                        self.bump(); // comma
                     }
                     self.builder.finish_node(); // Member
                 }
