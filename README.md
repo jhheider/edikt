@@ -38,6 +38,26 @@ back a file that is byte-identical except for the one value you changed.
 Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
 
+## Why edikt?
+
+Honestly, a weekend project — one that started with a real itch. The problem
+crystallized while reading [*"Respectful" YAML Patching in
+Rust*](https://verrchu.github.io/blog/2-respectful-yaml-patching-in-rust/),
+which surveys the Rust libraries for patching YAML and lands on the gap in one
+line: **none of them preserve both** the formatting *and* the comments. That's
+the exact thing I kept wanting — surgically change one value (or one comment)
+and leave every other byte, comment, and blank line alone — and not just for
+YAML but for the whole pile of config formats a project accumulates.
+
+The good tools each own their corner: `jq` and `yq` for querying, `taplo` and
+`prettier` for formatting, and the excellent `toml_edit` and `kdl-rs` crates for
+lossless edits (edikt is *built on* those last two). edikt isn't trying to
+replace them — it's the piece I couldn't find off the shelf: one jq-flavored
+tool that edits **and** queries **and** converts across JSONC, INI, TOML, YAML,
+KDL, and `.env`, touching only the bytes you point at. If your need is
+single-format, reach for the specialist; if it's "the same surgical edit, across
+all of these," that's the gap this fills.
+
 Status: **alpha** — seven formats with lossless in-place edit, query, and
 conversion (comments carried across); release infra is wired and awaiting the
 first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
