@@ -12,9 +12,10 @@ mod parser;
 mod project;
 mod syntax;
 
-pub use edit::{EditError, apply};
+pub use edikt_core::EditError;
+pub use edit::apply;
 
-use edikt_core::{Document, Feature, Step, Value};
+use edikt_core::{Document, Expr, Feature, Step, Value};
 use syntax::{Sk, SyntaxNode};
 
 /// Capabilities of the JSONC/JSON5 family.
@@ -179,6 +180,9 @@ impl Document for Jsonc {
     }
     fn features(&self) -> &'static [Feature] {
         FEATURES
+    }
+    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
+        edit::apply(self, expr)
     }
 }
 
