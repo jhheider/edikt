@@ -13,6 +13,8 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   format-preserving via the rowan splice — plus `-i` and a format-agnostic CLI.
 - ✅ **M4 — INI.** Line-oriented lossless CST, `.section.key` paths, inline
   comments, set/del, `FEATURES = [Comments, Sections]`.
+- ✅ **M5 — `.env` / `.properties`.** Flat, string-valued, line-level editing,
+  interpret-nothing; `.env` dotfile detection; `FEATURES = [Comments]`.
 
 ## Milestones
 
@@ -25,8 +27,9 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 - ✅ **M4 — INI format module.** Line-oriented lossless CST; `.section.key`
   paths; inline-comment aware; `FEATURES = [Comments, Sections]`. Dialect quirks
   (git config subsections, systemd duplicate keys) are follow-ups.
-- ⬜ **M5 — `.env` / `.properties`.** Flat, string-valued, honest line-level
-  editing only. `FEATURES = [Comments]`.
+- ✅ **M5 — `.env` / `.properties`.** Flat, string-valued, honest line-level
+  editing only; `#`/`!` comments; interpret-nothing (no inline comments, no
+  interpolation). `FEATURES = [Comments]`. Follow-up: `\` line-continuations.
 - ⬜ **M6 — Format conversion (`-T`).** Feature-driven: derive the source's used
   features, subtract the target's `FEATURES`, warn (or `--strict` error) per lost
   feature, degrade per the table in `CLAUDE.md`.
@@ -46,9 +49,9 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | JSONC / JSON5 | ✅ in scope (done) | the headline — `settings.json`, `tsconfig.json`, `devcontainer.json` |
 | JSON | ✅ in scope (done) | read as a JSONC subset |
 | INI | ✅ in scope (done) | `[section]` + `key = value`/`key : value`, inline comments |
-| `.env` | ⬜ in scope (M5) | flat, line-level only, interpret nothing |
-| `.properties` (Java) | ⬜ in scope (M5) | `key=value` / `key:value`, `\` line-continuations |
-| flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`, `.editorconfig`-body) | ⬜ in scope (M5) | env/properties family |
+| `.env` | ✅ in scope (done) | flat, line-level only, interpret nothing |
+| `.properties` (Java) | ✅ in scope (done) | `key=value` / `key:value`; `\` continuations are a follow-up |
+| flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
 | TOML | 🔵 served (`toml_edit`, yq) | KV, but already lossless-editable |
 | YAML | 🔵 served (yq) | comments + mostly layout |
 | XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |

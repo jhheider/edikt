@@ -201,6 +201,36 @@ fn ini_edit_in_place_preserves_layout() {
 }
 
 #[test]
+fn env_query_via_type() {
+    let (out, _e, code) = run(&["-t", "env", ".DEBUG"], "# c\nDEBUG=true\n");
+    assert_eq!(out, "true\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn env_detects_dotenv_by_name() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/.env");
+    std::fs::write(&path, "PORT=8080\n").unwrap();
+    let (out, _e, code) = run(&[".PORT", &path], "");
+    assert_eq!(out, "8080\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn env_edit_in_place() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/edit.env");
+    std::fs::write(&path, "# keep\nDATABASE_URL=old\nDEBUG=true\n").unwrap();
+    let (_o, _e, code) = run(&["-i", "del(.DEBUG)", &path], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# keep\nDATABASE_URL=old\n"
+    );
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

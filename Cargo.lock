@@ -119,6 +119,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "edikt-core",
+ "edikt-env",
  "edikt-ini",
  "edikt-jsonc",
 ]
@@ -133,6 +134,11 @@ dependencies = [
 [[package]]
 name = "edikt-env"
 version = "0.0.0"
+dependencies = [
+ "edikt-core",
+ "edikt-syntax",
+ "rowan",
+]
 
 [[package]]
 name = "edikt-ini"

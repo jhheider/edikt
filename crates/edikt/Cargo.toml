@@ -10,4 +10,5 @@ description = "Format-preserving structured-config editor for the gap formats (J
 edikt-core = { workspace = true }
 edikt-jsonc = { workspace = true }
 edikt-ini = { workspace = true }
+edikt-env = { workspace = true }
 clap = { workspace = true }
