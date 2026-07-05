@@ -163,6 +163,9 @@ fn set_in_node(
         Step::Iterate => Err(EditError::new(
             "`[]` in assignment paths is not supported for KDL",
         )),
+        Step::Comment(_) => Err(EditError::new(
+            "editing comments (`#`) is not supported yet (planned for v0.2)",
+        )),
     }
 }
 
@@ -336,6 +339,9 @@ fn delete_in_node(node: &mut KdlNode, path: &[Step]) -> Result<(), EditError> {
             Ok(())
         }
         Step::Iterate => Err(EditError::new("del(.[]) is not supported for KDL")),
+        Step::Comment(_) => Err(EditError::new(
+            "deleting comments (`#`) is not supported yet (planned for v0.2)",
+        )),
     }
 }
 

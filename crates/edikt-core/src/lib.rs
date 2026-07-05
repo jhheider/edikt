@@ -22,10 +22,10 @@ mod strings;
 mod value;
 
 pub use ast::{BinOp, Expr, Step, render_path};
-pub use comment::{Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
+pub use comment::{CommentKind, Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
 pub use document::Document;
 pub use error::EditError;
-pub use eval::{EvalError, eval};
+pub use eval::{EvalError, eval, eval_with_comments};
 pub use feature::Feature;
 pub use parser::{ParseError, parse};
 pub use value::Value;

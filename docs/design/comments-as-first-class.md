@@ -274,10 +274,12 @@ span-tree splice suffices; don't build the layer.
 
 Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
 
-- **Phase 1 — comment query (read-only).** The `#` namespace for reading
-  (`.foo.#` → head, `.foo.#.inline`/`.foot`), missing = miss, plus the
-  `COMMENT_KINDS` capability. Reuses `Commented`; no write paths. De-risks the
-  addressing surface cheaply, on all formats at once.
+- ✅ **Phase 1 — comment query (read-only).** The `#` namespace for reading
+  (`.foo.#` → head, `.foo.#.inline`/`.foot`, `.#` doc-level, `.items[].#`),
+  missing = miss, optionally piped (`| f`) or defaulted (`// x`), plus the
+  `COMMENT_KINDS` capability per format. Reuses `Commented` via
+  `eval_with_comments`; no write paths. Comment mutation is guarded with a clear
+  "planned for v0.2" error. **Shipped.**
 - **Phase 2 — comment mutation.** The `Document` write methods, easy formats
   first (TOML/KDL → JSONC/INI/env → YAML). Attach / edit-text / delete for
   `head` and `inline`; wrapping + re-wrapping; the layout-reflow warnings.

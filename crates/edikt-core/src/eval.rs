@@ -12,6 +12,7 @@
 //! arrives in a later slice.
 
 use crate::ast::{BinOp, Expr, Step};
+use crate::comment::Commented;
 use crate::strings;
 use crate::value::Value;
 use std::cmp::Ordering;
@@ -30,6 +31,52 @@ impl EvalError {
 }
 
 /// Evaluate `expr` against `input`, returning the output stream.
+/// Evaluate a query that may address comments (`#`) against the document's
+/// commented projection. Comment-free sub-expressions fall back to the plain
+/// value evaluator; a comment path resolves the comment text of each selected
+/// node. Supported in v0.2 Phase 1 as a **read** surface: a comment path
+/// (`.foo.#`, `.foo.#.inline`, `.items[].#`) optionally piped or defaulted
+/// (`| ascii_upcase`, `// "none"`). Comment access after a value pipe, or as an
+/// assignment target, is not yet served and errors clearly.
+pub fn eval_with_comments(expr: &Expr, root: &Commented) -> Result<Vec<Value>, EvalError> {
+    if !expr.has_comment() {
+        return eval(expr, &root.to_value());
+    }
+    match expr {
+        Expr::Path(steps) => Ok(root.resolve_comment(steps)),
+        Expr::Pipe(a, b) => {
+            let mut out = Vec::new();
+            for v in eval_with_comments(a, root)? {
+                // Past the comment, the piped value is an ordinary scalar.
+                out.extend(eval(b, &v)?);
+            }
+            Ok(out)
+        }
+        Expr::Alternative(a, b) => {
+            let truthy: Vec<Value> = eval_with_comments(a, root)?
+                .into_iter()
+                .filter(Value::is_truthy)
+                .collect();
+            if truthy.is_empty() {
+                eval_with_comments(b, root)
+            } else {
+                Ok(truthy)
+            }
+        }
+        Expr::Comma(items) => {
+            let mut out = Vec::new();
+            for it in items {
+                out.extend(eval_with_comments(it, root)?);
+            }
+            Ok(out)
+        }
+        _ => Err(EvalError::new(
+            "comment access (`#`) is a read in v0.2 Phase 1: use `.path.#` \
+             optionally piped (`| f`) or defaulted (`// x`)",
+        )),
+    }
+}
+
 pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
     match expr {
         Expr::Path(steps) => eval_path(steps, input),
@@ -200,6 +247,7 @@ fn set_path(v: &Value, steps: &[Step], new: &Value) -> Result<Value, EvalError> 
                 other.type_name()
             ))),
         },
+        Step::Comment(_) => Err(EvalError::new(comment_mutation_unsupported())),
     }
 }
 
@@ -263,6 +311,7 @@ fn update_path(v: &Value, steps: &[Step], f: &Expr) -> Result<Value, EvalError> 
                 other.type_name()
             ))),
         },
+        Step::Comment(_) => Err(EvalError::new(comment_mutation_unsupported())),
     }
 }
 
@@ -315,6 +364,13 @@ fn apply_step(step: &Step, v: &Value) -> Result<Vec<Value>, EvalError> {
                 other.type_name()
             ))),
         },
+        // A comment step is resolved against the document's commented
+        // projection, not the value stream — see `eval_with_comments`. Reaching
+        // it here means it was used in a spot the value evaluator can't serve.
+        Step::Comment(_) => Err(EvalError::new(
+            "comment access (`#`) resolves only as a whole path like `.foo.#`, \
+             not after a pipe over a value",
+        )),
     }
 }
 
@@ -655,6 +711,7 @@ fn delete_path(v: &Value, steps: &[Step]) -> Result<Value, EvalError> {
                 other.type_name()
             ))),
         },
+        Step::Comment(_) => Err(EvalError::new(comment_mutation_unsupported())),
     }
 }
 
@@ -695,7 +752,13 @@ fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
                 other.type_name()
             ))),
         },
+        Step::Comment(_) => Err(EvalError::new(comment_mutation_unsupported())),
     }
+}
+
+/// The message for a comment edit, which lands in v0.2 Phase 2.
+fn comment_mutation_unsupported() -> &'static str {
+    "editing comments (`#`) is not supported yet (planned for v0.2); reading works — e.g. `edikt '.foo.#' file`"
 }
 
 fn length(v: &Value) -> Result<Value, EvalError> {

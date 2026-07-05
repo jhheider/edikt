@@ -4,6 +4,7 @@
 //! so the evaluator only deals with a handful of node kinds. Mutation forms
 //! (`=`, `|=`, `+=`, `del`) are not parsed yet — they arrive with M2.
 
+use crate::comment::CommentKind;
 use crate::value::Value;
 
 /// One navigation step within a path, applied to the current input.
@@ -15,6 +16,9 @@ pub enum Step {
     Index(i64),
     /// `[]` — iterate array elements / object values.
     Iterate,
+    /// `#` (head) / `#.head` / `#.inline` / `#.foot` — the comment of the node
+    /// reached by the preceding steps. Terminal: no step may follow it.
+    Comment(CommentKind),
 }
 
 /// A binary operator.
@@ -92,6 +96,27 @@ impl Expr {
             _ => None,
         }
     }
+
+    /// Does this expression address a comment (a `#` step) anywhere? The CLI
+    /// routes such queries through the comment-aware evaluator and rejects
+    /// comment mutation (a Phase-2 feature).
+    pub fn has_comment(&self) -> bool {
+        match self {
+            Expr::Path(steps) => steps.iter().any(|s| matches!(s, Step::Comment(_))),
+            Expr::Pipe(a, b) | Expr::Alternative(a, b) | Expr::Binary(_, a, b) => {
+                a.has_comment() || b.has_comment()
+            }
+            Expr::Assign(a, b) | Expr::UpdateAssign(a, b) | Expr::AddAssign(a, b) => {
+                a.has_comment() || b.has_comment()
+            }
+            Expr::Comma(items) => items.iter().any(Expr::has_comment),
+            Expr::Neg(inner) => inner.has_comment(),
+            Expr::Call(_, args) => args.iter().any(Expr::has_comment),
+            Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.has_comment()),
+            Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.has_comment()),
+            Expr::Literal(_) => false,
+        }
+    }
 }
 
 /// Render a path of steps back to jq-ish source text (`.a.b[0]`, `.["a.b"]`) for
@@ -112,6 +137,8 @@ pub fn render_path(steps: &[Step]) -> String {
             Step::Field(k) => out.push_str(&format!(".[{k:?}]")),
             Step::Index(i) => out.push_str(&format!("[{i}]")),
             Step::Iterate => out.push_str("[]"),
+            Step::Comment(crate::CommentKind::Head) => out.push_str(".#"),
+            Step::Comment(kind) => out.push_str(&format!(".#.{}", kind.as_str())),
         }
     }
     out

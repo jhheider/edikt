@@ -522,6 +522,49 @@ fn yaml_edit_is_lossless() {
 }
 
 #[test]
+fn comment_query_reads_by_kind() {
+    // Head comment via `#` (JSONC).
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".strict.#"],
+        "{\n  // the strict flag\n  \"strict\": true\n}",
+    );
+    assert_eq!(out, "the strict flag\n");
+    assert_eq!(code, 0);
+
+    // Inline via `#.inline` (YAML), and transform through a pipe.
+    let (up, _e, c2) = run(
+        &["-t", "yaml", ".web.image.#.inline | ascii_upcase"],
+        "web:\n  image: nginx # pinned\n",
+    );
+    assert_eq!(up, "PINNED\n");
+    assert_eq!(c2, 0);
+
+    // Iterate comments in one path: `.services[].#.inline`.
+    let (each, _e, c3) = run(
+        &["-t", "yaml", ".services[].#.inline"],
+        "services:\n  web: 1 # frontend\n  db: 2 # store\n",
+    );
+    assert_eq!(each, "frontend\nstore\n");
+    assert_eq!(c3, 0);
+
+    // A missing comment is a sed-shaped miss (silent, exit 0); `//` defaults it.
+    let (miss, _e, c4) = run(&["-t", "jsonc", ".a.#"], "{ \"a\": 1 }");
+    assert_eq!(miss, "");
+    assert_eq!(c4, 0);
+    let (dflt, _e, c5) = run(&["-t", "jsonc", r#".a.# // "none""#], "{ \"a\": 1 }");
+    assert_eq!(dflt, "none\n");
+    assert_eq!(c5, 0);
+}
+
+#[test]
+fn comment_mutation_is_guarded_until_phase_2() {
+    let (_o, err, code) = run(&["-t", "jsonc", r#".a.# = "x""#], "{ \"a\": 1 }");
+    assert_eq!(code, 2);
+    assert!(err.contains("not supported yet"), "got: {err}");
+    assert!(err.contains("v0.2"), "got: {err}");
+}
+
+#[test]
 fn kdl_query_edit_and_convert() {
     // Query a nested child node's argument.
     let src = "server {\n    port 8080\n    host \"0.0.0.0\"\n}\n";

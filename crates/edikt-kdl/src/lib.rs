@@ -20,8 +20,13 @@ pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::{apply, emit};
 
-use edikt_core::{Document, Expr, Feature, Step, Value};
+use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value};
 use kdl::KdlDocument;
+
+/// Comment kinds this format supports (empty ⇒ none); the comment
+/// capability, subsuming the boolean `Feature::Comments`.
+pub const COMMENT_KINDS: &[CommentKind] =
+    &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
 
 /// Capabilities of KDL: comments, nesting, arrays, and typed scalars.
 pub const FEATURES: &[Feature] = &[

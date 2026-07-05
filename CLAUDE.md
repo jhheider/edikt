@@ -79,6 +79,12 @@ an *edit* language, not a general-purpose one.
 - multi-output `.a, .b, .c`
 - alternative `EXPR // EXPR` — the left's truthy outputs, else the right
   (a miss, `null`, or `false` falls back; a type *error* still propagates)
+- comment (read) `.foo.#` — the head comment of a node as a string; `.foo.#.head`
+  / `.foo.#.inline` / `.foo.#.foot` pick a kind, `.#` is the document banner,
+  `.items[].#` reads each element's. Terminal (nothing navigates past it); a
+  missing comment is a miss. *Editing* comments is a v0.2 milestone (see
+  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md));
+  today `#` is read-only, and a comment on the left of an assignment errors.
 - filter `.items[] | select(.enabled == true)`
 
 **Mutation**

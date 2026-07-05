@@ -15,8 +15,13 @@ pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::apply;
 
-use edikt_core::{Document, Expr, Feature, Value};
+use edikt_core::{CommentKind, Document, Expr, Feature, Value};
 use syntax::{Sk, SyntaxNode};
+
+/// Comment kinds this format supports (empty ⇒ none); the comment
+/// capability, subsuming the boolean `Feature::Comments`. No inline: a `#`
+/// inside a value is data, not a comment.
+pub const COMMENT_KINDS: &[CommentKind] = &[CommentKind::Head, CommentKind::Foot];
 
 /// Capabilities: comments only. Flat and string-valued — no nesting, arrays,
 /// typed scalars, or sections.

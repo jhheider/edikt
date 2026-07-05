@@ -17,8 +17,13 @@ pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::apply;
 
-use edikt_core::{Document, Expr, Feature, Step, Value};
+use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value};
 use syntax::{Sk, SyntaxNode};
+
+/// Comment kinds this format supports (empty ⇒ none); the comment
+/// capability, subsuming the boolean `Feature::Comments`.
+pub const COMMENT_KINDS: &[CommentKind] =
+    &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
 
 /// Capabilities of the JSONC/JSON5 family.
 pub const FEATURES: &[Feature] = &[
@@ -143,6 +148,9 @@ impl Jsonc {
                 Ok(())
             }
             Step::Iterate => Err(EditError::new("del(.[]) is not supported yet")),
+            Step::Comment(_) => Err(EditError::new(
+                "deleting comments (`#`) is not supported yet (planned for v0.2)",
+            )),
         }
     }
 }

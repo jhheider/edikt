@@ -15,6 +15,30 @@
 
 use crate::{Step, Value};
 
+/// One of the three comment kinds in the uniform model. Which kinds a format
+/// supports is its comment capability — each format declares a
+/// `COMMENT_KINDS: &[CommentKind]` (empty ⇒ no comments, subsuming the boolean
+/// `Feature::Comments`). The `#` accessor addresses a node's comment by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommentKind {
+    /// Own-line comment(s) before the node — what `#` alone selects.
+    Head,
+    /// A trailing comment on the node's line.
+    Inline,
+    /// Own-line comment(s) after the node.
+    Foot,
+}
+
+impl CommentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommentKind::Head => "head",
+            CommentKind::Inline => "inline",
+            CommentKind::Foot => "foot",
+        }
+    }
+}
+
 /// The comments attached to one node, by kind.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Comments {
@@ -29,6 +53,18 @@ pub struct Comments {
 impl Comments {
     pub fn is_empty(&self) -> bool {
         self.head.is_empty() && self.inline.is_none() && self.foot.is_empty()
+    }
+
+    /// The text of one kind as a single string, or `None` if that kind is
+    /// absent — head/foot lines join with a space (they read back unwrapped,
+    /// per the wrapping design; the emitter re-wraps on write).
+    pub fn get(&self, kind: CommentKind) -> Option<String> {
+        match kind {
+            CommentKind::Head if !self.head.is_empty() => Some(self.head.join(" ")),
+            CommentKind::Foot if !self.foot.is_empty() => Some(self.foot.join(" ")),
+            CommentKind::Inline => self.inline.clone(),
+            _ => None,
+        }
     }
 }
 
@@ -153,6 +189,21 @@ impl Commented {
         }
         stream
     }
+
+    /// Resolve a comment-addressing path (a value prefix ending in a terminal
+    /// [`Step::Comment`]) to the comment text of each selected node, as a
+    /// stream of `Value::Str`. A node without that comment kind contributes
+    /// nothing — a miss, matching the rest of the language. The `Comment` step
+    /// is terminal by construction (the parser forbids steps after it).
+    pub fn resolve_comment(&self, path: &[Step]) -> Vec<Value> {
+        let Some((Step::Comment(kind), prefix)) = path.split_last() else {
+            return Vec::new();
+        };
+        self.descend(prefix)
+            .into_iter()
+            .filter_map(|n| n.comments.get(*kind).map(Value::Str))
+            .collect()
+    }
 }
 
 /// One flattened `key = value` line with the comments it carries — the shape
@@ -238,6 +289,55 @@ mod tests {
             },
             node,
         }
+    }
+
+    #[test]
+    fn resolve_comment_reads_by_kind() {
+        let tree = Commented {
+            comments: Comments {
+                head: vec!["banner".into()],
+                inline: None,
+                foot: Vec::new(),
+            },
+            node: CommentedNode::Object(vec![
+                (
+                    "a".into(),
+                    commented(
+                        &["one", "two"],
+                        Some("why"),
+                        CommentedNode::Scalar(Value::Int(1)),
+                    ),
+                ),
+                ("b".into(), Commented::scalar(Value::Int(2))),
+            ]),
+        };
+        let head = Step::Comment(CommentKind::Head);
+        let inline = Step::Comment(CommentKind::Inline);
+        // `.a.#` (head): multi-line joins with a space.
+        assert_eq!(
+            tree.resolve_comment(&[Step::Field("a".into()), head.clone()]),
+            vec![Value::Str("one two".into())]
+        );
+        // `.a.#.inline`.
+        assert_eq!(
+            tree.resolve_comment(&[Step::Field("a".into()), inline]),
+            vec![Value::Str("why".into())]
+        );
+        // `.#` — the document banner.
+        assert_eq!(
+            tree.resolve_comment(std::slice::from_ref(&head)),
+            vec![Value::Str("banner".into())]
+        );
+        // A node with no comment of that kind → miss (empty).
+        assert!(
+            tree.resolve_comment(&[Step::Field("b".into()), head.clone()])
+                .is_empty()
+        );
+        // A missing node → miss.
+        assert!(
+            tree.resolve_comment(&[Step::Field("nope".into()), head])
+                .is_empty()
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! into a `Path` of steps.
 
 use crate::ast::{BinOp, Expr, Step};
+use crate::comment::CommentKind;
 use crate::lexer::Lx;
 use crate::value::Value;
 use logos::Logos;
@@ -317,6 +318,23 @@ impl Parser {
                         steps.push(Step::Index(if neg { -n } else { n }));
                     }
                 }
+                Some(Lx::Hash) => {
+                    // `#` addresses the current node's comment. `#` alone is the
+                    // head comment; `#.head`/`#.inline`/`#.foot` pick a kind.
+                    // Terminal — no navigation follows a comment.
+                    self.pos += 1;
+                    let mut kind = CommentKind::Head;
+                    if self.peek() == Some(Lx::Dot)
+                        && let Some(word) =
+                            self.toks.get(self.pos + 1).filter(|t| t.kind == Lx::Ident)
+                        && let Some(k) = comment_kind(&word.text)
+                    {
+                        self.pos += 2; // consume `.` and the kind word
+                        kind = k;
+                    }
+                    steps.push(Step::Comment(kind));
+                    break;
+                }
                 _ => break,
             }
             match self.peek() {
@@ -352,6 +370,16 @@ impl Parser {
         } else {
             Ok(Expr::Call(name, Vec::new()))
         }
+    }
+}
+
+/// Map a `#.<word>` refinement to its comment kind.
+fn comment_kind(word: &str) -> Option<CommentKind> {
+    match word {
+        "head" => Some(CommentKind::Head),
+        "inline" => Some(CommentKind::Inline),
+        "foot" => Some(CommentKind::Foot),
+        _ => None,
     }
 }
 
@@ -506,5 +534,46 @@ mod tests {
         assert!(parse("(").is_err());
         assert!(parse(".a b").is_err()); // trailing token
         assert!(parse("@").is_err()); // bad char
+    }
+
+    #[test]
+    fn comment_accessor() {
+        use crate::comment::CommentKind;
+        // `#` alone is the head comment.
+        assert_eq!(
+            p(".foo.#"),
+            Expr::Path(vec![
+                Step::Field("foo".into()),
+                Step::Comment(CommentKind::Head)
+            ])
+        );
+        // `#.head` / `#.inline` / `#.foot` pick a kind.
+        assert_eq!(
+            p(".foo.#.inline"),
+            Expr::Path(vec![
+                Step::Field("foo".into()),
+                Step::Comment(CommentKind::Inline)
+            ])
+        );
+        assert_eq!(
+            p(".a.#.foot"),
+            Expr::Path(vec![
+                Step::Field("a".into()),
+                Step::Comment(CommentKind::Foot)
+            ])
+        );
+        // `.#` at the top is the document comment.
+        assert_eq!(p(".#"), Expr::Path(vec![Step::Comment(CommentKind::Head)]));
+        // After iteration: `.items[].#`.
+        assert_eq!(
+            p(".items[].#"),
+            Expr::Path(vec![
+                Step::Field("items".into()),
+                Step::Iterate,
+                Step::Comment(CommentKind::Head)
+            ])
+        );
+        // Comment is terminal — nothing may navigate past it.
+        assert!(parse(".foo.#.bar").is_err());
     }
 }
