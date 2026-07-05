@@ -10,7 +10,7 @@
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
-use edikt_core::{Document, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, Expr, Step, Value, eval};
 use rowan::{GreenNode, NodeOrToken};
 
 /// An edit failure.
@@ -50,6 +50,20 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
             let value = eval_one(rhs, &current)?;
             doc.set(steps, &value)
         }
+        Expr::AddAssign(lhs, rhs) => {
+            let steps = assign_path(lhs)?;
+            let current = doc
+                .value_at(steps)
+                .ok_or_else(|| EditError::new("path not found"))?;
+            let whole = doc.to_value();
+            let addend = eval_one(rhs, &whole)?;
+            match (&current, &addend) {
+                // Array + array → format-preserving element insert.
+                (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
+                // Everything else (number, string) → compute and replace the node.
+                _ => doc.set(steps, &add_values(&current, &addend)?),
+            }
+        }
         Expr::Pipe(a, b) => {
             apply(doc, a)?;
             apply(doc, b)
@@ -80,6 +94,16 @@ fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
         .into_iter()
         .next()
         .ok_or_else(|| EditError::new("right side of the assignment produced no value"))
+}
+
+/// Compute `current + addend` using the evaluator's `+` semantics.
+fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
+    let expr = Expr::Binary(
+        BinOp::Add,
+        Box::new(Expr::Path(Vec::new())),
+        Box::new(Expr::Literal(addend.clone())),
+    );
+    eval_one(&expr, current)
 }
 
 /// Walk `path` from the document root to the target value node.
@@ -190,6 +214,72 @@ fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
         Some(NodeOrToken::Token(t)) if t.kind() == Sk::Ws => Some(t.clone()),
         _ => None,
     }
+}
+
+/// Insert `items` at the end of an array's source text, matching its existing
+/// style (single-line `, x`; multi-line newline + indent + trailing comma). All
+/// original bytes are preserved — only the new elements are added.
+pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
+    let new_elems: Vec<String> = items.iter().map(|v| v.to_json()).collect();
+    // `orig` is exactly an array node: starts with `[`, ends with `]` (both ASCII).
+    let inner = &orig[1..orig.len() - 1];
+    let body = inner.trim_end();
+    let close_ws = &inner[body.len()..];
+
+    if body.is_empty() {
+        return format!("[{}]", new_elems.join(", "));
+    }
+
+    let mut out = String::from("[");
+    out.push_str(body);
+    let has_trailing_comma = body.ends_with(',');
+    if inner.contains('\n') {
+        let indent = detect_indent(inner);
+        if !has_trailing_comma {
+            out.push(',');
+        }
+        for elem in &new_elems {
+            out.push('\n');
+            out.push_str(&indent);
+            out.push_str(elem);
+            out.push(',');
+        }
+    } else if has_trailing_comma {
+        for elem in &new_elems {
+            out.push(' ');
+            out.push_str(elem);
+            out.push(',');
+        }
+    } else {
+        for elem in &new_elems {
+            out.push_str(", ");
+            out.push_str(elem);
+        }
+    }
+    out.push_str(close_ws);
+    out.push(']');
+    out
+}
+
+/// The indentation of the first non-blank line inside an array body.
+fn detect_indent(inner: &str) -> String {
+    for line in inner.split('\n') {
+        let trimmed = line.trim_start();
+        if !trimmed.is_empty() {
+            return line[..line.len() - trimmed.len()].to_string();
+        }
+    }
+    "  ".to_string()
+}
+
+/// Parse array source text and return its `Array` node's green subtree.
+pub(crate) fn array_green_from_text(text: &str) -> GreenNode {
+    let root = SyntaxNode::new_root(parser::build(text));
+    root.descendants()
+        .find(|n| n.kind() == Sk::Array)
+        .expect("array text always has an array node")
+        .green()
+        .into_owned()
 }
 
 /// Build a `Value`-node green subtree by rendering `value` as compact JSON and

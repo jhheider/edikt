@@ -72,6 +72,13 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
             Ok(out)
         }
         Expr::Call(name, args) => eval_call(name, args, input),
+        Expr::Collect(inner) => {
+            let items = match inner {
+                Some(e) => eval(e, input)?,
+                None => Vec::new(),
+            };
+            Ok(vec![Value::Array(items)])
+        }
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
             let mut out = Vec::new();
@@ -83,6 +90,19 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
             Ok(vec![update_path(input, steps, rhs)?])
+        }
+        Expr::AddAssign(lhs, rhs) => {
+            let steps = assign_path(lhs)?;
+            let mut out = Vec::new();
+            for rv in eval(rhs, input)? {
+                let current = eval_path(steps, input)?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(Value::Null);
+                let sum = binary(BinOp::Add, &current, &rv)?;
+                out.push(set_path(input, steps, &sum)?);
+            }
+            Ok(out)
         }
     }
 }
@@ -304,9 +324,12 @@ fn binary(op: BinOp, a: &Value, b: &Value) -> Result<Value, EvalError> {
     }
 }
 
-/// `+` is overloaded: numeric addition, string concat, and array concat.
+/// `+` is overloaded: `null` is the identity, plus numeric addition, string
+/// concat, and array concat.
 fn add(a: &Value, b: &Value) -> Result<Value, EvalError> {
     match (a, b) {
+        (Value::Null, _) => Ok(b.clone()),
+        (_, Value::Null) => Ok(a.clone()),
         (Value::Str(x), Value::Str(y)) => Ok(Value::Str(format!("{x}{y}"))),
         (Value::Array(x), Value::Array(y)) => {
             let mut v = x.clone();
@@ -890,5 +913,32 @@ mod tests {
         let r = run("del(.a.b)", &doc);
         assert!(run(".a.b", &r[0]).is_empty());
         assert_eq!(one(".a.c", &r[0]), Value::Int(2));
+    }
+
+    #[test]
+    fn add_assign_number_string_array() {
+        let doc = obj(&[
+            ("count", Value::Int(5)),
+            ("name", Value::Str("edikt".into())),
+            ("list", Value::Array(vec![Value::Int(1)])),
+        ]);
+        assert_eq!(one(".count", &run(".count += 3", &doc)[0]), Value::Int(8));
+        assert_eq!(
+            one(".name", &run(".name += \"!\"", &doc)[0]),
+            Value::Str("edikt!".into())
+        );
+        let appended = run(".list += [2, 3]", &doc);
+        assert_eq!(
+            run(".list[]", &appended[0]),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+    }
+
+    #[test]
+    fn add_assign_null_identity() {
+        // A missing key is `null`; `null + [x] == [x]`, so `+=` creates it.
+        let doc = obj(&[("a", Value::Int(1))]);
+        let r = run(".tags += [\"x\"]", &doc);
+        assert_eq!(run(".tags[]", &r[0]), vec![Value::Str("x".into())]);
     }
 }
