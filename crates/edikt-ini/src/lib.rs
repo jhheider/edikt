@@ -6,11 +6,13 @@
 //! the section-less preamble); values are strings. Edits touch only the targeted
 //! value or line.
 
+mod comments;
 mod edit;
 mod parser;
 mod project;
 mod syntax;
 
+pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::apply;
 
@@ -114,57 +116,17 @@ impl Document for Ini {
             .filter_map(|e| e.into_token())
             .any(|t| t.kind() == Sk::Comment)
     }
+    fn to_commented(&self) -> Option<edikt_core::Commented> {
+        Some(comments::to_commented(&self.root))
+    }
 }
 
 /// Emit a value as INI: top-level scalars become preamble entries, top-level
 /// objects become `[section]`s (deeper nesting flattened to dotted keys), and
 /// arrays flatten to indexed dotted keys. Returns the text and any warnings.
+/// (The comment-free case of [`emit_commented`].)
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
-    let Value::Object(obj) = value else {
-        return Err(EditError::new("INI output requires a top-level object"));
-    };
-    let mut preamble: Vec<(String, String)> = Vec::new();
-    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    let mut flattened = false;
-
-    for (key, v) in obj {
-        match v {
-            Value::Object(_) => {
-                let entries = edikt_core::convert::flatten(v);
-                if entries.iter().any(|(k, _)| k.contains('.')) {
-                    flattened = true;
-                }
-                sections.push((key.clone(), entries));
-            }
-            Value::Array(_) => {
-                flattened = true;
-                for (dk, dv) in edikt_core::convert::flatten(v) {
-                    preamble.push((format!("{key}.{dk}"), dv));
-                }
-            }
-            _ => preamble.push((key.clone(), edikt_core::convert::scalar_string(v))),
-        }
-    }
-
-    let mut out = String::new();
-    for (k, v) in &preamble {
-        out.push_str(&format!("{k} = {v}\n"));
-    }
-    for (name, entries) in &sections {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&format!("[{name}]\n"));
-        for (k, v) in entries {
-            out.push_str(&format!("{k} = {v}\n"));
-        }
-    }
-
-    let mut warnings = Vec::new();
-    if flattened {
-        warnings.push("nested/array values were flattened to dotted keys".to_string());
-    }
-    Ok((out, warnings))
+    comments::emit_commented(&edikt_core::Commented::from_value(value))
 }
 
 #[cfg(test)]
@@ -300,6 +262,67 @@ mod tests {
             count += 1;
         }
         assert!(count >= 3, "expected several ini fixtures, found {count}");
+    }
+
+    // --- comment model (extraction + commented emit) -----------------------
+
+    #[test]
+    fn extracts_comments_by_kind() {
+        let doc = parse(SAMPLE).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        // `; app config` precedes the preamble key `global`.
+        assert_eq!(top[0].0, "global");
+        assert_eq!(top[0].1.comments.head, vec!["app config"]);
+        // `port=8080        ; inline text` — the entry's inline comment.
+        let edikt_core::CommentedNode::Object(server) = &top[1].1.node else {
+            panic!("expected section object");
+        };
+        assert_eq!(server[1].0, "port");
+        assert_eq!(server[1].1.comments.inline.as_deref(), Some("inline text"));
+    }
+
+    #[test]
+    fn section_head_and_trailing_foot() {
+        let src = "; before server\n[server]  ; svc\nhost = x\n; done\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(top[0].1.comments.head, vec!["before server"]);
+        assert_eq!(top[0].1.comments.inline.as_deref(), Some("svc"));
+        let edikt_core::CommentedNode::Object(server) = &top[0].1.node else {
+            panic!("expected section object");
+        };
+        assert_eq!(server[0].1.comments.foot, vec!["done"]);
+    }
+
+    #[test]
+    fn commented_emit_places_all_kinds() {
+        let c = parse(SAMPLE).unwrap().to_commented().unwrap();
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(
+            out,
+            "; app config\nglobal = 1\n\n[server]\nhost = 0.0.0.0\nport = 8080  ; inline text\n\n[logging]\nlevel = info\n"
+        );
+        // The emitted INI re-parses with the same comments and values.
+        let again = parse(&out).unwrap().to_commented().unwrap();
+        assert_eq!(again, c);
+    }
+
+    #[test]
+    fn plain_emit_matches_comment_free_output() {
+        let v = parse(SAMPLE).unwrap().to_value();
+        let (out, warnings) = emit(&v).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(
+            out,
+            "global = 1\n\n[server]\nhost = 0.0.0.0\nport = 8080\n\n[logging]\nlevel = info\n"
+        );
     }
 
     #[test]

@@ -276,6 +276,61 @@ fn convert_jsonc_to_env_flattens_with_warning() {
 }
 
 #[test]
+fn convert_carries_comments_across_formats() {
+    // JSONC → YAML: head and inline comments arrive in YAML syntax, silently
+    // (nothing was lost, so nothing warns).
+    let src =
+        "{\n  // compiler settings\n  \"opts\": { \"target\": \"ES2020\" /* language level */ }\n}";
+    let (out, err, code) = run(&["-t", "jsonc", "-T", "yaml"], src);
+    assert_eq!(
+        out,
+        "# compiler settings\nopts:\n  target: ES2020 # language level\n"
+    );
+    assert_eq!(err, "", "a fully-carried conversion must not warn");
+    assert_eq!(code, 0);
+
+    // YAML → TOML and YAML → JSONC carry them too.
+    let y = "# stack\nweb:\n  image: nginx # pinned\n";
+    let (toml, err2, c2) = run(&["-t", "yaml", "-T", "toml"], y);
+    assert!(toml.contains("# stack\n[web]"), "got: {toml}");
+    assert!(toml.contains("image = \"nginx\" # pinned"), "got: {toml}");
+    assert_eq!(err2, "");
+    assert_eq!(c2, 0);
+
+    let (jsonc, _e, c3) = run(&["-t", "yaml", "-T", "jsonc"], y);
+    assert!(jsonc.contains("// stack"), "got: {jsonc}");
+    assert!(
+        jsonc.contains("\"image\": \"nginx\" // pinned"),
+        "got: {jsonc}"
+    );
+    assert_eq!(c3, 0);
+}
+
+#[test]
+fn convert_comment_remap_warns_and_strict_errors() {
+    // env has no inline comments: the comment moves to its own line, warned.
+    let (out, err, code) = run(&["-t", "yaml", "-T", "env"], "A: 1 # why\n");
+    assert_eq!(out, "# why\nA=1\n");
+    assert!(err.contains("inline comments moved"), "got: {err}");
+    assert_eq!(code, 0);
+
+    let (_o, err2, c2) = run(&["-t", "yaml", "-T", "env", "--strict"], "A: 1 # why\n");
+    assert_eq!(c2, 2);
+    assert!(err2.contains("inline comments moved"), "got: {err2}");
+}
+
+#[test]
+fn synthesized_conversion_still_warns_on_commented_source() {
+    // A computed result carries no comments; converting a commented source
+    // through one stays an honest, warned drop.
+    let y = "# stack\nweb:\n  a: 1\n  b: 2\n";
+    let (out, err, code) = run(&["-t", "yaml", "-T", "json", ".web | keys"], y);
+    assert_eq!(out, "[\n  \"a\",\n  \"b\"\n]\n");
+    assert!(err.contains("comments were dropped"), "got: {err}");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn convert_warns_on_dropped_comments() {
     let (out, err, code) = run(&["-t", "jsonc", "-T", "json"], "{ /* c */ \"a\": 1 }");
     assert_eq!(out, "{\n  \"a\": 1\n}\n");

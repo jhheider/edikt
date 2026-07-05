@@ -125,7 +125,9 @@ edikt is in exactly one mode per run, decided by the expression:
   (format-preserving get: exact bytes, comments, layout; YAML block collections
   dedented to the margin so the fragment stands alone).
 - **structural, otherwise** (computed result, or output ≠ input) → the value
-  **emitted via the output format's emitter** (data-model; trivia dropped).
+  **emitted via the output format's emitter**. Layout is the emitter's own, but
+  a **pure-path** selection carries its **comments** across (the uniform
+  comment model — see conversion below); a synthesized value has none to carry.
   Lossy degradations warn (`--strict` promotes); a value the output format
   **cannot represent errors, naming the formats that can** (derived from
   `Feature` sets).
@@ -184,8 +186,20 @@ The set is consulted in two places:
 ## Format conversion (`-T`, data-model mode)
 
 Cheap given the `Value` projection the language already needs — but honest:
-**conversion drops trivia; it is not format-preserving.** `-T FMT` (≠ input)
-parses → `Value` → applies the expression → **emits the target format**.
+**conversion re-emits; it is not format-preserving.** Layout is the target
+emitter's own. **Comments, though, are carried** across via a **uniform comment
+model**: a shared vocabulary of three kinds — *head* (own-line, before a node),
+*inline* (trailing on the node's line), *foot* (own-line, after a container's
+last node) — held in `Commented` (a `Value` enriched with per-node comments).
+Each format parses its comments *out* to the model (`Document::to_commented`)
+and each emitter places them back in its own syntax (`//`, `;`, `#`): N-in +
+N-out against one model, not N×N per pair. A kind the target's grammar can't
+hold **remaps** to one it can, with a warning (env has no inline comments →
+own line); a target with no `Comments` feature at all (JSON) **drops** them,
+with a warning. Comments ride **pure-path** selections; a computed result has
+none to carry, so converting a commented source through one warns. `-T FMT`
+(≠ input) parses → `Value` (+ commented projection) → applies the expression →
+**emits the target format**.
 
 Feasibility is **derived from `Feature`, not a hardcoded lattice.** Compute the
 features the *source document actually uses* (are there comments? nesting depth
@@ -195,7 +209,7 @@ does the best-effort conversion:
 
 | lost feature | degradation |
 |---|---|
-| Comments | dropped |
+| Comments | carried (uniform model, re-delimited natively); dropped — warned — only for a `Comments`-less target (JSON) or a synthesized value |
 | Nesting | flattened to dotted keys (`a.b.c = v`, the `java.util.Properties` convention; inverse un-flattens on the way in) |
 | Arrays | indexed dotted keys (`a.0`, `a.1`) |
 | TypedScalars | scalars stringified |
@@ -215,12 +229,13 @@ Workspace; each format is an isolated module with no cross-coupling.
 
 - **`edikt`** (bin) — clap CLI; I/O + `-i` orchestration; mode dispatch;
   format detection; output contract; exit codes.
-- **`edikt-core`** (lib) — the `Value` model; the `Feature` enum; the
-  **expression language** (its own `logos` lexer + Pratt parser + evaluator /
-  value calculus / function registry); the **`Document` trait** (format-agnostic
-  seam: resolve path → node handle(s), read value/source-slice, format-preserving
-  replace, delete, append) and a **`Convert` trait** (`Value` ↔ per-format
-  emitter).
+- **`edikt-core`** (lib) — the `Value` model; the `Commented` model (a `Value`
+  enriched with head/inline/foot comments, for comment-preserving conversion);
+  the `Feature` enum; the **expression language** (its own `logos` lexer +
+  Pratt parser + evaluator / value calculus / function registry); the
+  **`Document` trait** (format-agnostic seam: resolve path → node handle(s),
+  read value/source-slice/commented projection, format-preserving replace,
+  delete, append) and a **`Convert` trait** (`Value` ↔ per-format emitter).
 - **`edikt-syntax`** (lib) — shared **rowan** substrate: green-tree helpers,
   generic lossless serialize (walk green tree → concat token text), splice /
   structural-sharing edit utilities usable by any format's `SyntaxKind`.
@@ -291,6 +306,8 @@ Live status and the full backlog live in [`ROADMAP.md`](./ROADMAP.md). In brief:
   Feature-driven warnings).
 - ✅ **M8** TOML (lossless via `toml_edit`) and YAML (lossless via pure-Rust
   `libyaml-safer` span-tree splice) — edit + query + convert.
+- ✅ **Comment-preserving conversion** — the uniform head/inline/foot comment
+  model, extracted and re-emitted by all six formats.
 - **M3** builtin/query polish and **M7** release infra remain (release infra is
   intentionally last — see ROADMAP).
 

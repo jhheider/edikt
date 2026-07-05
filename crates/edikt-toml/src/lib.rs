@@ -4,9 +4,11 @@
 //! so edikt gets lossless TOML (comments, spacing, table layout) essentially for
 //! free, and the moat holds without a hand-rolled CST.
 
+mod comments;
 mod edit;
 mod project;
 
+pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::{apply, emit};
 
@@ -128,6 +130,9 @@ impl Document for Toml {
     fn has_comments(&self) -> bool {
         self.had_comments
     }
+    fn to_commented(&self) -> Option<edikt_core::Commented> {
+        Some(comments::to_commented(&self.doc))
+    }
 }
 
 #[cfg(test)]
@@ -192,6 +197,75 @@ mod tests {
         assert!(!edit_src(SAMPLE, "del(.dependencies.rowan)").contains("rowan"));
         // new key in an existing table
         assert!(edit_src(SAMPLE, r#".package.edition = "2024""#).contains("edition = \"2024\""));
+    }
+
+    // --- comment model (extraction + commented emit) -----------------------
+
+    #[test]
+    fn extracts_comments_by_kind() {
+        let doc = parse(SAMPLE).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        // `# package` precedes the [package] header.
+        assert_eq!(top[0].0, "package");
+        assert_eq!(top[0].1.comments.head, vec!["package"]);
+        let edikt_core::CommentedNode::Object(pkg) = &top[0].1.node else {
+            panic!("expected table object");
+        };
+        // `version = "0.1.0"   # semver` — the entry's inline comment.
+        assert_eq!(pkg[1].0, "version");
+        assert_eq!(pkg[1].1.comments.inline.as_deref(), Some("semver"));
+    }
+
+    #[test]
+    fn extracts_array_element_and_trailing_comments() {
+        let src = "xs = [\n  1, # one\n  # about two\n  2,\n]\n# trailing\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        let edikt_core::CommentedNode::Array(items) = &top[0].1.node else {
+            panic!("expected array");
+        };
+        assert_eq!(items[0].comments.inline.as_deref(), Some("one"));
+        assert_eq!(items[1].comments.head, vec!["about two"]);
+        // Document-trailing comments land as the deepest last entry's foot.
+        assert_eq!(items[1].comments.foot, vec!["trailing"]);
+    }
+
+    #[test]
+    fn commented_emit_places_all_kinds() {
+        let c = parse(SAMPLE).unwrap().to_commented().unwrap();
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert!(warnings.is_empty());
+        assert!(out.contains("# package\n[package]"), "got: {out}");
+        assert!(out.contains("version = \"0.1.0\" # semver"), "got: {out}");
+        // The emitted TOML re-parses with the same comments and values.
+        let again = parse(&out).unwrap().to_commented().unwrap();
+        assert_eq!(again, c);
+    }
+
+    #[test]
+    fn commented_emit_multiline_array_round_trips() {
+        let src = "xs = [\n  1, # one\n  # about two\n  2,\n]\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+        let again = parse(&out).unwrap().to_commented().unwrap();
+        assert_eq!(again, c, "emitted:\n{out}");
+    }
+
+    #[test]
+    fn plain_emit_matches_commented_emit_without_comments() {
+        for src in [SAMPLE, "a = 1\nb = 2\n\n[t]\nx = true\n"] {
+            let v = parse(src).unwrap().to_value();
+            let (plain, _) = emit(&v).unwrap();
+            let (commented, _) = emit_commented(&edikt_core::Commented::from_value(&v)).unwrap();
+            assert_eq!(plain, commented, "the two emitters must agree: {src:?}");
+        }
     }
 
     #[test]

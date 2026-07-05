@@ -6,12 +6,14 @@
 //! only the targeted nodes. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
 
+mod comments;
 mod edit;
 mod lexer;
 mod parser;
 mod project;
 mod syntax;
 
+pub use comments::emit_commented;
 pub use edikt_core::EditError;
 pub use edit::apply;
 
@@ -203,6 +205,9 @@ impl Document for Jsonc {
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
             .any(|t| matches!(t.kind(), Sk::LineComment | Sk::BlockComment))
+    }
+    fn to_commented(&self) -> Option<edikt_core::Commented> {
+        Some(comments::to_commented(&self.root))
     }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
         edit::source_slice(&self.root, path)
@@ -580,5 +585,72 @@ mod tests {
     fn cannot_create_key_in_a_scalar() {
         let mut doc = parse("{ \"a\": 1 }").unwrap();
         assert!(apply(&mut doc, &parse_expr(".a.b = 2").unwrap()).is_err());
+    }
+
+    // --- comment model (extraction + commented emit) -----------------------
+
+    #[test]
+    fn extracts_head_inline_and_foot_comments() {
+        let src = "{\n  // section\n  \"a\": 1, // why\n  \"b\": {\n    \"c\": 2, /* note */\n    // trailing\n  },\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(entries[0].0, "a");
+        assert_eq!(entries[0].1.comments.head, vec!["section"]);
+        assert_eq!(entries[0].1.comments.inline.as_deref(), Some("why"));
+        let edikt_core::CommentedNode::Object(inner) = &entries[1].1.node else {
+            panic!("expected nested object");
+        };
+        assert_eq!(inner[0].1.comments.inline.as_deref(), Some("note"));
+        assert_eq!(inner[0].1.comments.foot, vec!["trailing"]);
+        // Shape matches to_value exactly.
+        assert_eq!(c.to_value(), parse(src).unwrap().to_value());
+    }
+
+    #[test]
+    fn extracts_document_banner_and_trailer() {
+        let src = "// banner\n{ \"a\": 1 }\n// trailer\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.head, vec!["banner"]);
+        assert_eq!(c.comments.foot, vec!["trailer"]);
+    }
+
+    #[test]
+    fn extracts_multiline_block_comment_as_head_lines() {
+        let src = "{\n  /* one\n   * two */\n  \"a\": 1\n}";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(entries[0].1.comments.head, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn commented_emit_places_all_kinds() {
+        let src = "{\n  // section\n  \"a\": 1, // why\n  \"xs\": [\n    2,\n    // last\n    3,\n  ],\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let out = emit_commented(&c);
+        assert_eq!(
+            out,
+            "{\n  // section\n  \"a\": 1, // why\n  \"xs\": [\n    2,\n    // last\n    3\n  ]\n}\n"
+        );
+        // The output re-parses, and the comments survive another round.
+        let again = parse(&out).unwrap().to_commented().unwrap();
+        assert_eq!(again, c);
+    }
+
+    #[test]
+    fn tsconfig_fixture_comments_survive_extraction_and_emit() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let doc = parse(&src).unwrap();
+        let c = doc.to_commented().unwrap();
+        assert!(c.has_comments());
+        assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+        let out = emit_commented(&c);
+        assert!(out.contains("// TypeScript compiler configuration"));
+        // The `/* language level */` block comment re-emits as a line comment.
+        assert!(out.contains("// language level"), "got: {out}");
+        assert!(parse(&out).is_ok(), "commented emit must re-parse");
     }
 }

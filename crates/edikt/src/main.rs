@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use edikt_core::{Document, Value};
+use edikt_core::{Commented, Document, Value};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -208,15 +208,18 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
     })
 }
 
-/// Emit a value in the target format, returning the text and any lossy-conversion
-/// warnings.
-fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>)> {
+/// Emit a commented value in the target format, returning the text and any
+/// lossy-conversion warnings. Comments place natively per format; a kind the
+/// format can't hold remaps or drops with a warning from its emitter. (JSON
+/// shares JSONC's emitter — the caller strips comments first, since JSON lacks
+/// the `Comments` feature entirely.)
+fn emit(format: Format, c: &Commented) -> Result<(String, Vec<String>)> {
     Ok(match format {
-        Format::Json | Format::Jsonc => (edikt_jsonc::emit(value), Vec::new()),
-        Format::Ini => edikt_ini::emit(value)?,
-        Format::Env => edikt_env::emit(value)?,
-        Format::Toml => edikt_toml::emit(value)?,
-        Format::Yaml => edikt_yaml::emit(value)?,
+        Format::Json | Format::Jsonc => (edikt_jsonc::emit_commented(c), Vec::new()),
+        Format::Ini => edikt_ini::emit_commented(c)?,
+        Format::Env => edikt_env::emit_commented(c)?,
+        Format::Toml => edikt_toml::emit_commented(c)?,
+        Format::Yaml => edikt_yaml::emit_commented(c)?,
     })
 }
 
@@ -382,8 +385,26 @@ fn run(args: Args) -> Result<ExitCode> {
             None
         };
 
-        // Converting away from a commented source drops the comments.
-        if target != in_fmt && doc.has_comments() {
+        // Comment carrying: a pure-path query also selects from the commented
+        // projection, so a structural result re-emits *with* its comments —
+        // in the target format's own comment syntax.
+        let annotated: Option<Vec<Commented>> = expr
+            .as_path()
+            .and_then(|p| {
+                doc.to_commented()
+                    .map(|c| c.descend(p).into_iter().cloned().collect::<Vec<_>>())
+            })
+            .filter(|a| a.len() == results.len());
+
+        // A synthesized result carries no comments; converting a commented
+        // source through one still loses them, and that stays honest.
+        if target != in_fmt
+            && annotated.is_none()
+            && doc.has_comments()
+            && results
+                .iter()
+                .any(|r| matches!(r, Value::Array(_) | Value::Object(_)))
+        {
             let w = "comments were dropped";
             if args.strict {
                 bail!("{loc}: {w} (--strict)");
@@ -404,6 +425,7 @@ fn run(args: Args) -> Result<ExitCode> {
             outputs.push(render_value(
                 &args,
                 r,
+                annotated.as_ref().map(|a| &a[i]),
                 target,
                 explicit_out.is_some(),
                 &loc,
@@ -449,12 +471,14 @@ fn run(args: Args) -> Result<ExitCode> {
 }
 
 /// Render one query result in `target`: scalars raw (JSON-encoded only when
-/// JSON was explicitly requested); structural values via the target's emitter,
-/// with flatten warnings surfaced (or fatal under --strict) and an infeasible
-/// emit turned into an error naming the formats that *can* hold the value.
+/// JSON was explicitly requested); structural values via the target's emitter
+/// — carrying comments when `annotated` selected them — with lossy warnings
+/// surfaced (or fatal under --strict) and an infeasible emit turned into an
+/// error naming the formats that *can* hold the value.
 fn render_value(
     args: &Args,
     value: &Value,
+    annotated: Option<&Commented>,
     target: Format,
     explicit: bool,
     loc: &str,
@@ -470,7 +494,27 @@ fn render_value(
             },
         );
     }
-    let (text, warnings) = match emit(target, value) {
+    let plain;
+    let mut commented = match annotated {
+        Some(c) => c,
+        None => {
+            plain = Commented::from_value(value);
+            &plain
+        }
+    };
+    // Feature-derived degradation: a target with no Comments capability (JSON)
+    // drops them — warn (or error under --strict), then emit comment-free.
+    let stripped;
+    if commented.has_comments() && !target.features().contains(&edikt_core::Feature::Comments) {
+        let w = "comments were dropped";
+        if args.strict {
+            bail!("{loc}: {w} (--strict)");
+        }
+        eprintln!("edikt: warning: {loc}: {w}");
+        stripped = Commented::from_value(value);
+        commented = &stripped;
+    }
+    let (text, warnings) = match emit(target, commented) {
         Ok(ok) => ok,
         Err(e) => {
             let needed = edikt_core::convert::features_used(value);
