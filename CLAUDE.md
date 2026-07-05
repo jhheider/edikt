@@ -307,9 +307,11 @@ round-trip corpus must be green before merge.
 **Loop discipline & gotchas:**
 - Every change lands via **branch → PR → green CI → squash-merge**; never commit
   straight to `main`.
-- **Avoid `let`-chains.** rustfmt 1.9 *silently skips* files containing them, so
-  `fmt --check` passes locally while CI (fully formatting them) fails. Use
-  match-guards or iterator combinators instead.
+- **Apply formatting before committing** with `cargo fmt --all` (not just
+  `--check`), and never gate on a *piped* check: `cargo fmt --check | tail && echo
+  ok` reports the pipe's exit status (0), not fmt's — that masked unformatted
+  code into CI once. (`let`-chains format fine on rustfmt 1.9; the earlier
+  "avoid them" note was a misdiagnosis of that masked check.)
 - Crates live in `crates/`; **fixtures in `fixtures/<format>/`** and every one
   must round-trip byte-identically. Shared deps go through
   `[workspace.dependencies]`; crate **versions are per-crate**.

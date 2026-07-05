@@ -47,6 +47,8 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   per-crate** so they can publish independently.
 - CI is warnings-as-errors (`check`/`clippy`), `fmt --check`, and a cross-OS test
   matrix. Every change lands via branch → PR → green CI → squash-merge.
-- **Avoid `let`-chains**: rustfmt 1.9 silently skips files containing them, so
-  `fmt --check` passes locally but CI reformats and fails. Use match-guards or
-  combinators instead.
+- **Apply formatting before committing** (`cargo fmt --all`, not just
+  `--check`), and never gate on a *piped* check — `cargo fmt --check | tail &&
+  echo ok` reports the pipe's exit status (0), not fmt's, which once masked
+  unformatted code into CI. (`let`-chains format fine on rustfmt 1.9; the earlier
+  "avoid them" note was a misdiagnosis of that masked check.)
