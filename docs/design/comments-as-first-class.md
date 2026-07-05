@@ -1,8 +1,10 @@
 # Design: comments as first-class content
 
-**Status:** proposal (design-first, no code). Supersedes the "comment-preserving
-conversion" work by *reusing its model* — this makes comments addressable and
-editable, not just preserved and carried.
+**Status:** accepted design for **v0.2.0** (design-first; no code yet). Builds on
+the "comment-preserving conversion" work by *reusing its model* (`Commented`) —
+this makes comments addressable and editable, not just preserved and carried.
+Core decisions are settled (see [Decided](#decided-was-open)); two sub-questions
+remain for the implementation phases.
 
 ## The identity shift (name it up front)
 
@@ -70,10 +72,12 @@ is sugar for its `head` field.
 .foo.#                 # sugar for .foo.#.head
 ```
 
-- `head` and `foot` are **arrays of lines** (a block comment or a run of `//`
-  lines is multi-entry); assigning a string sets a single line, assigning an
-  array sets several.
-- `inline` is a **single string or null**.
+- `head`, `inline`, and `foot` are each a **single string** (the comment text,
+  delimiter-free). A multi-line head/foot comment is *one* string with the
+  emitter's wrapping applied — **not** an array of lines (decided: rational
+  wrapping over arrays; see [Wrapping](#wrapping-long-comments)). Reading a
+  multi-line head comment returns the unwrapped text (lines joined to a space);
+  writing wraps it back.
 - Reading a missing comment is a **miss** (empty stream) — sed-shaped, so
   `.foo.# // "no note"` supplies a default and `del` of an absent comment is a
   no-op, consistent with the rest of the language.
@@ -110,31 +114,36 @@ del(.foo.#.inline)                        # remove just the inline comment
 ```
 
 Every write is **format-preserving**: setting an existing comment changes only
-its bytes; attaching a new one inserts exactly one comment token/line at the
-node's head (or after it, for inline/foot), touching nothing else — the same
-surgical guarantee as value edits.
+its bytes; attaching a new one inserts exactly one comment line (or trailing
+segment, for inline), touching nothing else — the same surgical guarantee as
+value edits. The one exception is when the *layout can't hold* an own-line
+comment; see [Layout reflow](#layout-reflow-when-a-comment-forces-expansion).
 
-## The `Feature` model gets richer (the load-bearing part)
+## The `Feature` model: comment kinds are the feature (the load-bearing part)
 
 Comment *kinds are not uniform across formats*, so which kinds a format supports
-becomes a first-class capability — exactly the "features section matters again"
-point. Two shapes considered:
+is the capability — exactly the "features section matters again" point. Per the
+decision, **the comment feature *is* an array**: a format declares
 
-- **(a)** split `Feature::Comments` into `HeadComments` / `InlineComments` /
-  `FootComments`. Simple, but foot is niche and this bloats the conversion
-  lattice.
-- **(b) recommended:** keep `Feature::Comments` as "has any comments" and add a
-  per-format `comment_kinds() -> &[CommentKind]` where
-  `enum CommentKind { Head, Inline, Foot }`. Consulted in **both** places, so
-  the logic is derived, never special-cased:
-  - **edit time** — `.KEY.#.inline = "x"` on `.env` fails cleanly
-    (*"`.env` has no inline comments"*), the same way `.arr[]` on INI fails for
-    arrays;
-  - **conversion time** — this *is* the remap rule the commented-emit path
-    already implements ad hoc (env inline → own line, warned). Unifying it here
-    replaces per-emitter special cases with one derived check.
+```rust
+enum CommentKind { Head, Inline, Foot }
+const COMMENT_KINDS: &[CommentKind];   // empty ⇒ no comment support at all
+```
 
-Comment-kind support by format:
+and `COMMENT_KINDS` **subsumes** the old boolean `Feature::Comments`: "has
+comments" is just `!COMMENT_KINDS.is_empty()`, so JSON (`&[]`) needs no special
+case. It is the single source of truth, consulted in **both** places so the
+logic is derived, never special-cased:
+
+- **edit time** — `.KEY.#.inline = "x"` on `.env` fails cleanly
+  (*"`.env` has no inline comments"*), the same way `.arr[]` on INI fails for
+  arrays; a comment on JSON fails (*"JSON has no comments; use jsonc"*).
+- **conversion time** — this *is* the remap rule the commented-emit path already
+  implements ad hoc (env inline → own line, warned). Unifying it here replaces
+  per-emitter special cases with one derived check (target lacks the kind →
+  remap to a kind it has, or drop, with a warning).
+
+Comment-kind support by format (`COMMENT_KINDS` contents):
 
 | format | head | inline | foot |
 |---|:-:|:-:|:-:|
@@ -146,60 +155,139 @@ Comment-kind support by format:
 | INI | ● | ● | ● |
 | `.env` / `.properties` | ● | — | ● |
 
-Setting *any* comment on JSON errors (*"JSON has no comments; use jsonc"*).
-Inline is the only kind with a real per-format gap (`.env`).
+Inline is the only kind with a real per-format gap (`.env` — a `#` inside a
+value is data, not a comment). JSON supports none.
+
+## Layout reflow: when a comment forces expansion
+
+The moat says "never reflow what you didn't touch," and a comment edit honors it
+— *except* where the target layout has no line to hang an own-line comment on.
+Attaching one then forces the **minimal enclosing structure** to expand, which is
+a real reflow of bytes the user didn't target, so it **warns** (and `--strict`
+promotes to an error). The cases:
+
+- **Compact / single-line JSONC** — `{"a":1}` has no line structure; adding
+  `.a.#` (a head comment) forces the object to multi-line (pretty) so the comment
+  has a line above `"a"`. Warn: *"adding a comment expanded a compact object to
+  multi-line"*.
+- **YAML flow collections** — `key: [a, b]` can't carry an own-line comment on an
+  element; `.key[0].#` forces flow → block style. Warn: *"adding a comment
+  converted a flow sequence to block style"*.
+- **Inline into a flow/compact element** — an *inline* comment has nowhere legal
+  to sit inside `[a, b]`; this errors rather than reflows (there is no non-lossy
+  placement), naming the head form as the alternative.
+
+These are the only comment edits that touch more than their own line; every
+other attach/edit/delete stays surgical. A warning here matters because the
+whole promise is byte-minimal diffs — a silent whole-object reflow would betray
+it.
+
+## Wrapping long comments
+
+Comment text is stored **unwrapped** (one logical string); the emitter wraps on
+write. Decided: **rational wrapping (and re-wrapping), not line arrays.**
+
+- **Inline comments never wrap** — wrapping a trailing comment would break onto a
+  line that reads as a *head* comment of the next node. A long inline comment
+  stays long (or the user should have used head).
+- **Head / foot comments wrap** to a width **detected from the file** — the
+  width of the longest existing comment line, clamped to a sane band (proposal:
+  `[60, 100]`) — falling back to **80** when the document has no comments to
+  learn from. Continuation lines repeat the delimiter and indent (`// …` / `# …`
+  at the node's column).
+- **Re-wrapping on edit** — `.foo.# |= gsub(...)` re-wraps the (possibly
+  now-longer) result to the same width. This reflows the comment being edited,
+  which is fine — it is the thing you targeted — but never touches neighboring
+  comments.
+
+Open sub-question: whether width-detection scans the whole file once or just the
+edited node's neighborhood. Whole-file is more stable; decide during Phase 2.
+
+## The write interface (not a new representation)
+
+We are **not** missing a unified AST/CST — the heterogeneity (rowan for
+JSONC/INI/env, `toml_edit`, `kdl-rs`, span-tree for YAML) is deliberate: each
+format reuses the best-in-class lossless library, and forcing them onto one tree
+would throw away `toml_edit`'s correctness and require building a `yaml_edit`
+that does not exist. `Commented` is already the unified *read/convert* model.
+
+What's missing is a unified **write** interface — new methods on the `Document`
+trait, each format implementing over its own substrate:
+
+```rust
+fn set_comment(&mut self, path: &[Step], kind: CommentKind, text: &str) -> Result<(), EditError>;
+fn delete_comment(&mut self, path: &[Step], kind: CommentKind) -> Result<(), EditError>;
+// read side already exists as to_commented(); a `comments()` iterator is Phase 3
+```
+
+The language/CLI dispatch through these uniformly; each format splices into its
+own tree. Unify the interface, not the representation.
+
+### On a `yaml_edit` layer — deliberately not building it
+
+Attaching a head comment to YAML is "insert `<indent># text\n` before the
+node's line," and the span tree already carries the node's byte offset — so it
+reuses the *same byte-splice* the existing new-key/append edits use (days on
+existing machinery). A full `yaml_edit` decor-CST (mirroring `toml_edit`) would
+mean modeling decor slots for every YAML construct by reconstructing inter-token
+trivia from libyaml's events — weeks, high risk, duplicating libyaml. The
+span-tree splice suffices; don't build the layer.
 
 ## Cost, in tiers (honest)
 
-1. **Shallow — comment write-back for TOML & KDL.** Comments are editable decor
-   strings; the commented-emit path already writes them. Splicing into a live
-   tree is a small step from there.
+1. **Shallow — write-back for TOML & KDL.** Comments are editable decor strings;
+   the commented-emit path already writes them.
 2. **Mechanical — write-back for JSONC / INI / `.env`.** Insert or replace a
-   comment token in the rowan tree (these already carry comment tokens; the
-   splice utilities exist for values).
-3. **Fiddly — write-back for YAML.** Comments are not span-tree nodes; they live
-   in raw bytes between spans. Attaching one is a byte-splice at a computed
-   offset, like the value edits — the hardest emitter, as with conversion.
-4. **Deep — the evaluator must see comments.** `eval` runs over `Value`, which
-   is comment-free. Addressing comments needs eval (or a parallel resolve path)
-   to run over `Commented`, or a dedicated comment-resolution pass the `#`
-   namespace dispatches into. This is the architectural core, not a builtin.
+   comment token in the rowan tree (they already carry comment tokens; the splice
+   utilities exist for values).
+3. **Moderate — write-back for YAML.** A byte-splice at a computed offset over
+   the span tree — the same mechanism as value edits, *not* a new `yaml_edit`
+   layer (see above). The layout-reflow cases (flow → block) are the fiddly part.
+4. **Deep — the evaluator must see comments.** `eval` runs over `Value`, which is
+   comment-free. Addressing comments needs eval (or a parallel resolve path) to
+   run over `Commented`, or a dedicated comment-resolution pass the `#` namespace
+   dispatches into. The architectural core, not a builtin.
 5. **Deep — key-carrying iteration** for `comments`' `.path` (case 4) and
-   value→path for "annotate matching values" (case 2). The language discards
-   keys on iteration today; this needs a `path`-aware primitive (jq's
+   value→path for "annotate matching values" (case 2). The language discards keys
+   on iteration today; this needs a `path`-aware primitive (jq's
    `path`/`to_entries` family), itself a scope expansion.
 
-## Recommended scope & sequencing
+## Recommended scope & sequencing — **v0.2.0**
 
-- **v0.1.0 ships without this.** It is a milestone, not a blocker.
+Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
+
 - **Phase 1 — comment query (read-only).** The `#` namespace for reading
-  (`.foo.#`, `.foo.#.inline`), missing = miss, plus the `Feature`/`CommentKind`
-  refinement. Reuses `Commented`; no write paths. De-risks the addressing surface
-  cheaply, on all formats at once.
-- **Phase 2 — comment mutation.** Write-back per format, easy formats first
-  (TOML/KDL → JSONC/INI/env → YAML). Attach / edit-text / delete for `head` and
-  `inline`.
+  (`.foo.#` → head, `.foo.#.inline`/`.foot`), missing = miss, plus the
+  `COMMENT_KINDS` capability. Reuses `Commented`; no write paths. De-risks the
+  addressing surface cheaply, on all formats at once.
+- **Phase 2 — comment mutation.** The `Document` write methods, easy formats
+  first (TOML/KDL → JSONC/INI/env → YAML). Attach / edit-text / delete for
+  `head` and `inline`; wrapping + re-wrapping; the layout-reflow warnings.
 - **Phase 3 — document-wide `comments` + bulk edit + comment→key.** Requires the
   key-carrying-iteration primitive; the largest and least-certain piece, so it
   goes last and its shape is confirmed by what Phase 1/2 usage actually demands.
 
+## Decided (was "open")
+
+- **`#` defaults to the head comment.** ✅
+- **Bulk edit (`comments |= …`) is in scope** (Phase 3). ✅
+- **`del(.foo)` takes attached comments with the node** — no "keep the comment"
+  escape. ✅
+- **Multi-line comments are wrapped strings, not line arrays** — rational
+  wrapping and re-wrapping (see [Wrapping](#wrapping-long-comments)). ✅
+
+## Still open
+
+- **Head-comment wrap width source** — whole-file scan vs. edited node's
+  neighborhood (whole-file is more stable; settle in Phase 2).
+- **Bulk `comments |= f` binding** — how an update-assign over a *stream of
+  comment records* maps each result back to its node (the mutation engine must
+  resolve `.path` per record); spec in Phase 3.
+
 ## Out of scope (for this milestone)
 
 - Synthesizing *layout* (blank lines, alignment) — comments only.
-- Comment *migration* on structural moves (deleting a key deletes its attached
-  comments; it does not relocate them).
+- Comment *migration* on structural moves (a moved value does not carry its
+  comment; a deleted one drops it).
 - Recursive descent (`..`) as a general operator — if bulk needs it, add the
   narrow `comments` stream, not full `..`.
-
-## Open questions
-
-1. **`#` default = head or inline?** Proposed head (annotations sit above). If
-   real use leans inline, flip the sugar — cheap before release, not after.
-2. **Bulk `comments |= f` binding.** How does an update-assign over a *stream of
-   comment records* map each result back to its node? Needs the mutation engine
-   to resolve `.path` per record — spec this in Phase 3.
-3. **`del(.foo)` and attached comments.** Confirmed: deletes them with the node
-   (they annotate it). Should there be a "keep the comment, drop the value"
-   escape? Probably not v1.
-4. **Multi-line `head`/`foot` as arrays** vs. a single `\n`-joined string. Arrays
-   proposed (matches `Commented`); revisit if it feels heavy in practice.

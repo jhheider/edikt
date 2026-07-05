@@ -63,21 +63,26 @@ Release infra is intentionally **last** — build the capability, then ship it.
   clean exit-2 error; a no-match `match`/`capture` is an empty stream (a miss).
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
-- ⬜ **Comments as first-class content** (design-first — see
+- ⬜ **v0.2.0 — comments as first-class content** (design accepted — see
   [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
   Make comments **addressable and editable**, not just preserved/carried:
   query them (`.foo.#` → head comment, `.foo.#.inline`, a document-wide
   `comments` stream), attach/edit/delete them format-preservingly
   (`.foo.# = "TODO"`, `.foo.# |= gsub(...)`), and search a comment back to the
-  key it annotates. Reuses the `Commented` model; the real cost is (a) teaching
-  the evaluator to see comments — it runs over the comment-free `Value` today —
-  (b) per-format comment *write-back* (none exists yet; `to_commented` is
-  read-only), and (c) key-carrying iteration for comment→path. `#` is the terse
-  90% surface (collision-free; head comment by default); comment *kinds* become
-  a `Feature`-derived capability (`CommentKind { Head, Inline, Foot }`), so
-  `.env` inline errors/remaps the same way conversion already does. An identity
-  shift ("edit values, preserve comments" → "edit the document, comments
-  included") — deliberately post-v0.1, sequenced query → mutate → bulk.
+  key it annotates. `#` is the terse 90% surface (collision-free; head by
+  default). Reuses the `Commented` model; the real cost is (a) teaching the
+  evaluator to see comments — it runs over the comment-free `Value` today —
+  (b) per-format comment *write-back* via new `Document` methods (none exists
+  yet; `to_commented` is read-only) — reusing each format's own substrate, **not**
+  a unified CST (YAML stays a span-tree byte-splice, no `yaml_edit` layer) — and
+  (c) key-carrying iteration for comment→path. Comment *kinds are the feature*: a
+  format declares `COMMENT_KINDS: &[CommentKind]` (empty = none), subsuming the
+  boolean, so `.env` inline and JSON comments error/remap through the same
+  derived check conversion already uses. Multi-line comments are **wrapped
+  strings** (rational wrap + re-wrap), not line arrays; a comment that a compact
+  JSON object or a YAML flow list can't hold forces expansion, which **warns**.
+  Sequenced query → mutate → bulk. An identity shift: "edit values, preserve
+  comments" → "edit the document, comments included."
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
   stripped for all seven formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`
