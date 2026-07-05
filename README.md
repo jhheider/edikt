@@ -42,6 +42,21 @@ Status: **alpha** — six formats with lossless in-place edit, query, and
 conversion (comments carried across); release infra is wired and awaiting the
 first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
+## Scripting notes
+
+- **Exit codes are grep-shaped:** `0` = success / at least one match, `1` = a
+  query that matched nothing, `2` = parse or evaluation error. Under `set -e`,
+  guard optional lookups: `edikt '.maybe.key' f.yaml || true`.
+- **The expression language is deliberately capped in v1.** jq's navigation,
+  mutation, arithmetic, and a curated builtin registry (including regex
+  `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are in; jq's
+  `//` alternative operator, variables (`as $x`), `if/then`, `reduce`, and
+  user-defined functions are not (yet). For "value or default", test first:
+  `edikt '.key' f.yaml || echo default`.
+- **`.env` is flat and string-valued** — no arrays or nesting, ever — but
+  string computation on values works fine:
+  `edikt -i '.VERSION |= sub("^v"; "")' .env`.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
