@@ -1,0 +1,39 @@
+on:
+  pull_request:
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+  push:
+    branches:
+      - main
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+
+name: Test
+
+# Cancel a superseded in-progress run when a new commit lands on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: "debug"
+          cache-targets: true
+          cache-all-crates: true
+      - name: Test
+        run: cargo test --workspace --all-features

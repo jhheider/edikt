@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+authors = ["Jacob Heider <jhheider@gmail.com>"]
+repository = "https://github.com/jhheider/edikt"
+
+# Pre-declared for the feature slices that follow; unused members are fine.
+[workspace.dependencies]
+edikt-core = { path = "crates/edikt-core" }
+edikt-syntax = { path = "crates/edikt-syntax" }
+edikt-jsonc = { path = "crates/edikt-jsonc" }
+edikt-ini = { path = "crates/edikt-ini" }
+edikt-env = { path = "crates/edikt-env" }
+rowan = "0.16"
+logos = "0.16"
