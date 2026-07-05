@@ -5,8 +5,10 @@
 //! formats (JSONC/JSON5, INI, `.env`/`.properties`, TOML, YAML) over the
 //! format-agnostic `Document` seam.
 //!
-//! Exit codes are grep-shaped: 0 = at least one result, 1 = query miss (no
-//! results), 2 = parse / evaluation / I/O error.
+//! Exit codes are sed-shaped: 0 = success — including a query that matched
+//! nothing (a silent no-op, like sed with no matching address); 2 = parse /
+//! evaluation / I/O error. `--exit-status` opts into jq's 1-on-no-results for
+//! presence tests.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -100,6 +102,11 @@ struct Args {
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     raw: bool,
+
+    /// Exit 1 when a query produces no results (jq-style, for presence
+    /// tests). The default is sed-shaped: a miss is a silent no-op, exit 0.
+    #[arg(long = "exit-status")]
+    exit_status: bool,
 
     /// Print shell completions to stdout (for packagers; bash|zsh|fish|…).
     #[arg(long, value_name = "SHELL", hide = true)]
@@ -499,10 +506,12 @@ fn run(args: Args) -> Result<ExitCode> {
             .with_context(|| format!("writing {}", p.display()))?;
     }
 
-    Ok(if emitted {
+    Ok(if emitted || !args.exit_status {
+        // A query miss is a silent no-op by default, like sed with no
+        // matching address.
         ExitCode::SUCCESS
     } else {
-        // Grep-shaped miss (query with no results).
+        // --exit-status: jq-shaped 1 on zero results, for presence tests.
         ExitCode::from(1)
     })
 }

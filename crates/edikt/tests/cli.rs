@@ -78,10 +78,52 @@ fn computed_value() {
 }
 
 #[test]
-fn miss_is_exit_1() {
-    let (out, _e, code) = run(&["-t", "jsonc", ".nope"], TSCONFIG);
+fn miss_is_a_silent_noop() {
+    // sed-shaped: no match, no output, no error — exit 0.
+    let (out, err, code) = run(&["-t", "jsonc", ".nope"], TSCONFIG);
     assert_eq!(out, "");
-    assert_eq!(code, 1);
+    assert_eq!(err, "");
+    assert_eq!(code, 0);
+    // jq-shaped presence testing is an explicit opt-in.
+    let (_o, _e, c2) = run(&["-t", "jsonc", "--exit-status", ".nope"], TSCONFIG);
+    assert_eq!(c2, 1);
+    let (_o, _e, c3) = run(
+        &["-t", "jsonc", "--exit-status", ".compilerOptions.strict"],
+        TSCONFIG,
+    );
+    assert_eq!(c3, 0);
+}
+
+#[test]
+fn alternative_operator_defaults_a_miss() {
+    let (out, _e, code) = run(&["-t", "jsonc", r#".nope // "fallback""#], TSCONFIG);
+    assert_eq!(out, "fallback\n");
+    assert_eq!(code, 0);
+    // The RHS of an assignment gets the default: set-with-fallback in one pass.
+    let (out2, _e, c2) = run(
+        &["-t", "jsonc", r#".target = .missing // "ES2022""#],
+        "{ \"target\": \"ES5\" }",
+    );
+    assert_eq!(out2, "{ \"target\": \"ES2022\" }");
+    assert_eq!(c2, 0);
+}
+
+#[test]
+fn multiple_files_edit_like_sed() {
+    // Shell globs expand to multiple operands; -i edits each in place.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let a = format!("{dir}/multi-a.json");
+    let b = format!("{dir}/multi-b.json");
+    std::fs::write(&a, "{\"v\": 1}").unwrap();
+    std::fs::write(&b, "{\"v\": 2}").unwrap();
+    let (_o, _e, code) = run(&["-i", ".v = 9", &a, &b], "");
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "{\"v\": 9}");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "{\"v\": 9}");
+    // Queries over several files concatenate their results, in order.
+    let (out, _e, c2) = run(&[".v", &a, &b], "");
+    assert_eq!(out, "9\n9\n");
+    assert_eq!(c2, 0);
 }
 
 #[test]
@@ -313,7 +355,11 @@ fn regex_builtins_via_cli() {
     );
     assert_eq!(out4, "1.25\n");
     assert_eq!(c4, 0);
-    let (_o, _e, c5) = run(&["-t", "json", r#".a | match("z")"#], "{\"a\": \"x\"}");
+    // A no-match `match` is a miss: silent by default, 1 under --exit-status.
+    let (_o, _e, c5) = run(
+        &["-t", "json", "--exit-status", r#".a | match("z")"#],
+        "{\"a\": \"x\"}",
+    );
     assert_eq!(c5, 1);
 
     // A bad regex is a clean expression error.
@@ -621,8 +667,8 @@ fn output_file_untouched_on_miss() {
     let out = format!("{dir}/miss.json");
     let _ = std::fs::remove_file(&out);
     let (_s, _e, code) = run(&["-t", "yaml", "-o", &out, ".nope"], "a: 1\n");
-    assert_eq!(code, 1); // grep-shaped miss
-    assert!(!std::path::Path::new(&out).exists(), "no file on a miss");
+    assert_eq!(code, 0); // a miss is a silent no-op…
+    assert!(!std::path::Path::new(&out).exists(), "…and writes no file");
 }
 
 #[test]

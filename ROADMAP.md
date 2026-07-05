@@ -60,7 +60,7 @@ Release infra is intentionally **last** — build the capability, then ship it.
   `gsub` (`$name` capture references — sed-flavored, since the language has no
   string interpolation) — plus `split` (literal 1-arg, regex 2-arg, jq's shape),
   `join`, `startswith`, `endswith`. Flags `g i x s m`; a bad regex or flag is a
-  clean exit-2 error; a no-match `match`/`capture` is a grep-shaped exit-1 miss.
+  clean exit-2 error; a no-match `match`/`capture` is an empty stream (a miss).
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB

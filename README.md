@@ -44,15 +44,18 @@ first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## Scripting notes
 
-- **Exit codes are grep-shaped:** `0` = success / at least one match, `1` = a
-  query that matched nothing, `2` = parse or evaluation error. Under `set -e`,
-  guard optional lookups: `edikt '.maybe.key' f.yaml || true`.
+- **Exit codes are sed-shaped:** `0` = success — a query that matches nothing
+  is a *silent no-op* (safe under `set -e`); `2` = parse or evaluation error.
+  For presence tests, `--exit-status` opts into jq's `1` on zero matches; for
+  defaults, use `//`: `edikt '.maybe.key // "fallback"' f.yaml`.
 - **The expression language is deliberately capped in v1.** jq's navigation,
-  mutation, arithmetic, and a curated builtin registry (including regex
-  `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are in; jq's
-  `//` alternative operator, variables (`as $x`), `if/then`, `reduce`, and
-  user-defined functions are not (yet). For "value or default", test first:
-  `edikt '.key' f.yaml || echo default`.
+  mutation, arithmetic, `//` defaults, and a curated builtin registry
+  (including regex `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are
+  in; variables (`as $x`), `if/then`, `reduce`, and user-defined functions are
+  not (yet).
+- **Many files, sed-style:** `edikt -i '.v = 9' a.json b.json` (let the shell
+  glob: `edikt -i 'del(.telemetry)' config/*.jsonc`). Queries over several
+  files concatenate results in order.
 - **`.env` is flat and string-valued** — no arrays or nesting, ever — but
   string computation on values works fine:
   `edikt -i '.VERSION |= sub("^v"; "")' .env`.

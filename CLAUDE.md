@@ -77,6 +77,8 @@ an *edit* language, not a general-purpose one.
 - iterate `.arr[]`, `.obj[]`
 - pipe `EXPR | EXPR`
 - multi-output `.a, .b, .c`
+- alternative `EXPR // EXPR` — the left's truthy outputs, else the right
+  (a miss, `null`, or `false` falls back; a type *error* still propagates)
 - filter `.items[] | select(.enabled == true)`
 
 **Mutation**
@@ -95,7 +97,7 @@ doesn't just place literals):
   `rtrimstr`, `startswith`, `endswith`, `split`, `join`, and the regex family
   `test`, `match`, `capture`, `sub`, `gsub` (args `;`-separated, jq-style;
   optional trailing flags from `g i x s m`; `match` yields jq's match objects
-  with codepoint offsets, and no match is an empty stream → exit 1). One
+  with codepoint offsets, and no match is an empty stream — a miss). One
   deliberate divergence: jq splices captures into `sub` replacements by string
   interpolation, which this language doesn't have — replacements use `$1` /
   `$name` references instead (sed-flavored; `$$` is a literal `$`). Grow this
@@ -109,8 +111,8 @@ values are strings. So `.count + 1` on `.env` coerces on demand
 explicitly asked for.
 
 **Explicitly still out of scope in v1:** user-defined functions, `reduce`/`foreach`,
-variable bindings (`as $x`), `//` alternative operator, path expressions as
-first-class values, module imports. If the language starts wanting these, that's
+variable bindings (`as $x`), `if/then/else`, path expressions as first-class
+values, module imports. If the language starts wanting these, that's
 a v2 conversation, not scope creep.
 
 ---
@@ -139,8 +141,10 @@ edikt is in exactly one mode per run, decided by the expression:
   `Feature` sets).
 - multiple matches → one per line (structural results may span lines).
 
-**Exit codes (grep/jq-shaped):** `0` success / ≥1 match · `1` query with zero
-matches · `2` parse, syntax, or evaluation error.
+**Exit codes (sed-shaped):** `0` success — including a query that matched
+nothing, which is a **silent no-op** like sed with no matching address ·
+`2` parse, syntax, or evaluation error. `--exit-status` opts into jq's `1`
+on zero matches, for presence tests; `//` supplies in-expression defaults.
 
 `-i` needs a mutating expression or an explicit output format.
 

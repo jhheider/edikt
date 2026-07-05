@@ -46,6 +46,9 @@ pub enum Expr {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `left | right` — pipe each output of `left` into `right`.
     Pipe(Box<Expr>, Box<Expr>),
+    /// `left // right` — jq's alternative: `left`'s truthy outputs, or —
+    /// when there are none (a miss, `null`, `false`) — `right`'s.
+    Alternative(Box<Expr>, Box<Expr>),
     /// `a, b, c` — concatenate output streams.
     Comma(Vec<Expr>),
     /// A function call, e.g. `length`, `select(.x == 1)`, `ltrimstr("pre")`.
@@ -71,6 +74,7 @@ impl Expr {
             Expr::Assign(..) | Expr::UpdateAssign(..) | Expr::AddAssign(..) => true,
             Expr::Call(name, args) => name == "del" || args.iter().any(Expr::is_mutation),
             Expr::Pipe(a, b) => a.is_mutation() || b.is_mutation(),
+            Expr::Alternative(a, b) => a.is_mutation() || b.is_mutation(),
             Expr::Comma(items) => items.iter().any(Expr::is_mutation),
             Expr::Neg(inner) => inner.is_mutation(),
             Expr::Binary(_, a, b) => a.is_mutation() || b.is_mutation(),
