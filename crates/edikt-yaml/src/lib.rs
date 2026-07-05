@@ -256,6 +256,76 @@ mod tests {
     }
 
     #[test]
+    fn crlf_edits_preserve_line_endings() {
+        // set: only the scalar bytes change; CRLF endings untouched.
+        let src = "a: 1\r\nb: 2\r\n";
+        assert_eq!(edit(src, ".a = 5"), "a: 5\r\nb: 2\r\n");
+        // new key: the inserted line uses CRLF too, not a lone \n.
+        assert_eq!(edit(src, ".c = 9"), "a: 1\r\nb: 2\r\nc: 9\r\n");
+        // append: same.
+        let seq = "xs:\r\n  - 1\r\n  - 2\r\n";
+        assert_eq!(
+            edit(seq, ".xs += [3]"),
+            "xs:\r\n  - 1\r\n  - 2\r\n  - 3\r\n"
+        );
+    }
+
+    #[test]
+    fn append_after_block_scalar_item() {
+        // The last item is a block literal — its span starts at the content, not
+        // the dash. Appending must still work (derive the dash from the seq mark).
+        let src = "items:\n  - |\n    literal\n  - plain\n";
+        let out = edit(src, ".items += [\"x\"]");
+        assert_eq!(out, "items:\n  - |\n    literal\n  - plain\n  - x\n");
+    }
+
+    #[test]
+    fn block_scalar_set_refused_clearly_del_works() {
+        let src = "x: |\n  line1\n  line2\nother: 1\n";
+        // Setting a block scalar in place is refused with a clear message (not an
+        // opaque re-parse error), and the document is left untouched.
+        let mut doc = parse(src).unwrap();
+        let err = doc
+            .apply(&parse_expr(".x = \"new\"").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multi-line"), "got: {err}");
+        assert_eq!(doc.to_source(), src);
+        // Deleting a block scalar entry works.
+        assert_eq!(edit(src, "del(.x)"), "other: 1\n");
+    }
+
+    #[test]
+    fn unrelated_edit_preserves_scalar_spelling() {
+        // `True` is core-schema bool, but editing a *different* key must not
+        // re-spell it — to_source returns spliced bytes, not a re-emit.
+        let src = "e: True\no: 1\n";
+        let out = edit(src, ".o = 2");
+        assert_eq!(out, "e: True\no: 2\n");
+    }
+
+    #[test]
+    fn deleting_shadow_key_reexposes_merged_value() {
+        // prod.b is an explicit override of base.b (merged via `<<`). Deleting the
+        // physical override lets the merged value show through again.
+        let src = "base: &b\n  a: 1\n  b: 2\nprod:\n  <<: *b\n  b: 3\n";
+        assert_eq!(q(src, ".prod.b"), vec![Value::Int(3)]);
+        let out = edit(src, "del(.prod.b)");
+        assert_eq!(out, "base: &b\n  a: 1\n  b: 2\nprod:\n  <<: *b\n");
+        // With the override gone, the merged value (2) is what remains.
+        assert_eq!(q(&out, ".prod.b"), vec![Value::Int(2)]);
+    }
+
+    #[test]
+    fn setting_merged_key_creates_physical_override() {
+        // `.prod.a` exists only via the merge; setting it inserts a real key.
+        let src = "base: &b\n  a: 1\nprod:\n  <<: *b\n";
+        let out = edit(src, ".prod.a = 9");
+        assert_eq!(out, "base: &b\n  a: 1\nprod:\n  <<: *b\n  a: 9\n");
+        assert_eq!(q(&out, ".prod.a"), vec![Value::Int(9)]);
+    }
+
+    #[test]
     fn emits_yaml_round_trippable_through_value() {
         let value = parse(SAMPLE).unwrap().to_value();
         let (yaml, warnings) = emit(&value).unwrap();

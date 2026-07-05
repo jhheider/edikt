@@ -145,7 +145,18 @@ impl Yaml {
     pub(crate) fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let (range, text) = match resolve(&self.doc, path) {
             Resolved::Found(node) => match &node.kind {
-                NodeKind::Scalar(_) => (node.span.clone(), emit_scalar_inline(value)?),
+                NodeKind::Scalar(_) => {
+                    // A multi-line scalar (block `|`/`>`, or a wrapped quoted
+                    // scalar) can't be replaced with a single inline token without
+                    // reflowing surrounding lines — refuse cleanly rather than
+                    // emit something that fails to re-parse.
+                    if self.source[node.span.clone()].contains('\n') {
+                        return Err(EditError::new(
+                            "cannot set a multi-line (block `|`/`>`) scalar in place yet",
+                        ));
+                    }
+                    (node.span.clone(), emit_scalar_inline(value)?)
+                }
                 _ => {
                     return Err(EditError::new(
                         "edikt sets scalar values in YAML losslessly; replacing a whole \
@@ -232,12 +243,13 @@ fn new_key(
     };
     let indent = &source[line_start(source, last.key_span.start)..last.key_span.start];
     let at = block_end(source, &last.value);
+    let nl = newline(source);
     let line = format!("{indent}{}: {valtext}", emit_key(key));
-    if at == source.len() && !source.ends_with('\n') {
+    if at == source.len() && !ends_with_newline(source) {
         // No trailing newline: start a fresh line for the new entry.
-        Ok((at..at, format!("\n{line}")))
+        Ok((at..at, format!("{nl}{line}")))
     } else {
-        Ok((at..at, format!("{line}\n")))
+        Ok((at..at, format!("{line}{nl}")))
     }
 }
 
@@ -248,33 +260,53 @@ fn append_items(
     items_nodes: &[Node],
     items: &[Value],
 ) -> Result<(Range<usize>, String), EditError> {
-    let Some(last) = items_nodes.last() else {
+    if items_nodes.is_empty() {
         return Err(EditError::new(
             "cannot append to an empty sequence yet (no item to match indentation)",
         ));
-    };
-    // The physical prefix of the last item's line, e.g. "    - ", which we repeat.
-    let start = line_start(source, last.span.start);
-    let prefix = &source[start..last.span.start];
-    if !prefix.trim_start().starts_with('-') {
+    }
+    // A block sequence's start-mark sits on the first item's `-`. Derive the dash
+    // column + indentation from there, so this is robust even when the *last* item
+    // is a block scalar (whose span starts at its content, not the dash) — the case
+    // that used to misreport as a flow sequence.
+    let dash = seq_node.span.start;
+    if source.as_bytes().get(dash) != Some(&b'-') {
         return Err(EditError::new(
             "cannot append to a flow sequence (`[...]`) yet",
         ));
     }
+    let indent = &source[line_start(source, dash)..dash];
+    let nl = newline(source);
     let at = block_end(source, seq_node);
     let mut out = String::new();
     for item in items {
         let text = emit_scalar_inline(item)?;
-        out.push_str(prefix);
+        out.push_str(indent);
+        out.push_str("- ");
         out.push_str(&text);
-        out.push('\n');
+        out.push_str(nl);
     }
-    if at == source.len() && !source.ends_with('\n') {
-        out.insert(0, '\n');
-        // Drop the trailing newline we would otherwise add past EOF.
-        out.pop();
+    if at == source.len() && !ends_with_newline(source) {
+        // No trailing newline at EOF: lead with one, drop the dangling trailer.
+        out.insert_str(0, nl);
+        out.truncate(out.len() - nl.len());
     }
     Ok((at..at, out))
+}
+
+/// The newline style the document uses, so inserted lines match it (a lone `\n`
+/// spliced into a CRLF file would leave observably mixed line endings).
+fn newline(source: &str) -> &'static str {
+    if source.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Whether the source already ends with a line break (`\n`, hence also `\r\n`).
+fn ends_with_newline(source: &str) -> bool {
+    source.ends_with('\n')
 }
 
 /// The byte offset of the start of the line containing `pos`.
