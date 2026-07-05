@@ -79,6 +79,17 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
             };
             Ok(vec![Value::Array(items)])
         }
+        Expr::ObjectConstruct(pairs) => {
+            let mut obj = Vec::with_capacity(pairs.len());
+            for (key, value_expr) in pairs {
+                let v = eval(value_expr, input)?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(Value::Null);
+                obj.push((key.clone(), v));
+            }
+            Ok(vec![Value::Object(obj)])
+        }
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
             let mut out = Vec::new();
@@ -800,6 +811,22 @@ mod tests {
     fn multi_output_comma() {
         let doc = obj(&[("a", Value::Int(1)), ("b", Value::Int(2))]);
         assert_eq!(run(".a, .b", &doc), vec![Value::Int(1), Value::Int(2)]);
+    }
+
+    #[test]
+    fn object_construction() {
+        let doc = obj(&[("x", Value::Int(5))]);
+        assert_eq!(
+            one("{ a: 1, b: .x }", &doc),
+            obj(&[("a", Value::Int(1)), ("b", Value::Int(5))])
+        );
+        assert_eq!(one("{}", &doc), Value::Object(vec![]));
+    }
+
+    #[test]
+    fn bracket_string_keys() {
+        let doc = obj(&[("weird.key", Value::Str("w".into()))]);
+        assert_eq!(one(r#".["weird.key"]"#, &doc), Value::Str("w".into()));
     }
 
     #[test]

@@ -44,19 +44,28 @@ impl Ini {
         &self.root
     }
 
-    /// Set the entry at `path` to a scalar, format-preserving: only the value
-    /// text changes. The entry must already exist (new-key creation lands later).
+    /// Set the entry at `path` to a scalar, format-preserving. If the entry
+    /// exists, only its value text changes. Otherwise a `key = value` line is
+    /// inserted into the named section (creating the section if absent) or the
+    /// preamble.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let text = edit::scalar_string(value)?;
-        let entry = edit::resolve_entry(&self.root, path).ok_or_else(|| {
-            EditError::new("path not found (creating new keys is not supported yet)")
-        })?;
-        let value_node = entry
-            .children()
-            .find(|n| n.kind() == Sk::Value)
-            .ok_or_else(|| EditError::new("entry has no value slot"))?;
-        let new_root = value_node.replace_with(edit::value_node_green(&text));
-        self.root = SyntaxNode::new_root(new_root);
+        if let Some(entry) = edit::resolve_entry(&self.root, path) {
+            let value_node = entry
+                .children()
+                .find(|n| n.kind() == Sk::Value)
+                .ok_or_else(|| EditError::new("entry has no value slot"))?;
+            let new_root = value_node.replace_with(edit::value_node_green(&text));
+            self.root = SyntaxNode::new_root(new_root);
+            return Ok(());
+        }
+        let (section, key) = match path {
+            [Step::Field(k)] => (None, k.as_str()),
+            [Step::Field(s), Step::Field(k)] => (Some(s.as_str()), k.as_str()),
+            _ => return Err(EditError::new("INI paths are `.key` or `.section.key`")),
+        };
+        let new_src = edit::insert_entry(&self.to_source(), section, key, &text);
+        self.root = SyntaxNode::new_root(parser::build(&new_src));
         Ok(())
     }
 
@@ -252,10 +261,30 @@ mod tests {
     }
 
     #[test]
-    fn missing_path_and_malformed() {
-        let mut doc = parse(SAMPLE).unwrap();
-        assert!(apply(&mut doc, &parse_expr(".nope = 1").unwrap()).is_err());
+    fn malformed_line_errors() {
         assert!(parse("this is not ini\n").is_err());
+    }
+
+    #[test]
+    fn creates_new_key_in_existing_section() {
+        let src = "[server]\nhost = x\n\n[logging]\nlevel = info\n";
+        assert_eq!(
+            edit_src(src, r#".server.port = "8080""#),
+            "[server]\nhost = x\nport = 8080\n\n[logging]\nlevel = info\n"
+        );
+    }
+
+    #[test]
+    fn creates_new_section_and_preamble_key() {
+        assert_eq!(
+            edit_src("[server]\nhost = x\n", r#".db.url = "pg""#),
+            "[server]\nhost = x\n\n[db]\nurl = pg\n"
+        );
+        // preamble key added before the first section, keeping the leading comment
+        let out = edit_src(SAMPLE, ".added = 1");
+        assert!(out.contains("; app config"));
+        assert!(out.contains("added = 1"));
+        assert!(parse(&out).is_ok());
     }
 
     #[test]

@@ -52,6 +52,8 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     /// `[ expr ]` — collect the inner stream into an array (`None` = `[]`).
     Collect(Option<Box<Expr>>),
+    /// `{ key: expr, ... }` — construct an object.
+    ObjectConstruct(Vec<(String, Expr)>),
     /// `path = rhs` — assign; `rhs` is evaluated against the whole input.
     Assign(Box<Expr>, Box<Expr>),
     /// `path |= rhs` — update-assign; `rhs` sees the current value at `path`.
@@ -73,6 +75,7 @@ impl Expr {
             Expr::Neg(inner) => inner.is_mutation(),
             Expr::Binary(_, a, b) => a.is_mutation() || b.is_mutation(),
             Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.is_mutation()),
+            Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.is_mutation()),
             Expr::Path(_) | Expr::Literal(_) => false,
         }
     }
