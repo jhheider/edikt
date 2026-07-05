@@ -79,10 +79,11 @@ Release infra is intentionally **last** — build the capability, then ship it.
   format declares `COMMENT_KINDS: &[CommentKind]` (empty = none), subsuming the
   boolean, so `.env` inline and JSON comments error/remap through the same
   derived check conversion already uses. Multi-line comments are **wrapped
-  strings** (rational wrap + re-wrap), not line arrays; a comment that a compact
-  JSON object or a YAML flow list can't hold forces expansion, which **warns**.
-  Sequenced query → mutate → bulk. An identity shift: "edit values, preserve
-  comments" → "edit the document, comments included."
+  strings** (not line arrays), wrapped to the file's own envelope —
+  `min(longest source line, 100)` — so a comment never makes the document wider;
+  a comment that a compact JSON object or a YAML flow list can't hold forces
+  expansion, which **warns**. Sequenced query → mutate → bulk. An identity shift:
+  "edit values, preserve comments" → "edit the document, comments included."
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
   stripped for all seven formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`

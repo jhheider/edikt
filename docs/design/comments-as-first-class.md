@@ -185,23 +185,36 @@ it.
 ## Wrapping long comments
 
 Comment text is stored **unwrapped** (one logical string); the emitter wraps on
-write. Decided: **rational wrapping (and re-wrapping), not line arrays.**
+write. Decided: **rational wrapping (and re-wrapping), not line arrays** — and
+the width is *the file's own envelope*, so comments never make the document
+wider than it already is.
 
-- **Inline comments never wrap** — wrapping a trailing comment would break onto a
-  line that reads as a *head* comment of the next node. A long inline comment
-  stays long (or the user should have used head).
-- **Head / foot comments wrap** to a width **detected from the file** — the
-  width of the longest existing comment line, clamped to a sane band (proposal:
-  `[60, 100]`) — falling back to **80** when the document has no comments to
-  learn from. Continuation lines repeat the delimiter and indent (`// …` / `# …`
-  at the node's column).
-- **Re-wrapping on edit** — `.foo.# |= gsub(...)` re-wraps the (possibly
-  now-longer) result to the same width. This reflows the comment being edited,
-  which is fine — it is the thing you targeted — but never touches neighboring
-  comments.
-
-Open sub-question: whether width-detection scans the whole file once or just the
-edited node's neighborhood. Whole-file is more stable; decide during Phase 2.
+- **Wrap column (absolute)** `= min(longest line in the source, 100)`. The file
+  is already this wide; a wrapped comment that fits inside it adds no horizontal
+  extent — the moat, applied to columns. The `100` is a hard ceiling so a
+  pathologically wide file doesn't yield 200-char comment lines. The longest
+  line is measured on the **original source** (before the edit), so edits don't
+  ratchet the width up.
+- **Text budget at a comment's indent** `I` with delimiter `D` (`"# "`, `"// "`)
+  `= wrap_col − I − len(D)`. This is what "longest line minus current indent"
+  computes, anchored to the absolute edge so a deeply-indented comment still
+  ends *at or before* `wrap_col` — never past it. Continuation lines repeat `D`
+  at column `I`.
+- **No lower floor.** A genuinely narrow file (longest line 40) keeps its
+  comments at 40 — that is the point ("use the space as it exists"). A floor
+  could push a comment past the longest line and *expand* the envelope, which is
+  the one thing this rule exists to prevent.
+- **Unbreakable tokens overflow** rather than hard-break (a URL or path longer
+  than the budget). So "no expansion" is best-effort: we never widen *by choice*,
+  only when a single word leaves no option.
+- **Empty / comment-free source** has no longest line to learn from → fall back
+  to the `100` ceiling.
+- **Inline comments never wrap** — a wrapped trailing comment would spill onto a
+  line that reads as the *next* node's head comment. A long inline stays long
+  (or the author should have used head).
+- **Re-wrapping on edit** — `.foo.# |= gsub(...)` re-wraps the result to the same
+  column. This reflows the comment being edited (the thing you targeted, so
+  fine) but never touches neighboring comments.
 
 ## The write interface (not a new representation)
 
@@ -273,13 +286,13 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
 - **Bulk edit (`comments |= …`) is in scope** (Phase 3). ✅
 - **`del(.foo)` takes attached comments with the node** — no "keep the comment"
   escape. ✅
-- **Multi-line comments are wrapped strings, not line arrays** — rational
-  wrapping and re-wrapping (see [Wrapping](#wrapping-long-comments)). ✅
+- **Multi-line comments are wrapped strings, not line arrays** — wrapped to the
+  file's own envelope (`min(longest source line, 100)`) so a comment never
+  widens the document; re-wrapped on edit (see
+  [Wrapping](#wrapping-long-comments)). ✅
 
 ## Still open
 
-- **Head-comment wrap width source** — whole-file scan vs. edited node's
-  neighborhood (whole-file is more stable; settle in Phase 2).
 - **Bulk `comments |= f` binding** — how an update-assign over a *stream of
   comment records* maps each result back to its node (the mutation engine must
   resolve `.path` per record); spec in Phase 3.
