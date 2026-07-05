@@ -123,6 +123,27 @@ impl Document for Env {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.root))
     }
+    fn set_comment(
+        &mut self,
+        path: &[edikt_core::Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let key = comments::single_key(path)?;
+        let (source, warnings) = comments::set_key_comment(&self.root, key, kind, text)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(warnings)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[edikt_core::Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        let key = comments::single_key(path)?;
+        let source = comments::delete_key_comment(&self.root, key, kind)?;
+        self.root = SyntaxNode::new_root(parser::build(&source));
+        Ok(())
+    }
 }
 
 /// Emit a value as a flat `.env`: every leaf becomes a `key=value` line, with
@@ -149,6 +170,41 @@ mod tests {
         let mut doc = parse(src).unwrap();
         apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_head_foot_and_inline_refused() {
+        // Head above an entry.
+        assert_eq!(
+            cedit("DATABASE_URL=x\nDEBUG=true\n", ".DEBUG.# = \"verbose\""),
+            "DATABASE_URL=x\n# verbose\nDEBUG=true\n"
+        );
+        // Foot after an entry.
+        assert_eq!(
+            cedit("A=1\nB=2\n", ".B.#.foot = \"end\""),
+            "A=1\nB=2\n# end\n"
+        );
+        // Replace an existing head; delete it.
+        assert_eq!(
+            cedit("# old\nK=v\n", ".K.# |= ascii_upcase"),
+            "# OLD\nK=v\n"
+        );
+        assert_eq!(cedit("# drop\nK=v\n", "del(.K.#)"), "K=v\n");
+        // Inline is refused — `.env` has no inline comments.
+        let mut doc = parse("K=v\n").unwrap();
+        let err = edikt_core::apply_comment_mutation(
+            &mut doc,
+            &parse_expr(".K.#.inline = \"x\"").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("no inline comments"), "got: {err}");
     }
 
     #[test]

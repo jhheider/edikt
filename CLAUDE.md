@@ -83,11 +83,12 @@ an *edit* language, not a general-purpose one.
   / `.foo.#.inline` / `.foo.#.foot` pick a kind, `.#` is the document banner,
   `.items[].#` reads each element's. Terminal (nothing navigates past it); a
   missing comment is a miss. **Read** everywhere; **edit** (`.foo.# = "TODO"`,
-  `.foo.# |= gsub(…)`, `del(.foo.#)`) on TOML and KDL so far — head wraps to the
-  file's width envelope, inline never wraps — with JSONC/INI/env/YAML rolling
-  out per the v0.2 plan in
-  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md).
-  A format without a comment write path yet errors cleanly.
+  `.foo.# |= gsub(…)`, `del(.foo.#)`) on TOML, KDL, JSONC, INI, and `.env` —
+  head/foot wrap to the file's width envelope, inline never wraps. Only YAML's
+  write path and the compact-JSON / YAML-flow layout-reflow warnings remain (see
+  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md));
+  a compact JSONC target errors "needs layout expansion" until then, and a
+  format without a write path yet errors cleanly.
 - filter `.items[] | select(.enabled == true)`
 
 **Mutation**

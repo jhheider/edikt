@@ -95,6 +95,53 @@ fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
     }
 }
 
+/// Place (or clear) an own-line comment block around a node's line, on the
+/// source text — for the line-oriented formats (`.env`, INI). `target_line` is
+/// the 0-based index of the node's own line; `is_head` puts the block above
+/// (else below, for foot). Contiguous existing comment lines on that side
+/// (detected by `is_comment_line`) are replaced; `wrapped == None` deletes.
+/// Untouched lines are preserved verbatim, so the moat holds.
+pub fn place_line_comment(
+    source: &str,
+    target_line: usize,
+    is_head: bool,
+    indent: &str,
+    delim: &str,
+    is_comment_line: &dyn Fn(&str) -> bool,
+    wrapped: Option<&[String]>,
+) -> String {
+    let mut lines: Vec<String> = source.split_inclusive('\n').map(str::to_string).collect();
+    if target_line >= lines.len() {
+        return source.to_string();
+    }
+    let bare = |s: &str| s.trim_end_matches(['\n', '\r']).to_string();
+    let block: Vec<String> = wrapped
+        .into_iter()
+        .flatten()
+        .map(|l| format!("{indent}{delim}{l}\n"))
+        .collect();
+
+    if is_head {
+        let mut start = target_line;
+        while start > 0 && is_comment_line(&bare(&lines[start - 1])) {
+            start -= 1;
+        }
+        lines.splice(start..target_line, block);
+    } else {
+        let mut end = target_line + 1;
+        while end < lines.len() && is_comment_line(&bare(&lines[end])) {
+            end += 1;
+        }
+        lines.splice(target_line + 1..end, block);
+    }
+    lines.concat()
+}
+
+/// The 0-based line index containing byte offset `at`.
+pub fn line_index(source: &str, at: usize) -> usize {
+    source[..at.min(source.len())].matches('\n').count()
+}
+
 /// The current text of the comment at `prefix`/`kind`, if any.
 fn current_comment(doc: &dyn Document, prefix: &[Step], kind: CommentKind) -> Option<String> {
     let mut path = prefix.to_vec();

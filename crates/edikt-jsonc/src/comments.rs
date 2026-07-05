@@ -9,8 +9,159 @@
 
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
-use edikt_core::{Commented, CommentedNode, Comments, Value};
+use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, line_index,
+    place_line_comment,
+};
 use rowan::NodeOrToken;
+
+// --- in-place comment write-back ---------------------------------------
+
+/// Is `line` a JSONC comment line (`//` or `/*`, after indent)?
+fn is_comment_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("//") || t.starts_with("/*")
+}
+
+/// Set the `kind` comment on the member/element at `path`, format-preserving.
+/// Head/foot go on own lines around it; inline after its value. A compact
+/// (single-line) container can't hold an own-line comment without expanding —
+/// that reflow lands in a follow-up, so it errors here.
+pub(crate) fn set_node_comment(
+    root: &SyntaxNode,
+    path: &[Step],
+    kind: CommentKind,
+    text: &str,
+) -> Result<(String, Vec<String>), EditError> {
+    let target = resolve_target(root, path)?;
+    let source = edikt_syntax::to_source(root);
+    let start: usize = target.text_range().start().into();
+    let end: usize = target.text_range().end().into();
+    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let indent = &source[line_start..start];
+
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot => {
+            if !indent.chars().all(|c| c == ' ' || c == '\t') {
+                return Err(EditError::new(
+                    "adding a comment to a compact object needs layout expansion (a follow-up)",
+                ));
+            }
+            let width = wrap_width(&source);
+            let wrapped = wrap_comment(text, width, indent.chars().count(), 3);
+            place_line_comment(
+                &source,
+                line_index(&source, start),
+                matches!(kind, CommentKind::Head),
+                indent,
+                "// ",
+                &is_comment_line,
+                Some(&wrapped),
+            )
+        }
+        CommentKind::Inline => set_inline(&source, start, end, Some(text))?,
+    };
+    Ok((out, Vec::new()))
+}
+
+/// Delete the `kind` comment on the member/element at `path` (a miss is a no-op).
+pub(crate) fn delete_node_comment(
+    root: &SyntaxNode,
+    path: &[Step],
+    kind: CommentKind,
+) -> Result<String, EditError> {
+    let source = edikt_syntax::to_source(root);
+    let Ok(target) = resolve_target(root, path) else {
+        return Ok(source);
+    };
+    let start: usize = target.text_range().start().into();
+    let end: usize = target.text_range().end().into();
+    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let indent = &source[line_start..start];
+    let out = match kind {
+        CommentKind::Head | CommentKind::Foot if indent.chars().all(|c| c.is_whitespace()) => {
+            place_line_comment(
+                &source,
+                line_index(&source, start),
+                matches!(kind, CommentKind::Head),
+                indent,
+                "// ",
+                &is_comment_line,
+                None,
+            )
+        }
+        CommentKind::Head | CommentKind::Foot => source, // compact: nothing to drop
+        CommentKind::Inline => set_inline(&source, start, end, None)?,
+    };
+    Ok(out)
+}
+
+/// Rewrite (or clear) the inline comment trailing a single-line member/element.
+fn set_inline(
+    source: &str,
+    start: usize,
+    end: usize,
+    text: Option<&str>,
+) -> Result<String, EditError> {
+    if source[start..end].contains('\n') {
+        return Err(EditError::new(
+            "an inline comment on a multi-line value isn't supported yet (a follow-up)",
+        ));
+    }
+    let nl = source[end..]
+        .find('\n')
+        .map(|i| end + i)
+        .unwrap_or(source.len());
+    // A container close (`}`/`]`) after the value on this line means it is
+    // compact — an inline comment would comment it out; that reflow is later.
+    if source[end..nl].contains(['}', ']', '{', '[']) {
+        return Err(EditError::new(
+            "adding an inline comment here needs layout expansion (a follow-up)",
+        ));
+    }
+    let tail = match text {
+        Some(t) => format!(" // {}", sanitize(t)),
+        None => String::new(),
+    };
+    Ok(format!("{}{}{}", &source[..end], tail, &source[nl..]))
+}
+
+/// Resolve a comment target to its `Member` (object key) or element `Value` node.
+fn resolve_target(root: &SyntaxNode, path: &[Step]) -> Result<SyntaxNode, EditError> {
+    let Some((last, parent)) = path.split_last() else {
+        return Err(EditError::new(
+            "document-level (`.#`) comment editing for JSONC is a follow-up",
+        ));
+    };
+    let container = crate::edit::resolve_value_node(root, parent)
+        .ok_or_else(|| EditError::new("path not found"))?;
+    match last {
+        Step::Field(key) => {
+            let object = container
+                .children()
+                .find(|n| n.kind() == Sk::Object)
+                .ok_or_else(|| EditError::new("comment target is not an object member"))?;
+            crate::edit::find_member(&object, key)
+                .ok_or_else(|| EditError::new(format!("no key `{key}`")))
+        }
+        Step::Index(i) => {
+            let array = container
+                .children()
+                .find(|n| n.kind() == Sk::Array)
+                .ok_or_else(|| EditError::new("comment target is not an array element"))?;
+            let values: Vec<_> = array.children().filter(|n| n.kind() == Sk::Value).collect();
+            let idx = if *i < 0 { values.len() as i64 + i } else { *i };
+            if idx < 0 || idx as usize >= values.len() {
+                return Err(EditError::new("array index out of range"));
+            }
+            Ok(values[idx as usize].clone())
+        }
+        _ => Err(EditError::new(
+            "comment paths address object keys or array elements",
+        )),
+    }
+}
 
 // --- extraction ---------------------------------------------------------
 
