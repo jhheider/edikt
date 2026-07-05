@@ -1,0 +1,101 @@
+name: Release
+
+# Fires when a GitHub Release is published. The full release ceremony:
+#   gh release create vX.Y.Z --generate-notes
+# (version must already be committed in the Cargo.tomls) — this builds the
+# platform binaries, attaches them, and publishes the workspace crates.
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: edikt-linux-x86_64.tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_name: edikt-linux-aarch64.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: edikt-macos-x86_64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: edikt-macos-aarch64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: edikt-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Installs the cross linker for the non-native linux-aarch64 build
+      - uses: taiki-e/setup-cross-toolchain-action@v1
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        with:
+          target: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # The binary generates its own docs: man page + completions ride along
+      # in every archive so packagers don't have to run the build.
+      - name: Package
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/edikt
+          staging=edikt-stage
+          mkdir -p "$staging"
+          if [[ "${{ matrix.asset_name }}" == *.zip ]]; then
+            cp "$bin.exe" "$staging/"
+            7z a "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" "./$staging/edikt.exe"
+          else
+            cp "$bin" "$staging/"
+            "$bin" --manpage > "$staging/edikt.1"
+            for shell in bash zsh fish; do
+              "$bin" --completions $shell > "$staging/edikt.$shell"
+            done
+            tar czf "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" -C "$staging" .
+          fi
+
+      - name: Attach to release
+        shell: bash
+        run: gh release upload '${{ github.event.release.tag_name }}' '${{ matrix.asset_name }}' --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Publishes workspace crates in dependency order (core/syntax → the
+      # format crates → the edikt bin), waiting for the index between steps.
+      - uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

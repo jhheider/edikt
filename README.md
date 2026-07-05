@@ -39,9 +39,10 @@ Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
 
 Status: **alpha** — six formats with lossless in-place edit, query, and
-conversion; packaging and release infra are the remaining work. See
-[`CLAUDE.md`](./CLAUDE.md) for the build contract.
+conversion (comments carried across); release infra is wired and awaiting the
+first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## License
 
-TBD.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option.

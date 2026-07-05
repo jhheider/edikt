@@ -24,7 +24,17 @@ use std::process::ExitCode;
     long_about = "Query and losslessly edit JSONC/JSON5, INI, .env/.properties, TOML, \
 and YAML with a jq-flavored expression language, changing only the bytes you target \
 and leaving comments and layout untouched. Convert between formats with -T. Reads \
-stdin and writes stdout by default, like sed."
+stdin and writes stdout by default, like sed.",
+    after_help = "Examples:
+  edikt '.compilerOptions.target' tsconfig.json         query: raw scalar out
+  edikt -i '.compilerOptions.strict = true' tsconfig.jsonc
+                                                        edit in place; comments,
+                                                        commas, indent all survive
+  edikt -i '.VERSION |= sub(\"^v\"; \"\")' .env             regex edit
+  edikt '.services.web' compose.yaml                    structural get: exact
+                                                        source bytes
+  edikt -T yaml tsconfig.jsonc                          convert; comments carried
+  cat app.cfg | edikt -t ini '.server.port'             sed-shaped stdin"
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -90,6 +100,14 @@ struct Args {
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     raw: bool,
+
+    /// Print shell completions to stdout (for packagers; bash|zsh|fish|…).
+    #[arg(long, value_name = "SHELL", hide = true)]
+    completions: Option<clap_complete::Shell>,
+
+    /// Print the man page (roff) to stdout (for packagers).
+    #[arg(long, hide = true)]
+    manpage: bool,
 }
 
 impl Args {
@@ -114,6 +132,22 @@ impl Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    // Packager outputs (hidden flags): the binary is its own doc generator,
+    // so release archives and package builds need no extra tooling.
+    if let Some(shell) = args.completions {
+        use clap::CommandFactory;
+        clap_complete::generate(shell, &mut Args::command(), "edikt", &mut std::io::stdout());
+        return ExitCode::SUCCESS;
+    }
+    if args.manpage {
+        use clap::CommandFactory;
+        let man = clap_mangen::Man::new(Args::command());
+        if let Err(e) = man.render(&mut std::io::stdout()) {
+            eprintln!("edikt: rendering man page: {e}");
+            return ExitCode::from(2);
+        }
+        return ExitCode::SUCCESS;
+    }
     match run(args) {
         Ok(code) => code,
         Err(e) => {

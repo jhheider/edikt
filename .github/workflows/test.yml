@@ -1,10 +1,10 @@
 on:
   pull_request:
-    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "LICENSE*", ".gitignore"]
   push:
     branches:
       - main
-    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "LICENSE*", ".gitignore"]
 
 name: Test
 
@@ -37,3 +37,30 @@ jobs:
           cache-all-crates: true
       - name: Test
         run: cargo test --workspace --all-features
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: "coverage"
+          cache-targets: true
+          cache-all-crates: true
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage report
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info
+      # The upload is advisory: the repo not yet being enrolled on
+      # coveralls.io (or an outage there) must not redden CI — the lcov
+      # generation above already gates real failures.
+      - uses: coverallsapp/github-action@v2
+        with:
+          path-to-lcov: coverage/lcov.info
+          fail-on-error: false

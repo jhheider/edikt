@@ -626,6 +626,19 @@ fn output_file_untouched_on_miss() {
 }
 
 #[test]
+fn packager_flags_emit_docs() {
+    // The binary is its own doc generator: completions and the man page come
+    // from hidden flags, so release archives and package builds need no
+    // extra tooling.
+    let (out, _e, code) = run(&["--completions", "zsh"], "");
+    assert!(out.starts_with("#compdef edikt"), "got: {out:.40}");
+    assert_eq!(code, 0);
+    let (man, _e, c2) = run(&["--manpage"], "");
+    assert!(man.contains(".TH edikt 1"), "got: {man:.80}");
+    assert_eq!(c2, 0);
+}
+
+#[test]
 fn helpful_error_messages() {
     // Unknown format names the valid choices.
     let (_o, err, code) = run(&["-t", "bogus", "."], "a: 1\n");

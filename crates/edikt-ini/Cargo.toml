@@ -1,9 +1,10 @@
 [package]
 name = "edikt-ini"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "edikt INI format module: line-oriented lossless CST implementing Document."
 
 [dependencies]
