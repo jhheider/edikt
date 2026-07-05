@@ -1,4 +1,236 @@
 //! edikt INI format module.
 //!
-//! Line-oriented lossless CST (sections, `key = value`, comments, blanks) with
-//! `FEATURES` and impls of `Document` + `Convert`. Populated by the INI slice.
+//! A line-oriented lossless CST (hand-scanned into a `rowan` tree): `[section]`
+//! headers, `key = value` / `key : value` entries, `;`/`#` comments, and blank
+//! lines all round-trip byte-for-byte. Paths are `.section.key` (or `.key` for
+//! the section-less preamble); values are strings. Edits touch only the targeted
+//! value or line.
+
+mod edit;
+mod parser;
+mod project;
+mod syntax;
+
+pub use edikt_core::EditError;
+pub use edit::apply;
+
+use edikt_core::{Document, Expr, Feature, Step, Value};
+use syntax::{Sk, SyntaxNode};
+
+/// Capabilities of INI: comments and a single level of named sections.
+pub const FEATURES: &[Feature] = &[Feature::Comments, Feature::Sections];
+
+/// A parse failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError {
+    pub msg: String,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+impl std::error::Error for ParseError {}
+
+/// A parsed INI document, backed by a lossless CST.
+pub struct Ini {
+    root: SyntaxNode,
+}
+
+impl Ini {
+    /// Access the underlying syntax tree.
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.root
+    }
+
+    /// Set the entry at `path` to a scalar, format-preserving: only the value
+    /// text changes. The entry must already exist (new-key creation lands later).
+    pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        let text = edit::scalar_string(value)?;
+        let entry = edit::resolve_entry(&self.root, path).ok_or_else(|| {
+            EditError::new("path not found (creating new keys is not supported yet)")
+        })?;
+        let value_node = entry
+            .children()
+            .find(|n| n.kind() == Sk::Value)
+            .ok_or_else(|| EditError::new("entry has no value slot"))?;
+        let new_root = value_node.replace_with(edit::value_node_green(&text));
+        self.root = SyntaxNode::new_root(new_root);
+        Ok(())
+    }
+
+    /// The string value of the entry at `path`, or `None`.
+    pub fn value_at(&self, path: &[Step]) -> Option<Value> {
+        edit::resolve_entry(&self.root, path).map(|e| Value::Str(project::entry_value(&e)))
+    }
+
+    /// Delete the entry at `path`, removing its whole line (a missing entry is a
+    /// no-op).
+    pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        let root = self.root.clone_for_update();
+        if let Some(entry) = edit::resolve_entry(&root, path) {
+            entry.detach();
+            self.root = root;
+        }
+        Ok(())
+    }
+}
+
+/// Parse INI source into an [`Ini`] document.
+pub fn parse(src: &str) -> Result<Ini, ParseError> {
+    let root = SyntaxNode::new_root(parser::build(src));
+    let malformed = root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == Sk::Error);
+    if malformed {
+        return Err(ParseError {
+            msg: "invalid INI: a line is neither a comment, section, nor key=value".to_string(),
+        });
+    }
+    Ok(Ini { root })
+}
+
+impl Document for Ini {
+    fn to_source(&self) -> String {
+        edikt_syntax::to_source(&self.root)
+    }
+    fn to_value(&self) -> Value {
+        project::to_value(&self.root)
+    }
+    fn features(&self) -> &'static [Feature] {
+        FEATURES
+    }
+    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
+        edit::apply(self, expr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edikt_core::eval;
+    use edikt_core::parse as parse_expr;
+
+    const SAMPLE: &str = "; app config\nglobal = 1\n\n[server]\nhost = 0.0.0.0\nport=8080        ; inline text\n\n[logging]\nlevel = info\n";
+
+    fn q(src: &str, expr: &str) -> Vec<Value> {
+        let v = parse(src).unwrap().to_value();
+        eval(&parse_expr(expr).unwrap(), &v).unwrap()
+    }
+
+    fn edit_src(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn roundtrips_byte_identically() {
+        for src in [
+            SAMPLE,
+            "",
+            "key=value",
+            "[only-section]\n",
+            "  indented = yes  \n; trailing comment\n",
+            "a:1\nb : 2\n",
+        ] {
+            assert_eq!(parse(src).unwrap().to_source(), src, "round-trip: {src:?}");
+        }
+    }
+
+    #[test]
+    fn projects_sections_and_preamble() {
+        assert_eq!(q(SAMPLE, ".global"), vec![Value::Str("1".into())]);
+        assert_eq!(
+            q(SAMPLE, ".server.host"),
+            vec![Value::Str("0.0.0.0".into())]
+        );
+        assert_eq!(q(SAMPLE, ".server.port"), vec![Value::Str("8080".into())]);
+        assert_eq!(q(SAMPLE, ".logging.level"), vec![Value::Str("info".into())]);
+        assert_eq!(
+            q(SAMPLE, ".server | keys"),
+            vec![Value::Array(vec![
+                Value::Str("host".into()),
+                Value::Str("port".into()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn set_preserves_key_and_spacing() {
+        // `port=8080` has no spaces around `=`; the edit keeps that.
+        let out = edit_src(SAMPLE, r#".server.port = "9090""#);
+        assert!(out.contains("port=9090"), "got: {out}");
+        assert!(out.contains("host = 0.0.0.0"));
+        assert!(out.contains("; app config"));
+    }
+
+    #[test]
+    fn set_preamble_and_spaced_entry() {
+        assert!(edit_src(SAMPLE, ".global = 2").contains("global = 2"));
+        assert!(edit_src(SAMPLE, r#".server.host = "127.0.0.1""#).contains("host = 127.0.0.1"));
+    }
+
+    #[test]
+    fn del_removes_the_line_only() {
+        let out = edit_src(SAMPLE, "del(.server.host)");
+        assert!(!out.contains("host = 0.0.0.0"));
+        assert!(out.contains("port=8080"));
+        assert!(out.contains("[server]"));
+        assert!(out.contains("[logging]"));
+    }
+
+    #[test]
+    fn update_and_add_assign_strings() {
+        assert!(edit_src(SAMPLE, ".logging.level |= ascii_upcase").contains("level = INFO"));
+        assert!(edit_src(SAMPLE, r#".logging.level += "!""#).contains("level = info!"));
+    }
+
+    #[test]
+    fn cannot_store_array() {
+        let mut doc = parse(SAMPLE).unwrap();
+        assert!(apply(&mut doc, &parse_expr(".global = [1, 2]").unwrap()).is_err());
+    }
+
+    #[test]
+    fn missing_path_and_malformed() {
+        let mut doc = parse(SAMPLE).unwrap();
+        assert!(apply(&mut doc, &parse_expr(".nope = 1").unwrap()).is_err());
+        assert!(parse("this is not ini\n").is_err());
+    }
+
+    #[test]
+    fn roundtrips_every_fixture() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/ini");
+        let mut count = 0;
+        for entry in std::fs::read_dir(&dir).expect("fixtures/ini directory") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ini") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                parse(&src).unwrap().to_source(),
+                src,
+                "round-trip must be byte-identical: {}",
+                path.display()
+            );
+            count += 1;
+        }
+        assert!(count >= 3, "expected several ini fixtures, found {count}");
+    }
+
+    #[test]
+    fn fixture_edit_preserves_inline_comment() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/ini");
+        let src = std::fs::read_to_string(dir.join("app.ini")).unwrap();
+        let out = edit_src(&src, r#".server.port = "9090""#);
+        assert!(
+            out.contains("port = 9090          ; the listen port"),
+            "got: {out}"
+        );
+        assert!(out.contains("; Application configuration"));
+    }
+}

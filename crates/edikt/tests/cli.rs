@@ -171,6 +171,36 @@ fn add_assign_number_via_cli() {
 }
 
 #[test]
+fn ini_query_via_type() {
+    let (out, _e, code) = run(&["-t", "ini", ".server.port"], "[server]\nport = 8080\n");
+    assert_eq!(out, "8080\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn ini_infers_by_extension() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/q.ini");
+    std::fs::write(&path, "[a]\nb = c\n").unwrap();
+    let (out, _e, code) = run(&[".a.b", &path], "");
+    assert_eq!(out, "c\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn ini_edit_in_place_preserves_layout() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/edit.ini");
+    std::fs::write(&path, "; keep me\n[server]\nport = 8080\n").unwrap();
+    let (_o, _e, code) = run(&["-i", r#".server.port = "9090""#, &path], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "; keep me\n[server]\nport = 9090\n"
+    );
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

@@ -19,10 +19,10 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Format-preserving structured-config editor (JSONC today; INI/.env coming).",
-    long_about = "Query and (soon) edit JSONC/JSON5, INI, and .env files with a \
-jq-flavored expression language, preserving comments and layout. Reads stdin and \
-writes stdout by default, like sed."
+    about = "Format-preserving structured-config editor (JSONC and INI; .env coming).",
+    long_about = "Query and edit JSONC/JSON5 and INI files with a jq-flavored \
+expression language, preserving comments and layout. Reads stdin and writes \
+stdout by default, like sed."
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -68,6 +68,7 @@ fn main() -> ExitCode {
 /// The supported formats.
 enum Format {
     Jsonc,
+    Ini,
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
@@ -76,6 +77,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String
         Format::Jsonc => Ok(Box::new(
             edikt_jsonc::parse(src).map_err(|e| e.to_string())?,
         )),
+        Format::Ini => Ok(Box::new(edikt_ini::parse(src).map_err(|e| e.to_string())?)),
     }
 }
 
@@ -176,7 +178,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
     if let Some(t) = forced {
         return match t.to_ascii_lowercase().as_str() {
             "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
-            "ini" | "cfg" | "conf" => Err("INI support arrives in M4".to_string()),
+            "ini" | "cfg" | "conf" => Ok(Format::Ini),
             "env" | "properties" | "props" => {
                 Err(".env/.properties support arrives in M5".to_string())
             }
@@ -185,9 +187,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
     }
     match path.and_then(|p| p.extension()).and_then(|e| e.to_str()) {
         Some("jsonc" | "json5" | "json") => Ok(Format::Jsonc),
-        Some("ini" | "cfg" | "conf") => {
-            Err("INI support arrives in M4; use -t jsonc for a JSONC file".to_string())
-        }
+        Some("ini" | "cfg" | "conf") => Ok(Format::Ini),
         Some("env" | "properties") => Err(".env/.properties support arrives in M5".to_string()),
         Some(ext) => Err(format!("cannot infer format from `.{ext}`; pass -t")),
         None => Err("cannot infer format (no extension); pass -t".to_string()),

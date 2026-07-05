@@ -9,20 +9,22 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 - ✅ **M1** — query mode on JSONC end-to-end: workspace + CI, `edikt-core`
   (Value, Feature, expression language, evaluator), `edikt-syntax` + `edikt-jsonc`
   (lossless CST, `Document` seam), and the `edikt` CLI.
-- 🚧 **M2 — Mutation.** `set` via `=`/`|=` + the rowan splice write path + `-i`
-  shipped; `del` and `+=`/append in flight.
+- ✅ **M2 — Mutation.** `set` (`=`, `|=`), `del()`, `+=`/append — all
+  format-preserving via the rowan splice — plus `-i` and a format-agnostic CLI.
+- ✅ **M4 — INI.** Line-oriented lossless CST, `.section.key` paths, inline
+  comments, set/del, `FEATURES = [Comments, Sections]`.
 
 ## Milestones
 
-- 🚧 **M2 — Mutation + the format-preserving write path.** ✅ `set` (`=`, `|=`),
-  the rowan structural-sharing splice, mutation-mode output, `-i`. ⬜ remaining:
-  `del`, `+=`/append, `-i.bak`, and iterate-in-assignment (`.a[] = x`). This is
-  the differentiator.
+- ✅ **M2 — Mutation + the format-preserving write path.** `set` (`=`, `|=`),
+  `del()`, `+=`/append, `-i`. Follow-ups: `-i.bak`, iterate-in-assignment
+  (`.a[] = x`), object literals `{...}`, new-key creation.
 - ⬜ **M3 — `select()` / iteration polish + more builtins** as real queries drive
   demand. (Iteration and `select` already work; grow the builtin registry
   deliberately.)
-- ⬜ **M4 — INI format module.** Line-oriented lossless CST; `.section.key`
-  paths; `FEATURES = [Comments, Sections]`.
+- ✅ **M4 — INI format module.** Line-oriented lossless CST; `.section.key`
+  paths; inline-comment aware; `FEATURES = [Comments, Sections]`. Dialect quirks
+  (git config subsections, systemd duplicate keys) are follow-ups.
 - ⬜ **M5 — `.env` / `.properties`.** Flat, string-valued, honest line-level
   editing only. `FEATURES = [Comments]`.
 - ⬜ **M6 — Format conversion (`-T`).** Feature-driven: derive the source's used
@@ -43,7 +45,7 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 |---|---|---|
 | JSONC / JSON5 | ✅ in scope (done) | the headline — `settings.json`, `tsconfig.json`, `devcontainer.json` |
 | JSON | ✅ in scope (done) | read as a JSONC subset |
-| INI | ⬜ in scope (M4) | `[section]` + `key = value` |
+| INI | ✅ in scope (done) | `[section]` + `key = value`/`key : value`, inline comments |
 | `.env` | ⬜ in scope (M5) | flat, line-level only, interpret nothing |
 | `.properties` (Java) | ⬜ in scope (M5) | `key=value` / `key:value`, `\` line-continuations |
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`, `.editorconfig`-body) | ⬜ in scope (M5) | env/properties family |
