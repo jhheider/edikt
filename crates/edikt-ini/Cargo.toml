@@ -10,3 +10,4 @@ description = "edikt INI format module: line-oriented lossless CST implementing 
 edikt-core = { workspace = true }
 edikt-syntax = { workspace = true }
 rowan = { workspace = true }
+thiserror = { workspace = true }

@@ -19,7 +19,7 @@ mod lexer;
 mod parser;
 mod value;
 
-pub use ast::{BinOp, Expr, Step};
+pub use ast::{BinOp, Expr, Step, render_path};
 pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval};

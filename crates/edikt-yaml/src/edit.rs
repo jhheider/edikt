@@ -12,7 +12,7 @@
 //! mapping. Restructuring a block in place (replacing a mapping/sequence wholesale,
 //! or creating nested keys) is refused rather than reflowed.
 
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, render_path};
 use std::ops::Range;
 
 use crate::Yaml;
@@ -31,7 +31,7 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
             let steps = assign_path(lhs)?;
             let current = doc
                 .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
+                .ok_or_else(|| EditError::new(format!("path not found: {}", render_path(steps))))?;
             let value = eval_one(rhs, &current)?;
             doc.set(steps, &value)
         }
@@ -39,7 +39,7 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
             let steps = assign_path(lhs)?;
             let current = doc
                 .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
+                .ok_or_else(|| EditError::new(format!("path not found: {}", render_path(steps))))?;
             let addend = eval_one(rhs, &doc.to_value())?;
             match (&current, &addend) {
                 (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
@@ -165,7 +165,12 @@ impl Yaml {
                 }
             },
             Resolved::MissingField { parent, key } => new_key(&self.source, parent, &key, value)?,
-            Resolved::NotFound => return Err(EditError::new("path not found")),
+            Resolved::NotFound => {
+                return Err(EditError::new(format!(
+                    "path not found: {}",
+                    render_path(path)
+                )));
+            }
         };
         self.commit(range, &text)
     }
@@ -175,9 +180,19 @@ impl Yaml {
         let (range, text) = match resolve(&self.doc, path) {
             Resolved::Found(node) => match &node.kind {
                 NodeKind::Sequence(seq) => append_items(&self.source, node, seq, items)?,
-                _ => return Err(EditError::new("`+=` with an array needs a sequence target")),
+                _ => {
+                    return Err(EditError::new(format!(
+                        "`+=` with an array needs a sequence at {}",
+                        render_path(path)
+                    )));
+                }
             },
-            _ => return Err(EditError::new("path not found")),
+            _ => {
+                return Err(EditError::new(format!(
+                    "path not found: {}",
+                    render_path(path)
+                )));
+            }
         };
         self.commit(range, &text)
     }
@@ -190,23 +205,38 @@ impl Yaml {
         let range = match resolve(&self.doc, parent_path) {
             Resolved::Found(parent) => match (last, &parent.kind) {
                 (Step::Field(k), NodeKind::Mapping(entries)) => {
-                    let entry = entries
-                        .iter()
-                        .find(|e| &e.key == k)
-                        .ok_or_else(|| EditError::new("key not found"))?;
+                    let entry = entries.iter().find(|e| &e.key == k).ok_or_else(|| {
+                        EditError::new(format!("no key to delete at {}", render_path(path)))
+                    })?;
                     line_start(&self.source, entry.key_span.start)
                         ..block_end(&self.source, &entry.value)
                 }
                 (Step::Index(i), NodeKind::Sequence(items)) => {
                     let idx = normalize_index(*i, items.len())
                         .filter(|n| *n < items.len())
-                        .ok_or_else(|| EditError::new("index out of range"))?;
+                        .ok_or_else(|| {
+                            EditError::new(format!(
+                                "index {i} out of range at {} (len {})",
+                                render_path(parent_path),
+                                items.len()
+                            ))
+                        })?;
                     let item = &items[idx];
                     line_start(&self.source, item.span.start)..block_end(&self.source, item)
                 }
-                _ => return Err(EditError::new("path not found")),
+                _ => {
+                    return Err(EditError::new(format!(
+                        "path not found: {}",
+                        render_path(path)
+                    )));
+                }
             },
-            _ => return Err(EditError::new("path not found")),
+            _ => {
+                return Err(EditError::new(format!(
+                    "path not found: {}",
+                    render_path(path)
+                )));
+            }
         };
         self.commit(range, "")
     }

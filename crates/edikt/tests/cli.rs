@@ -396,4 +396,25 @@ fn unknown_extension_errors() {
     let (_o, err, code) = run(&[".a", &path], "");
     assert_eq!(code, 2);
     assert!(err.contains("-t"));
+    // The error lists the formats to choose from.
+    assert!(err.contains("yaml") && err.contains("toml"), "got: {err}");
+}
+
+#[test]
+fn helpful_error_messages() {
+    // Unknown format names the valid choices.
+    let (_o, err, code) = run(&["-t", "bogus", "."], "a: 1\n");
+    assert_eq!(code, 2);
+    assert!(err.contains("unknown format `bogus`"), "got: {err}");
+    assert!(err.contains("jsonc") && err.contains("yaml"), "got: {err}");
+
+    // A failed edit path is named in the error.
+    let (_o, err2, c2) = run(&["-t", "yaml", "del(.nope)"], "a: 1\n");
+    assert_eq!(c2, 2);
+    assert!(err2.contains(".nope"), "got: {err2}");
+
+    // A bad expression chains its context.
+    let (_o, err3, c3) = run(&["-t", "yaml", ".a |"], "a: 1\n");
+    assert_eq!(c3, 2);
+    assert!(err3.contains("bad expression"), "got: {err3}");
 }

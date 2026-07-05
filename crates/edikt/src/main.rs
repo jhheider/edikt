@@ -8,6 +8,7 @@
 //! Exit codes are grep-shaped: 0 = at least one result, 1 = query miss (no
 //! results), 2 = parse / evaluation / I/O error.
 
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use edikt_core::{Document, Expr, Value};
 use std::fs;
@@ -69,7 +70,9 @@ fn main() -> ExitCode {
     match run(args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("edikt: {e}");
+            // `{:#}` prints the full context chain (e.g. "<stdin>: path not
+            // found: .a.b"), so the location and the cause both surface.
+            eprintln!("edikt: {e:#}");
             ExitCode::from(2)
         }
     }
@@ -85,44 +88,45 @@ enum Format {
     Yaml,
 }
 
+/// Every format name accepted by `-t`/`-T`, for error messages.
+const FORMAT_NAMES: &str = "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml";
+
 /// Resolve a `-t`/`-T` format name.
-fn format_from_name(name: &str) -> Result<Format, String> {
+fn format_from_name(name: &str) -> Result<Format> {
     match name.to_ascii_lowercase().as_str() {
         "jsonc" | "json5" | "json" => Ok(Format::Jsonc),
         "ini" | "cfg" | "conf" => Ok(Format::Ini),
         "env" | "properties" | "props" => Ok(Format::Env),
         "toml" => Ok(Format::Toml),
         "yaml" | "yml" => Ok(Format::Yaml),
-        other => Err(format!("unknown format `{other}`")),
+        other => bail!("unknown format `{other}` (expected one of: {FORMAT_NAMES})"),
     }
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
-fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>, String> {
-    match format {
-        Format::Jsonc => Ok(Box::new(
-            edikt_jsonc::parse(src).map_err(|e| e.to_string())?,
-        )),
-        Format::Ini => Ok(Box::new(edikt_ini::parse(src).map_err(|e| e.to_string())?)),
-        Format::Env => Ok(Box::new(edikt_env::parse(src).map_err(|e| e.to_string())?)),
-        Format::Toml => Ok(Box::new(edikt_toml::parse(src).map_err(|e| e.to_string())?)),
-        Format::Yaml => Ok(Box::new(edikt_yaml::parse(src).map_err(|e| e.to_string())?)),
-    }
+fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
+    Ok(match format {
+        Format::Jsonc => Box::new(edikt_jsonc::parse(src)?),
+        Format::Ini => Box::new(edikt_ini::parse(src)?),
+        Format::Env => Box::new(edikt_env::parse(src)?),
+        Format::Toml => Box::new(edikt_toml::parse(src)?),
+        Format::Yaml => Box::new(edikt_yaml::parse(src)?),
+    })
 }
 
 /// Emit a value in the target format, returning the text and any lossy-conversion
 /// warnings.
-fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>), String> {
-    match format {
-        Format::Jsonc => Ok((edikt_jsonc::emit(value), Vec::new())),
-        Format::Ini => edikt_ini::emit(value).map_err(|e| e.to_string()),
-        Format::Env => edikt_env::emit(value).map_err(|e| e.to_string()),
-        Format::Toml => edikt_toml::emit(value).map_err(|e| e.to_string()),
-        Format::Yaml => edikt_yaml::emit(value).map_err(|e| e.to_string()),
-    }
+fn emit(format: Format, value: &Value) -> Result<(String, Vec<String>)> {
+    Ok(match format {
+        Format::Jsonc => (edikt_jsonc::emit(value), Vec::new()),
+        Format::Ini => edikt_ini::emit(value)?,
+        Format::Env => edikt_env::emit(value)?,
+        Format::Toml => edikt_toml::emit(value)?,
+        Format::Yaml => edikt_yaml::emit(value)?,
+    })
 }
 
-fn run(args: Args) -> Result<ExitCode, String> {
+fn run(args: Args) -> Result<ExitCode> {
     let to_format = args.to.as_deref().map(format_from_name).transpose()?;
 
     // Resolve the program and the file list. Expression sources (-f then -e) win
@@ -130,7 +134,8 @@ fn run(args: Args) -> Result<ExitCode, String> {
     let mut sources: Vec<String> = Vec::new();
     for path in &args.script_files {
         sources.push(
-            fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?,
+            fs::read_to_string(path)
+                .with_context(|| format!("reading script {}", path.display()))?,
         );
     }
     sources.extend(args.exprs.iter().cloned());
@@ -144,15 +149,18 @@ fn run(args: Args) -> Result<ExitCode, String> {
         (".".to_string(), args.operands.clone())
     } else {
         let mut it = args.operands.iter().cloned();
-        let program = it.next().ok_or("no expression given")?;
+        let program = it
+            .next()
+            .context("no expression given (pass an expression, or -e/-f)")?;
         (program, it.collect())
     };
 
-    let expr = edikt_core::parse(&program).map_err(|e| format!("bad expression: {e}"))?;
+    let expr =
+        edikt_core::parse(&program).with_context(|| format!("bad expression `{program}`"))?;
     let is_mutation = expr.is_mutation();
 
     if args.in_place && !is_mutation && to_format.is_none() {
-        return Err("in-place (-i) needs a mutating expression or a conversion (-T)".to_string());
+        bail!("in-place (-i) needs a mutating expression or a conversion (-T)");
     }
 
     let inputs = read_inputs(&files)?;
@@ -167,22 +175,22 @@ fn run(args: Args) -> Result<ExitCode, String> {
     for (path, src) in &inputs {
         let loc = display_path(path.as_deref());
         let format = detect_format(path.as_deref(), args.format.as_deref())?;
-        let mut doc = parse_document(format, src).map_err(|e| format!("{loc}: {e}"))?;
+        let mut doc = parse_document(format, src).with_context(|| loc.clone())?;
         if is_mutation {
-            doc.apply(&expr).map_err(|e| format!("{loc}: {e}"))?;
+            doc.apply(&expr).with_context(|| loc.clone())?;
             let out = doc.to_source();
             if args.in_place {
                 let p = path
                     .as_ref()
-                    .ok_or("cannot edit stdin in place; pass a file")?;
-                std::fs::write(p, out).map_err(|e| format!("writing {}: {e}", p.display()))?;
+                    .context("cannot edit stdin in place; pass a file")?;
+                std::fs::write(p, out).with_context(|| format!("writing {}", p.display()))?;
             } else {
                 print!("{out}");
             }
             emitted = true;
         } else {
             let value = doc.to_value();
-            let results = edikt_core::eval(&expr, &value).map_err(|e| format!("{loc}: {e}"))?;
+            let results = edikt_core::eval(&expr, &value).with_context(|| loc.clone())?;
             for r in &results {
                 println!("{}", render(r, as_json));
                 emitted = true;
@@ -206,24 +214,24 @@ fn convert(
     expr: &Expr,
     inputs: &[(Option<PathBuf>, String)],
     target: Format,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode> {
     let mut emitted = false;
     for (path, src) in inputs {
         let loc = display_path(path.as_deref());
         let format = detect_format(path.as_deref(), args.format.as_deref())?;
-        let doc = parse_document(format, src).map_err(|e| format!("{loc}: {e}"))?;
+        let doc = parse_document(format, src).with_context(|| loc.clone())?;
         let out_value = edikt_core::eval(expr, &doc.to_value())
-            .map_err(|e| format!("{loc}: {e}"))?
+            .with_context(|| loc.clone())?
             .into_iter()
             .next()
-            .ok_or_else(|| format!("{loc}: expression produced no value to convert"))?;
+            .with_context(|| format!("{loc}: expression produced no value to convert"))?;
 
-        let (output, mut warnings) = emit(target, &out_value).map_err(|e| format!("{loc}: {e}"))?;
+        let (output, mut warnings) = emit(target, &out_value).with_context(|| loc.clone())?;
         if doc.has_comments() {
             warnings.insert(0, "comments were dropped".to_string());
         }
         if args.strict && !warnings.is_empty() {
-            return Err(format!("{loc}: {} (--strict)", warnings.join("; ")));
+            bail!("{loc}: {} (--strict)", warnings.join("; "));
         }
         for w in &warnings {
             eprintln!("edikt: warning: {loc}: {w}");
@@ -232,8 +240,8 @@ fn convert(
         if args.in_place {
             let p = path
                 .as_ref()
-                .ok_or("cannot convert stdin in place; pass a file")?;
-            std::fs::write(p, output).map_err(|e| format!("writing {}: {e}", p.display()))?;
+                .context("cannot convert stdin in place; pass a file")?;
+            std::fs::write(p, output).with_context(|| format!("writing {}", p.display()))?;
         } else {
             print!("{output}");
         }
@@ -247,7 +255,7 @@ fn convert(
 }
 
 /// Read each input as (path, contents). No files (or `-`) means stdin.
-fn read_inputs(files: &[String]) -> Result<Vec<(Option<PathBuf>, String)>, String> {
+fn read_inputs(files: &[String]) -> Result<Vec<(Option<PathBuf>, String)>> {
     if files.is_empty() {
         return Ok(vec![(None, read_stdin()?)]);
     }
@@ -257,23 +265,23 @@ fn read_inputs(files: &[String]) -> Result<Vec<(Option<PathBuf>, String)>, Strin
             out.push((None, read_stdin()?));
         } else {
             let path = PathBuf::from(f);
-            let src = fs::read_to_string(&path)
-                .map_err(|e| format!("reading {}: {e}", path.display()))?;
+            let src =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
             out.push((Some(path), src));
         }
     }
     Ok(out)
 }
 
-fn read_stdin() -> Result<String, String> {
+fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     std::io::stdin()
         .read_to_string(&mut buf)
-        .map_err(|e| format!("reading stdin: {e}"))?;
+        .context("reading stdin")?;
     Ok(buf)
 }
 
-fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, String> {
+fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
     if let Some(t) = forced {
         return format_from_name(t);
     }
@@ -289,8 +297,8 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, St
         Some("env" | "properties" | "props") => Ok(Format::Env),
         Some("toml") => Ok(Format::Toml),
         Some("yaml" | "yml") => Ok(Format::Yaml),
-        Some(ext) => Err(format!("cannot infer format from `.{ext}`; pass -t")),
-        None => Err("cannot infer format (no extension); pass -t".to_string()),
+        Some(ext) => bail!("cannot infer format from `.{ext}`; pass -t (one of: {FORMAT_NAMES})"),
+        None => bail!("cannot infer format (no extension); pass -t (one of: {FORMAT_NAMES})"),
     }
 }
 

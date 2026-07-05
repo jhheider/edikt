@@ -10,18 +10,12 @@ use crate::value::Value;
 use logos::Logos;
 
 /// A parse failure with a byte offset into the source expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{msg} (at offset {pos})")]
 pub struct ParseError {
     pub msg: String,
     pub pos: usize,
 }
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (at offset {})", self.msg, self.pos)
-    }
-}
-impl std::error::Error for ParseError {}
 
 struct Tok {
     kind: Lx,

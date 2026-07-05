@@ -22,3 +22,6 @@ edikt-yaml = { path = "crates/edikt-yaml", version = "0.0.0" }
 rowan = "0.16"
 logos = "0.16"
 clap = { version = "4", features = ["derive"] }
+# Errors: thiserror for library error types, anyhow for the binary.
+thiserror = "2"
+anyhow = "1"

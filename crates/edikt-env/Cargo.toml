@@ -10,3 +10,4 @@ description = "edikt .env/.properties format module: flat, line-level lossless C
 edikt-core = { workspace = true }
 edikt-syntax = { workspace = true }
 rowan = { workspace = true }
+thiserror = { workspace = true }

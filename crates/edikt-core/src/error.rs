@@ -2,7 +2,8 @@
 
 /// A format-preserving edit failure (bad path, wrong type for the operation,
 /// unsupported construct).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{msg}")]
 pub struct EditError {
     pub msg: String,
 }
@@ -12,10 +13,3 @@ impl EditError {
         EditError { msg: msg.into() }
     }
 }
-
-impl std::fmt::Display for EditError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-impl std::error::Error for EditError {}
