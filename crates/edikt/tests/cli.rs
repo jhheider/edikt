@@ -522,6 +522,44 @@ fn yaml_edit_is_lossless() {
 }
 
 #[test]
+fn comments_stream_query_and_bulk_edit() {
+    // comment → key: which keys carry a TODO?
+    let y =
+        "web:\n  image: nginx  # TODO pin\n  port: 80  # ok\ndb:\n  image: pg  # TODO upgrade\n";
+    let (out, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            r#"comments | select(.text | test("TODO")) | .path"#,
+        ],
+        y,
+    );
+    assert_eq!(out, ".web.image\n.db.image\n");
+    assert_eq!(code, 0);
+
+    // Bulk edit every comment's text (TODO → DONE), format-preserving.
+    let (edited, _e, c2) = run(
+        &["-t", "yaml", r#"comments |= gsub("TODO"; "DONE")"#],
+        "a: 1  # TODO a\nb: 2  # TODO b\n",
+    );
+    assert_eq!(edited, "a: 1  # DONE a\nb: 2  # DONE b\n");
+    assert_eq!(c2, 0);
+
+    // Bulk delete removes all comments (JSONC, through the rowan re-parse path).
+    let (stripped, _e, c3) = run(
+        &["-t", "jsonc", "del(comments)"],
+        "{\n  // drop\n  \"a\": 1,\n  \"b\": 2 // and this\n}\n",
+    );
+    assert_eq!(stripped, "{\n  \"a\": 1,\n  \"b\": 2\n}\n");
+    assert_eq!(c3, 0);
+
+    // `comments` as JSON does not spuriously warn "comments were dropped".
+    let (_o, err, c4) = run(&["-t", "yaml", "--json", "comments"], "a: 1  # note\n");
+    assert!(!err.contains("dropped"), "stray warning: {err}");
+    assert_eq!(c4, 0);
+}
+
+#[test]
 fn comment_query_reads_by_kind() {
     // Head comment via `#` (JSONC).
     let (out, _e, code) = run(

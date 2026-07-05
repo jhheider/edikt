@@ -90,6 +90,10 @@ an *edit* language, not a general-purpose one.
   so it **errors cleanly** ("needs layout expansion") rather than reflowing bytes
   the user didn't touch — auto-expansion is deferred, revisit-reactively (see
   [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
+- comment stream `comments` — a document-wide stream of `{path, kind, text}`
+  records over every comment (query: `comments | select(.text | test("TODO")) |
+  .path` = which keys carry a TODO); as a mutation target, `comments |= gsub(…)`
+  bulk-edits every comment's text and `del(comments)` clears them all.
 - filter `.items[] | select(.enabled == true)`
 
 **Mutation**

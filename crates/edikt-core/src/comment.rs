@@ -204,6 +204,47 @@ impl Commented {
             .filter_map(|n| n.comments.get(*kind).map(Value::Str))
             .collect()
     }
+
+    /// Every comment in the tree as `(path steps, kind, text)`, in document
+    /// order — the backbone of the document-wide `comments` stream (query) and
+    /// bulk comment edits (`comments |= …`). The steps address the *node*; the
+    /// kind and text are the comment. Paths stay valid across edits (they are
+    /// logical, not byte offsets), so a caller may snapshot then apply.
+    pub fn comment_targets(&self) -> Vec<(Vec<Step>, crate::CommentKind, String)> {
+        let mut out = Vec::new();
+        collect_targets(self, &mut Vec::new(), &mut out);
+        out
+    }
+}
+
+fn collect_targets(
+    node: &Commented,
+    steps: &mut Vec<Step>,
+    out: &mut Vec<(Vec<Step>, crate::CommentKind, String)>,
+) {
+    use crate::CommentKind::{Foot, Head, Inline};
+    for kind in [Head, Inline, Foot] {
+        if let Some(text) = node.comments.get(kind) {
+            out.push((steps.clone(), kind, text));
+        }
+    }
+    match &node.node {
+        CommentedNode::Scalar(_) => {}
+        CommentedNode::Object(entries) => {
+            for (k, v) in entries {
+                steps.push(Step::Field(k.clone()));
+                collect_targets(v, steps, out);
+                steps.pop();
+            }
+        }
+        CommentedNode::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                steps.push(Step::Index(i as i64));
+                collect_targets(v, steps, out);
+                steps.pop();
+            }
+        }
+    }
 }
 
 /// One flattened `key = value` line with the comments it carries — the shape

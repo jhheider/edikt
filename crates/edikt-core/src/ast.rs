@@ -111,7 +111,8 @@ impl Expr {
             }
             Expr::Comma(items) => items.iter().any(Expr::has_comment),
             Expr::Neg(inner) => inner.has_comment(),
-            Expr::Call(_, args) => args.iter().any(Expr::has_comment),
+            // The bare `comments` stream needs the commented projection too.
+            Expr::Call(name, args) => name == "comments" || args.iter().any(Expr::has_comment),
             Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.has_comment()),
             Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.has_comment()),
             Expr::Literal(_) => false,

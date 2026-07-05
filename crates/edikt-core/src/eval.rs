@@ -44,6 +44,10 @@ pub fn eval_with_comments(expr: &Expr, root: &Commented) -> Result<Vec<Value>, E
     }
     match expr {
         Expr::Path(steps) => Ok(root.resolve_comment(steps)),
+        // The document-wide `comments` stream: one record per comment.
+        Expr::Call(name, args) if name == "comments" && args.is_empty() => {
+            Ok(comment_records(root))
+        }
         Expr::Pipe(a, b) => {
             let mut out = Vec::new();
             for v in eval_with_comments(a, root)? {
@@ -70,11 +74,35 @@ pub fn eval_with_comments(expr: &Expr, root: &Commented) -> Result<Vec<Value>, E
             }
             Ok(out)
         }
+        Expr::Collect(inner) => {
+            let items = match inner {
+                Some(e) => eval_with_comments(e, root)?,
+                None => Vec::new(),
+            };
+            Ok(vec![Value::Array(items)])
+        }
         _ => Err(EvalError::new(
-            "comment access (`#`) is a read in v0.2 Phase 1: use `.path.#` \
-             optionally piped (`| f`) or defaulted (`// x`)",
+            "comment access (`#` / `comments`) here isn't supported: use a comment \
+             path (`.foo.#`) or the `comments` stream, optionally piped or collected",
         )),
     }
+}
+
+/// The document-wide `comments` stream: one `{ path, kind, text }` record per
+/// comment, in document order. `path` is a rendered path to the annotated node
+/// (`.web.image`), so `comments | select(.text | test("TODO")) | .path` answers
+/// "which keys carry a TODO?".
+fn comment_records(root: &Commented) -> Vec<Value> {
+    root.comment_targets()
+        .into_iter()
+        .map(|(steps, kind, text)| {
+            Value::Object(vec![
+                ("path".into(), Value::Str(crate::render_path(&steps))),
+                ("kind".into(), Value::Str(kind.as_str().to_string())),
+                ("text".into(), Value::Str(text)),
+            ])
+        })
+        .collect()
 }
 
 pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
@@ -1070,6 +1098,66 @@ mod tests {
         // A type error on the left still propagates — a miss falls back, a
         // mistake doesn't hide.
         assert!(eval(&parse(r#".a.b // "d""#).unwrap(), &doc).is_err());
+    }
+
+    #[test]
+    fn comments_stream_records_and_paths() {
+        use crate::comment::{Commented, CommentedNode, Comments};
+        // A little commented tree: web (head), web.image (inline), debug (inline).
+        let img = Commented {
+            comments: Comments {
+                head: vec![],
+                inline: Some("pinned".into()),
+                foot: vec![],
+            },
+            node: CommentedNode::Scalar(Value::Str("nginx".into())),
+        };
+        let web = Commented {
+            comments: Comments {
+                head: vec!["the service".into()],
+                inline: None,
+                foot: vec![],
+            },
+            node: CommentedNode::Object(vec![("image".into(), img)]),
+        };
+        let debug = Commented {
+            comments: Comments {
+                head: vec![],
+                inline: Some("TODO remove".into()),
+                foot: vec![],
+            },
+            node: CommentedNode::Scalar(Value::Bool(false)),
+        };
+        let root = Commented {
+            comments: Comments::default(),
+            node: CommentedNode::Object(vec![("web".into(), web), ("debug".into(), debug)]),
+        };
+
+        // The stream yields one record per comment, in document order.
+        let recs = comment_records(&root);
+        assert_eq!(recs.len(), 3);
+        // comment → key: which paths carry a TODO?
+        let todos = eval_with_comments(
+            &parse(r#"comments | select(.text | test("TODO")) | .path"#).unwrap(),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(todos, vec![Value::Str(".debug".into())]);
+        // paths render as re-usable expressions.
+        let paths = eval_with_comments(&parse("comments | .path").unwrap(), &root).unwrap();
+        assert_eq!(
+            paths,
+            vec![
+                Value::Str(".web".into()),
+                Value::Str(".web.image".into()),
+                Value::Str(".debug".into()),
+            ]
+        );
+        // collectable.
+        assert_eq!(
+            eval_with_comments(&parse("[comments] | length").unwrap(), &root).unwrap(),
+            vec![Value::Int(3)]
+        );
     }
 
     #[test]

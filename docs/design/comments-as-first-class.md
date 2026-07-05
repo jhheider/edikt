@@ -309,9 +309,15 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
   is near-zero. So the reflow-and-expand path is **deferred, revisit-reactively**
   (like per-format feature flags): the error names the situation, and a user who
   wants it can prettify first. Reopen if a real consumer asks.
-- **Phase 3 — document-wide `comments` + bulk edit + comment→key.** Requires the
-  key-carrying-iteration primitive; the largest and least-certain piece, so it
-  goes last and its shape is confirmed by what Phase 1/2 usage actually demands.
+- ✅ **Phase 3 — document-wide `comments` + bulk edit + comment→key.**
+  **Shipped.** `comments` is a document-wide stream of `{ path, kind, text }`
+  records (`Commented::comment_targets` walks the tree carrying steps, rendered
+  to a path string). `comments | select(.text | test("TODO")) | .path` answers
+  comment→key; `comments |= gsub(…)` / `del(comments)` bulk-edit or clear every
+  comment (targets are snapshotted, then written by logical path so each edit
+  stays valid across re-parses). The stream composes with pipe / `select` /
+  `[…]`. A comment query never triggers the "comments were dropped" conversion
+  warning — it *surfaces* comments, it doesn't lose them.
 
 ## Decided (was "open")
 
