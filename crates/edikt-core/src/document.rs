@@ -1,6 +1,6 @@
 //! The format-agnostic document seam.
 
-use crate::{Commented, EditError, Expr, Feature, Value};
+use crate::{CommentKind, Commented, EditError, Expr, Feature, Step, Value};
 
 /// A parsed config document.
 ///
@@ -50,8 +50,35 @@ pub trait Document {
     /// The default returns empty, meaning "this format doesn't source-slice";
     /// the caller then falls back to emitting the value in the target format.
     /// Only formats with structural values (JSONC, YAML) need override it.
-    fn source_slice(&self, path: &[crate::Step]) -> Vec<String> {
+    fn source_slice(&self, path: &[Step]) -> Vec<String> {
         let _ = path;
         Vec::new()
+    }
+
+    /// Set the `kind` comment on the node at `path` to `text` (raw, unwrapped),
+    /// format-preserving: only that comment's bytes change, or one comment line
+    /// is inserted. Multi-line head/foot text is wrapped to the document's
+    /// envelope by the implementation. Returns any warnings (a layout that had
+    /// to expand to hold the comment, or a kind remapped to one the format
+    /// supports). The default rejects — comment editing is added per format.
+    fn set_comment(
+        &mut self,
+        path: &[Step],
+        kind: CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let _ = (path, kind, text);
+        Err(EditError::new(
+            "editing comments (`#`) isn't supported for this format yet",
+        ))
+    }
+
+    /// Delete the `kind` comment on the node at `path` (a miss is a no-op).
+    /// The default rejects — added per format alongside [`Document::set_comment`].
+    fn delete_comment(&mut self, path: &[Step], kind: CommentKind) -> Result<(), EditError> {
+        let _ = (path, kind);
+        Err(EditError::new(
+            "deleting comments (`#`) isn't supported for this format yet",
+        ))
     }
 }

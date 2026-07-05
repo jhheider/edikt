@@ -278,11 +278,17 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
   (`.foo.#` → head, `.foo.#.inline`/`.foot`, `.#` doc-level, `.items[].#`),
   missing = miss, optionally piped (`| f`) or defaulted (`// x`), plus the
   `COMMENT_KINDS` capability per format. Reuses `Commented` via
-  `eval_with_comments`; no write paths. Comment mutation is guarded with a clear
-  "planned for v0.2" error. **Shipped.**
-- **Phase 2 — comment mutation.** The `Document` write methods, easy formats
-  first (TOML/KDL → JSONC/INI/env → YAML). Attach / edit-text / delete for
-  `head` and `inline`; wrapping + re-wrapping; the layout-reflow warnings.
+  `eval_with_comments`; no write paths. **Shipped.**
+- **Phase 2 — comment mutation.** The `Document` `set_comment`/`delete_comment`
+  write methods driven by `apply_comment_mutation` (`.foo.# = …`, `|=`, `+=`,
+  `del`); envelope wrapping (`edikt_core::wrap`). Attach / edit-text / delete for
+  `head` and `inline`. Easy formats first:
+  - ✅ **2a — TOML & KDL** (decor strings). **Shipped.** `foot` and
+    document-level (`.#`) editing are follow-ups; comment targets are nodes, not
+    properties/args.
+  - ⬜ **2b — JSONC / INI / `.env`** (rowan comment-token splice).
+  - ⬜ **2c — YAML** (span-tree byte-splice) + the layout-reflow warnings
+    (compact→pretty, flow→block).
 - **Phase 3 — document-wide `comments` + bulk edit + comment→key.** Requires the
   key-carrying-iteration primitive; the largest and least-certain piece, so it
   goes last and its shape is confirmed by what Phase 1/2 usage actually demands.

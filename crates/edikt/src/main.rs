@@ -397,13 +397,6 @@ fn run(args: Args) -> Result<ExitCode> {
     if args.in_place && !is_mutation && explicit_out.is_none() {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
-    // Comment editing is a v0.2 feature; reading (`.foo.#`) works today.
-    if is_mutation && expr.has_comment() {
-        bail!(
-            "editing comments (`#`) is not supported yet (planned for v0.2); \
-             reading works — e.g. `edikt '.foo.#' file`"
-        );
-    }
 
     let inputs = read_inputs(&files)?;
 
@@ -417,7 +410,20 @@ fn run(args: Args) -> Result<ExitCode> {
         let mut doc = parse_document(in_fmt, src).with_context(|| loc.clone())?;
 
         if is_mutation {
-            doc.apply(&expr).with_context(|| loc.clone())?;
+            // A comment mutation (`.foo.# = …`) writes through the comment
+            // methods; everything else through the value edit path.
+            if expr.has_comment() {
+                let warnings = edikt_core::apply_comment_mutation(doc.as_mut(), &expr)
+                    .with_context(|| loc.clone())?;
+                if args.strict && !warnings.is_empty() {
+                    bail!("{loc}: {} (--strict)", warnings.join("; "));
+                }
+                for w in &warnings {
+                    eprintln!("edikt: warning: {loc}: {w}");
+                }
+            } else {
+                doc.apply(&expr).with_context(|| loc.clone())?;
+            }
             let out = doc.to_source();
             if args.in_place {
                 let p = path

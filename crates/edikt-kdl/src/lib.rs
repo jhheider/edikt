@@ -105,6 +105,21 @@ impl Document for Kdl {
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.doc))
     }
+    fn set_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        comments::set_node_comment(&mut self.doc, path, kind, text)
+    }
+    fn delete_comment(
+        &mut self,
+        path: &[Step],
+        kind: edikt_core::CommentKind,
+    ) -> Result<(), EditError> {
+        comments::delete_node_comment(&mut self.doc, path, kind)
+    }
 }
 
 #[cfg(test)]
@@ -123,6 +138,58 @@ mod tests {
         let mut doc = parse(src).unwrap();
         apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    fn cedit(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+        doc.to_source()
+    }
+
+    #[test]
+    fn comment_mutation_set_edit_delete() {
+        // Head comment on a top-level node.
+        assert_eq!(
+            cedit("a 1\nb 2\n", ".b.# = \"note\""),
+            "a 1\n// note\nb 2\n"
+        );
+        // Head on a nested child, indented to match.
+        assert_eq!(
+            cedit(
+                "layout {\n    border width=2\n}\n",
+                ".layout.border.# = \"frame\""
+            ),
+            "layout {\n    // frame\n    border width=2\n}\n"
+        );
+        // Inline on a node.
+        assert_eq!(
+            cedit(
+                "server {\n    port 8080\n}\n",
+                ".server.port.#.inline = \"listen\""
+            ),
+            "server {\n    port 8080 // listen\n}\n"
+        );
+        // Edit via `|=` and read back.
+        assert_eq!(
+            cedit("// old\nn 1\n", ".n.# |= ascii_upcase"),
+            "// OLD\nn 1\n"
+        );
+        // Delete.
+        assert_eq!(cedit("// drop\nn 1\n", "del(.n.#)"), "n 1\n");
+    }
+
+    #[test]
+    fn comment_on_repeated_node_needs_an_index() {
+        // `.bind` is repeated; a bare comment target is ambiguous.
+        let mut doc = parse(SAMPLE).unwrap();
+        let err =
+            edikt_core::apply_comment_mutation(&mut doc, &parse_expr(".bind.# = \"x\"").unwrap())
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("repeated"), "got: {err}");
+        // Indexing one occurrence works.
+        let out = cedit(SAMPLE, ".bind[0].# = \"first bind\"");
+        assert!(out.contains("// first bind\nbind \"Mod+h\""), "got: {out}");
     }
 
     #[test]
