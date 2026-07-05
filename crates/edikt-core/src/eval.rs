@@ -129,7 +129,10 @@ fn negate(v: &Value) -> Result<Value, EvalError> {
     match v {
         Value::Int(i) => Ok(Value::Int(-i)),
         Value::Float(f) => Ok(Value::Float(-f)),
-        other => Err(EvalError::new(format!("cannot negate {}", other.type_name()))),
+        other => Err(EvalError::new(format!(
+            "cannot negate {}",
+            other.type_name()
+        ))),
     }
 }
 
@@ -193,12 +196,10 @@ fn divide(a: &Value, b: &Value) -> Result<Value, EvalError> {
             }
             // Keep an integer result when both sides are integers and it divides
             // evenly; otherwise a float, like most calculators.
-            if let (Value::Int(xi), Value::Int(yi)) = (a, b)
-                && *xi % *yi == 0
-            {
-                return Ok(Value::Int(*xi / *yi));
+            match (a, b) {
+                (Value::Int(xi), Value::Int(yi)) if *xi % *yi == 0 => Ok(Value::Int(*xi / *yi)),
+                _ => Ok(Value::Float(x / y)),
             }
-            Ok(Value::Float(x / y))
         }
         _ => Err(EvalError::new(format!(
             "cannot divide {} and {}",
@@ -322,10 +323,7 @@ fn keys(v: &Value) -> Result<Value, EvalError> {
             Ok(Value::Array(ks.into_iter().map(Value::Str).collect()))
         }
         Value::Array(a) => Ok(Value::Array((0..a.len() as i64).map(Value::Int).collect())),
-        other => Err(EvalError::new(format!(
-            "{} has no keys",
-            other.type_name()
-        ))),
+        other => Err(EvalError::new(format!("{} has no keys", other.type_name()))),
     }
 }
 
@@ -408,7 +406,12 @@ mod tests {
     use crate::parser::parse;
 
     fn obj(pairs: &[(&str, Value)]) -> Value {
-        Value::Object(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+        Value::Object(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        )
     }
 
     fn run(expr: &str, input: &Value) -> Vec<Value> {
@@ -425,10 +428,16 @@ mod tests {
     fn navigation() {
         let doc = obj(&[(
             "compilerOptions",
-            obj(&[("strict", Value::Bool(true)), ("target", Value::Str("ES2020".into()))]),
+            obj(&[
+                ("strict", Value::Bool(true)),
+                ("target", Value::Str("ES2020".into())),
+            ]),
         )]);
         assert_eq!(one(".compilerOptions.strict", &doc), Value::Bool(true));
-        assert_eq!(one(".compilerOptions.target", &doc), Value::Str("ES2020".into()));
+        assert_eq!(
+            one(".compilerOptions.target", &doc),
+            Value::Str("ES2020".into())
+        );
     }
 
     #[test]
@@ -467,8 +476,14 @@ mod tests {
         let doc = obj(&[(
             "items",
             Value::Array(vec![
-                obj(&[("name", Value::Str("keep".into())), ("on", Value::Bool(true))]),
-                obj(&[("name", Value::Str("drop".into())), ("on", Value::Bool(false))]),
+                obj(&[
+                    ("name", Value::Str("keep".into())),
+                    ("on", Value::Bool(true)),
+                ]),
+                obj(&[
+                    ("name", Value::Str("drop".into())),
+                    ("on", Value::Bool(false)),
+                ]),
             ]),
         )]);
         let r = run(".items[] | select(.on == true)", &doc);
@@ -478,11 +493,17 @@ mod tests {
 
     #[test]
     fn arithmetic_and_strings() {
-        let doc = obj(&[("count", Value::Int(5)), ("name", Value::Str("edikt".into()))]);
+        let doc = obj(&[
+            ("count", Value::Int(5)),
+            ("name", Value::Str("edikt".into())),
+        ]);
         assert_eq!(one(".count + 1", &doc), Value::Int(6));
         assert_eq!(one(".count * 2 - 3", &doc), Value::Int(7));
         assert_eq!(one(".name + \"!\"", &doc), Value::Str("edikt!".into()));
-        assert_eq!(one(".name | ascii_upcase", &doc), Value::Str("EDIKT".into()));
+        assert_eq!(
+            one(".name | ascii_upcase", &doc),
+            Value::Str("EDIKT".into())
+        );
         assert_eq!(one(".name | length", &doc), Value::Int(5));
     }
 
@@ -495,12 +516,18 @@ mod tests {
     #[test]
     fn builtins() {
         let doc = obj(&[("a", Value::Int(1)), ("b", Value::Int(2))]);
-        assert_eq!(one("keys", &doc), Value::Array(vec![Value::Str("a".into()), Value::Str("b".into())]));
+        assert_eq!(
+            one("keys", &doc),
+            Value::Array(vec![Value::Str("a".into()), Value::Str("b".into())])
+        );
         assert_eq!(one("has(\"a\")", &doc), Value::Bool(true));
         assert_eq!(one("type", &doc), Value::Str("object".into()));
         assert_eq!(one("length", &doc), Value::Int(2));
         assert_eq!(one("\"12\" | tonumber", &Value::Null), Value::Int(12));
-        assert_eq!(one("\"pre-x\" | ltrimstr(\"pre-\")", &Value::Null), Value::Str("x".into()));
+        assert_eq!(
+            one("\"pre-x\" | ltrimstr(\"pre-\")", &Value::Null),
+            Value::Str("x".into())
+        );
     }
 
     #[test]

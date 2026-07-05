@@ -76,14 +76,27 @@ impl Parser {
         self.toks.get(self.pos).map(|t| t.kind)
     }
     fn text(&self) -> &str {
-        self.toks.get(self.pos).map(|t| t.text.as_str()).unwrap_or("")
+        self.toks
+            .get(self.pos)
+            .map(|t| t.text.as_str())
+            .unwrap_or("")
     }
     fn at_end(&self) -> usize {
-        self.toks.last().map(|t| t.start + t.text.len()).unwrap_or(0)
+        self.toks
+            .last()
+            .map(|t| t.start + t.text.len())
+            .unwrap_or(0)
     }
     fn err_here(&self, msg: impl Into<String>) -> ParseError {
-        let pos = self.toks.get(self.pos).map(|t| t.start).unwrap_or_else(|| self.at_end());
-        ParseError { msg: msg.into(), pos }
+        let pos = self
+            .toks
+            .get(self.pos)
+            .map(|t| t.start)
+            .unwrap_or_else(|| self.at_end());
+        ParseError {
+            msg: msg.into(),
+            pos,
+        }
     }
     fn expect(&mut self, kind: Lx, what: &str) -> Result<(), ParseError> {
         if self.peek() == Some(kind) {
@@ -222,9 +235,8 @@ impl Parser {
                         if self.peek() != Some(Lx::Num) {
                             return Err(self.err_here("expected an array index"));
                         }
-                        let n = parse_i64(self.text()).map_err(|_| {
-                            self.err_here("array index out of range")
-                        })?;
+                        let n = parse_i64(self.text())
+                            .map_err(|_| self.err_here("array index out of range"))?;
                         self.pos += 1;
                         self.expect(Lx::RBrack, "`]`")?;
                         steps.push(Step::Index(if neg { -n } else { n }));
@@ -285,7 +297,10 @@ fn parse_i64(t: &str) -> Result<i64, std::num::ParseIntError> {
 
 /// Unescape a JSON-style double-quoted string token (including its quotes).
 fn unescape(tok: &str) -> String {
-    let inner = tok.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(tok);
+    let inner = tok
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(tok);
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -304,9 +319,7 @@ fn unescape(tok: &str) -> String {
             Some('f') => out.push('\u{000c}'),
             Some('u') => {
                 let hex: String = chars.by_ref().take(4).collect();
-                if let Ok(cp) = u32::from_str_radix(&hex, 16)
-                    && let Some(ch) = char::from_u32(cp)
-                {
+                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                     out.push(ch);
                 }
             }
@@ -351,12 +364,18 @@ mod tests {
                 Step::Iterate
             ])
         );
-        assert_eq!(p(".x[-1]"), Expr::Path(vec![Step::Field("x".into()), Step::Index(-1)]));
+        assert_eq!(
+            p(".x[-1]"),
+            Expr::Path(vec![Step::Field("x".into()), Step::Index(-1)])
+        );
     }
 
     #[test]
     fn quoted_field() {
-        assert_eq!(p(r#"."weird key""#), Expr::Path(vec![Step::Field("weird key".into())]));
+        assert_eq!(
+            p(r#"."weird key""#),
+            Expr::Path(vec![Step::Field("weird key".into())])
+        );
     }
 
     #[test]
@@ -390,7 +409,10 @@ mod tests {
         let e = p(r#".items[] | select(.name == "x")"#);
         match e {
             Expr::Pipe(l, r) => {
-                assert_eq!(*l, Expr::Path(vec![Step::Field("items".into()), Step::Iterate]));
+                assert_eq!(
+                    *l,
+                    Expr::Path(vec![Step::Field("items".into()), Step::Iterate])
+                );
                 match *r {
                     Expr::Call(ref name, ref args) => {
                         assert_eq!(name, "select");
