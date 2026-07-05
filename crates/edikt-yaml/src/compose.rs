@@ -95,6 +95,20 @@ fn parse_events(src: &str) -> Result<Vec<Ev>, String> {
             EventData::MappingStart { anchor, .. } => Tok::MapStart(anchor),
             EventData::MappingEnd => Tok::MapEnd,
         };
+        // The whole edit path slices `source[..]` at these marks. Validate them
+        // against the source up front so a bad mark (libyaml bug, adversarial
+        // input) becomes a clean parse error, never a slice panic. Marks must be
+        // in bounds and on UTF-8 char boundaries.
+        if start > src.len()
+            || end > src.len()
+            || !src.is_char_boundary(start)
+            || !src.is_char_boundary(end)
+        {
+            return Err(format!(
+                "parser produced an out-of-range span {start}..{end} for a {}-byte document",
+                src.len()
+            ));
+        }
         evs.push(Ev { tok, start, end });
         if done {
             break;
