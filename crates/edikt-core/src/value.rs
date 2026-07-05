@@ -198,3 +198,131 @@ fn write_json_string(s: &str, out: &mut String) {
     }
     out.push('"');
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arr(v: &[Value]) -> Value {
+        Value::Array(v.to_vec())
+    }
+    fn obj(pairs: &[(&str, Value)]) -> Value {
+        Value::Object(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn total_order_across_types() {
+        // jq's ordering: null < bool < number < string < array < object.
+        let ladder = [
+            Value::Null,
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::Int(-1),
+            Value::Float(2.5),
+            Value::Str("a".into()),
+            arr(&[Value::Int(1)]),
+            obj(&[("k", Value::Int(1))]),
+        ];
+        for i in 0..ladder.len() {
+            for j in 0..ladder.len() {
+                let want = i.cmp(&j);
+                // Equal ranks (the two bools, two numbers) compare by value, so
+                // only assert the strict cross-rank orderings here.
+                if want != Ordering::Equal {
+                    assert_eq!(
+                        ladder[i].order(&ladder[j]),
+                        want,
+                        "{:?} vs {:?}",
+                        ladder[i],
+                        ladder[j]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numbers_compare_across_int_and_float() {
+        assert!(Value::Int(1).value_eq(&Value::Float(1.0)));
+        assert_eq!(Value::Int(2).order(&Value::Float(2.5)), Ordering::Less);
+        assert_eq!(Value::Float(3.0).order(&Value::Int(3)), Ordering::Equal);
+        assert_eq!(Value::Int(1).as_f64(), Some(1.0));
+        assert_eq!(Value::Str("x".into()).as_f64(), None);
+    }
+
+    #[test]
+    fn arrays_and_objects_order_structurally() {
+        // Arrays compare element-wise, then by length.
+        assert_eq!(
+            arr(&[Value::Int(1), Value::Int(2)]).order(&arr(&[Value::Int(1), Value::Int(3)])),
+            Ordering::Less
+        );
+        assert_eq!(
+            arr(&[Value::Int(1)]).order(&arr(&[Value::Int(1), Value::Int(0)])),
+            Ordering::Less
+        );
+        // Objects compare by sorted keys, then values at those keys.
+        assert_eq!(
+            obj(&[("a", Value::Int(1))]).order(&obj(&[("b", Value::Int(1))])),
+            Ordering::Less
+        );
+        assert_eq!(
+            obj(&[("a", Value::Int(1))]).order(&obj(&[("a", Value::Int(2))])),
+            Ordering::Less
+        );
+        // Key order doesn't affect equality.
+        assert!(
+            obj(&[("a", Value::Int(1)), ("b", Value::Int(2))])
+                .value_eq(&obj(&[("b", Value::Int(2)), ("a", Value::Int(1))]))
+        );
+    }
+
+    #[test]
+    fn raw_string_and_truthiness() {
+        assert_eq!(Value::Float(1.0).to_raw_string(), "1");
+        assert_eq!(Value::Float(1.5).to_raw_string(), "1.5");
+        assert_eq!(Value::Null.to_raw_string(), "null");
+        assert_eq!(Value::Bool(true).to_raw_string(), "true");
+        assert_eq!(arr(&[Value::Int(1)]).to_raw_string(), "[1]");
+        assert_eq!(obj(&[("a", Value::Int(1))]).to_raw_string(), "{\"a\":1}");
+        // Only false and null are falsy (jq).
+        assert!(Value::Int(0).is_truthy());
+        assert!(Value::Str("".into()).is_truthy());
+        assert!(!Value::Bool(false).is_truthy());
+        assert!(!Value::Null.is_truthy());
+    }
+
+    #[test]
+    fn json_encoding_escapes_and_floats() {
+        assert_eq!(
+            Value::Str("a\"b\\c\n\t\r".into()).to_json(),
+            "\"a\\\"b\\\\c\\n\\t\\r\""
+        );
+        // A control char below 0x20 becomes a \u escape.
+        assert_eq!(Value::Str("\u{0001}".into()).to_json(), "\"\\u0001\"");
+        // Integral floats print without a decimal point; fractional keep it.
+        assert_eq!(Value::Float(42.0).to_json(), "42");
+        assert_eq!(Value::Float(2.5).to_json(), "2.5");
+        assert_eq!(
+            obj(&[("n", Value::Null), ("xs", arr(&[Value::Bool(true)]))]).to_json(),
+            "{\"n\":null,\"xs\":[true]}"
+        );
+        assert_eq!(arr(&[]).to_json(), "[]");
+    }
+
+    #[test]
+    fn type_names() {
+        assert_eq!(Value::Null.type_name(), "null");
+        assert_eq!(Value::Bool(true).type_name(), "boolean");
+        assert_eq!(Value::Int(1).type_name(), "number");
+        assert_eq!(Value::Float(1.0).type_name(), "number");
+        assert_eq!(Value::Str("x".into()).type_name(), "string");
+        assert_eq!(arr(&[]).type_name(), "array");
+        assert_eq!(obj(&[]).type_name(), "object");
+    }
+}

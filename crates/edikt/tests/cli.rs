@@ -557,6 +557,30 @@ fn comments_stream_query_and_bulk_edit() {
     let (_o, err, c4) = run(&["-t", "yaml", "--json", "comments"], "a: 1  # note\n");
     assert!(!err.contains("dropped"), "stray warning: {err}");
     assert_eq!(c4, 0);
+
+    // Bulk append to every comment.
+    let (app, _e, c5) = run(
+        &["-t", "toml", r#"comments += " (done)""#],
+        "# a\nk = 1  # b\n",
+    );
+    assert!(
+        app.contains("# a (done)") && app.contains("# b (done)"),
+        "got: {app}"
+    );
+    assert_eq!(c5, 0);
+}
+
+#[test]
+fn comment_mutation_add_assign_pipe_and_errors() {
+    // += appends to a single comment; piped comment edits chain.
+    let (out, _e, code) = run(&["-t", "toml", r#".k.# = "note" | .k.# += "!""#], "k = 1\n");
+    assert_eq!(out, "# note!\nk = 1\n");
+    assert_eq!(code, 0);
+
+    // `del` with two (`;`-separated) arguments is an arity error, not a panic.
+    let (_o, err, c2) = run(&["-t", "toml", "del(.k.#; .j.#)"], "k = 1\n");
+    assert_eq!(c2, 2);
+    assert!(err.contains("one"), "got: {err}");
 }
 
 #[test]
@@ -855,10 +879,11 @@ fn helpful_error_messages() {
     assert!(err.contains("unknown format `bogus`"), "got: {err}");
     assert!(err.contains("jsonc") && err.contains("yaml"), "got: {err}");
 
-    // A failed edit path is named in the error.
-    let (_o, err2, c2) = run(&["-t", "yaml", "del(.nope)"], "a: 1\n");
+    // A failed edit path is named in the error. (Deleting a *missing* key is a
+    // no-op, jq-style — so use a create-through-scalar, which genuinely fails.)
+    let (_o, err2, c2) = run(&["-t", "yaml", ".a.b = 1"], "a: 1\n");
     assert_eq!(c2, 2);
-    assert!(err2.contains(".nope"), "got: {err2}");
+    assert!(err2.contains(".a.b"), "got: {err2}");
 
     // A bad expression chains its context.
     let (_o, err3, c3) = run(&["-t", "yaml", ".a |"], "a: 1\n");

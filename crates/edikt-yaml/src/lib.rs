@@ -287,6 +287,47 @@ mod tests {
     }
 
     #[test]
+    fn edit_edge_cases() {
+        // Update-assign and add-assign compute over the current value.
+        assert!(edit("n: 10\n", ".n |= . / 2").contains("n: 5"));
+        assert!(edit("n: 1\n", ".n += 4").contains("n: 5"));
+        // Piped edits both land.
+        assert_eq!(edit("a: 1\nb: 2\n", ".a = 9 | .b = 8"), "a: 9\nb: 8\n");
+        // Delete a missing key is a no-op; delete a nested key keeps siblings.
+        assert_eq!(edit("a: 1\n", "del(.nope)"), "a: 1\n");
+        assert_eq!(edit("m:\n  x: 1\n  y: 2\n", "del(.m.x)"), "m:\n  y: 2\n");
+        // Index into a sequence to set an element.
+        assert_eq!(
+            edit("xs:\n  - 1\n  - 2\n", ".xs[1] = 9"),
+            "xs:\n  - 1\n  - 9\n"
+        );
+        // A negative index counts from the end.
+        assert_eq!(
+            edit("xs:\n  - 1\n  - 2\n", ".xs[-1] = 9"),
+            "xs:\n  - 1\n  - 9\n"
+        );
+    }
+
+    #[test]
+    fn edit_errors_are_clean() {
+        // Creating through an array index is refused, not a panic.
+        let mut doc = parse("a: 1\n").unwrap();
+        assert!(doc.apply(&parse_expr(".a[0] = 1").unwrap()).is_err());
+        // Add-assign on a missing key errors.
+        let mut doc2 = parse("a: 1\n").unwrap();
+        assert!(doc2.apply(&parse_expr(".nope += 1").unwrap()).is_err());
+    }
+
+    #[test]
+    fn delete_missing_is_a_noop_like_the_other_formats() {
+        // Regression: YAML `del` of a missing key / OOB index used to error;
+        // jq semantics (and every other format) make it a silent no-op.
+        assert_eq!(edit("a: 1\nb: 2\n", "del(.nope)"), "a: 1\nb: 2\n");
+        assert_eq!(edit("xs:\n  - 1\n", "del(.xs[9])"), "xs:\n  - 1\n");
+        assert_eq!(edit("a: 1\n", "del(.deep.miss)"), "a: 1\n");
+    }
+
+    #[test]
     fn refuses_to_replace_a_mapping() {
         let mut doc = parse(SAMPLE).unwrap();
         let err = doc

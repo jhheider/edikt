@@ -303,6 +303,41 @@ mod tests {
     }
 
     #[test]
+    fn edit_edge_cases() {
+        // Set an argument by index; delete a property; delete an argument.
+        assert!(edit_src("node \"a\" \"b\"\n", ".node[0] = \"z\"").contains("node z \"b\""));
+        assert!(!edit_src("node key=1 other=2\n", "del(.node.key)").contains("key="));
+        assert_eq!(
+            edit_src("node \"a\" \"b\"\n", "del(.node[0])"),
+            "node \"b\"\n"
+        );
+        // Delete a whole property-bearing node, and a missing key is a no-op.
+        assert_eq!(edit_src("a 1\nb 2\n", "del(.a)"), "b 2\n");
+        assert_eq!(edit_src("a 1\n", "del(.nope)"), "a 1\n");
+        // Create a node from an object with args (`-`) plus scalar entries. The
+        // `Value` model can't distinguish a property from a single-arg child, so
+        // the inverse emits scalar entries as child nodes (args stay args).
+        let out = edit_src(
+            "root {\n    x 1\n}\n",
+            r#".root.child = {"-": "arg", "prop": true, "kid": 9}"#,
+        );
+        assert!(out.contains("child arg {"), "got: {out}");
+        assert!(
+            out.contains("prop #true") && out.contains("kid 9"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn rejects_unrepresentable_and_missing() {
+        // A null value → a bare node; a scalar arg that's a container errors.
+        assert!(edit_src("a 1\n", ".b = null").contains("b"));
+        let mut doc = parse("a 1\n").unwrap();
+        // Setting an argument index to a container is refused.
+        assert!(apply(&mut doc, &parse_expr(".a[0] = [1, 2]").unwrap()).is_err());
+    }
+
+    #[test]
     fn refuses_to_replace_a_node_body() {
         let mut doc = parse(SAMPLE).unwrap();
         let err = apply(&mut doc, &parse_expr(".layout = 1").unwrap())

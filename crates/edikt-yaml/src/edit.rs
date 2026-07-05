@@ -205,41 +205,28 @@ impl Yaml {
         let Some((last, parent_path)) = path.split_last() else {
             return Err(EditError::new("cannot delete the whole document"));
         };
-        let range = match resolve(&self.doc, parent_path) {
-            Resolved::Found(parent) => match (last, &parent.kind) {
-                (Step::Field(k), NodeKind::Mapping(entries)) => {
-                    let entry = entries.iter().find(|e| &e.key == k).ok_or_else(|| {
-                        EditError::new(format!("no key to delete at {}", render_path(path)))
-                    })?;
-                    line_start(&self.source, entry.key_span.start)
-                        ..block_end(&self.source, &entry.value)
-                }
-                (Step::Index(i), NodeKind::Sequence(items)) => {
-                    let idx = normalize_index(*i, items.len())
-                        .filter(|n| *n < items.len())
-                        .ok_or_else(|| {
-                            EditError::new(format!(
-                                "index {i} out of range at {} (len {})",
-                                render_path(parent_path),
-                                items.len()
-                            ))
-                        })?;
-                    let item = &items[idx];
-                    line_start(&self.source, item.span.start)..block_end(&self.source, item)
-                }
-                _ => {
-                    return Err(EditError::new(format!(
-                        "path not found: {}",
-                        render_path(path)
-                    )));
-                }
-            },
-            _ => {
-                return Err(EditError::new(format!(
-                    "path not found: {}",
-                    render_path(path)
-                )));
+        // jq semantics (and the other formats): deleting a missing key, an
+        // out-of-range index, or through an absent parent is a **no-op**.
+        let Resolved::Found(parent) = resolve(&self.doc, parent_path) else {
+            return Ok(());
+        };
+        let range = match (last, &parent.kind) {
+            (Step::Field(k), NodeKind::Mapping(entries)) => {
+                let Some(entry) = entries.iter().find(|e| &e.key == k) else {
+                    return Ok(());
+                };
+                line_start(&self.source, entry.key_span.start)
+                    ..block_end(&self.source, &entry.value)
             }
+            (Step::Index(i), NodeKind::Sequence(items)) => {
+                let Some(idx) = normalize_index(*i, items.len()).filter(|n| *n < items.len())
+                else {
+                    return Ok(());
+                };
+                let item = &items[idx];
+                line_start(&self.source, item.span.start)..block_end(&self.source, item)
+            }
+            _ => return Ok(()),
         };
         self.commit(range, "")
     }
