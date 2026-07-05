@@ -7,10 +7,10 @@
 //! CLI's exit-1 "miss"), not `null`. An explicit `null` in the document still
 //! yields `null`.
 //!
-//! Mutation `=` and `|=` are handled here at the value level — this defines the
-//! *semantics* (what value ends up where). The format-preserving CST *write*
-//! path lives in the format modules and mirrors these rules. `+=` and `del`
-//! arrive in a later slice.
+//! Mutation `=`, `|=`, and `del` are handled here at the value level — this
+//! defines the *semantics* (what value ends up where). The format-preserving CST
+//! *write* path lives in the format modules and mirrors these rules. `+=`
+//! arrives in a later slice.
 
 use crate::ast::{BinOp, Expr, Step};
 use crate::value::Value;
@@ -447,7 +447,121 @@ fn eval_call(name: &str, args: &[Expr], input: &Value) -> Result<Vec<Value>, Eva
             arity(1)?;
             trim_str(input, &args[0], false)
         }
+        "del" => {
+            arity(1)?;
+            let steps = args[0]
+                .as_path()
+                .ok_or_else(|| EvalError::new("del(...) takes a path"))?;
+            Ok(vec![delete_path(input, steps)?])
+        }
         _ => Err(EvalError::new(format!("unknown function `{name}`"))),
+    }
+}
+
+/// Return a copy of `v` with the value at `steps` removed. A missing key or
+/// out-of-range index is a no-op (jq semantics).
+fn delete_path(v: &Value, steps: &[Step]) -> Result<Value, EvalError> {
+    let Some((head, rest)) = steps.split_first() else {
+        return Err(EvalError::new("del(.) is not allowed"));
+    };
+    if rest.is_empty() {
+        return remove_step(v, head);
+    }
+    match head {
+        Step::Field(k) => {
+            let mut obj = match v {
+                Value::Object(m) => m.clone(),
+                Value::Null => return Ok(Value::Null),
+                other => {
+                    return Err(EvalError::new(format!(
+                        "cannot descend into {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            if let Some(pair) = obj.iter_mut().find(|(kk, _)| kk == k) {
+                pair.1 = delete_path(&pair.1, rest)?;
+            }
+            Ok(Value::Object(obj))
+        }
+        Step::Index(i) => {
+            let mut arr = match v {
+                Value::Array(a) => a.clone(),
+                Value::Null => return Ok(Value::Null),
+                other => {
+                    return Err(EvalError::new(format!(
+                        "cannot index {} with a number",
+                        other.type_name()
+                    )));
+                }
+            };
+            let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
+            if idx >= 0 && (idx as usize) < arr.len() {
+                let idx = idx as usize;
+                arr[idx] = delete_path(&arr[idx], rest)?;
+            }
+            Ok(Value::Array(arr))
+        }
+        Step::Iterate => match v {
+            Value::Array(a) => {
+                let mut out = Vec::with_capacity(a.len());
+                for e in a {
+                    out.push(delete_path(e, rest)?);
+                }
+                Ok(Value::Array(out))
+            }
+            Value::Object(m) => {
+                let mut out = Vec::with_capacity(m.len());
+                for (k, e) in m {
+                    out.push((k.clone(), delete_path(e, rest)?));
+                }
+                Ok(Value::Object(out))
+            }
+            other => Err(EvalError::new(format!(
+                "cannot iterate over {}",
+                other.type_name()
+            ))),
+        },
+    }
+}
+
+/// Remove `step` from the container `v` (the leaf of a `del` path).
+fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
+    match step {
+        Step::Field(k) => match v {
+            Value::Object(m) => {
+                let kept = m.iter().filter(|(kk, _)| kk != k).cloned().collect();
+                Ok(Value::Object(kept))
+            }
+            Value::Null => Ok(Value::Null),
+            other => Err(EvalError::new(format!(
+                "cannot delete a field of {}",
+                other.type_name()
+            ))),
+        },
+        Step::Index(i) => match v {
+            Value::Array(a) => {
+                let mut arr = a.clone();
+                let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
+                if idx >= 0 && (idx as usize) < arr.len() {
+                    arr.remove(idx as usize);
+                }
+                Ok(Value::Array(arr))
+            }
+            Value::Null => Ok(Value::Null),
+            other => Err(EvalError::new(format!(
+                "cannot delete an index of {}",
+                other.type_name()
+            ))),
+        },
+        Step::Iterate => match v {
+            Value::Array(_) => Ok(Value::Array(Vec::new())),
+            Value::Object(_) => Ok(Value::Object(Vec::new())),
+            other => Err(EvalError::new(format!(
+                "cannot iterate over {}",
+                other.type_name()
+            ))),
+        },
     }
 }
 
@@ -746,5 +860,35 @@ mod tests {
     fn assign_lhs_must_be_path() {
         // `1 = 2` — the left side is a literal, not a path.
         assert!(eval(&parse("1 = 2").unwrap(), &Value::Null).is_err());
+    }
+
+    #[test]
+    fn del_removes_key_and_index() {
+        let doc = obj(&[("a", Value::Int(1)), ("b", Value::Int(2))]);
+        let r = run("del(.a)", &doc);
+        assert!(run(".a", &r[0]).is_empty());
+        assert_eq!(one(".b", &r[0]), Value::Int(2));
+
+        let arr = obj(&[(
+            "x",
+            Value::Array(vec![Value::Int(10), Value::Int(20), Value::Int(30)]),
+        )]);
+        let r2 = run("del(.x[1])", &arr);
+        assert_eq!(run(".x[]", &r2[0]), vec![Value::Int(10), Value::Int(30)]);
+    }
+
+    #[test]
+    fn del_missing_is_noop() {
+        let doc = obj(&[("a", Value::Int(1))]);
+        let r = run("del(.nope)", &doc);
+        assert_eq!(one(".a", &r[0]), Value::Int(1));
+    }
+
+    #[test]
+    fn del_nested() {
+        let doc = obj(&[("a", obj(&[("b", Value::Int(1)), ("c", Value::Int(2))]))]);
+        let r = run("del(.a.b)", &doc);
+        assert!(run(".a.b", &r[0]).is_empty());
+        assert_eq!(one(".a.c", &r[0]), Value::Int(2));
     }
 }

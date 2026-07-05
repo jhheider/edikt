@@ -9,13 +9,15 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 - ✅ **M1** — query mode on JSONC end-to-end: workspace + CI, `edikt-core`
   (Value, Feature, expression language, evaluator), `edikt-syntax` + `edikt-jsonc`
   (lossless CST, `Document` seam), and the `edikt` CLI.
+- 🚧 **M2 — Mutation.** `set` via `=`/`|=` + the rowan splice write path + `-i`
+  shipped; `del` and `+=`/append in flight.
 
 ## Milestones
 
-- ⬜ **M2 — Mutation + the format-preserving write path.** `set`/`del`/`+=`/`|=`
-  grammar; mutation evaluation; the rowan structural-sharing splice for JSONC
-  (edit only the targeted node, everything else byte-identical); mutation-mode
-  whole-document output; wire `-i` (and `-i.bak`). This is the differentiator.
+- 🚧 **M2 — Mutation + the format-preserving write path.** ✅ `set` (`=`, `|=`),
+  the rowan structural-sharing splice, mutation-mode output, `-i`. ⬜ remaining:
+  `del`, `+=`/append, `-i.bak`, and iterate-in-assignment (`.a[] = x`). This is
+  the differentiator.
 - ⬜ **M3 — `select()` / iteration polish + more builtins** as real queries drive
   demand. (Iteration and `select` already work; grow the builtin registry
   deliberately.)
@@ -28,6 +30,40 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   feature, degrade per the table in `CLAUDE.md`.
 - ⬜ **M7 — Release infra.** Coverage job (Coveralls), release workflow
   (cross-platform binaries + `publish-crates`), man page, `--help` polish.
+
+## Format coverage
+
+edikt's niche is *lossless editing of key-value / config formats*. This tracks
+every popular one. **In scope** = a gap format nobody edits today without
+clobbering layout (edikt's reason to exist). **Served** = already has a good
+lossless editor; we don't rebuild it (we may still *read* it for conversion).
+**Candidate** = plausible future addition, not yet committed.
+
+| format | status | notes |
+|---|---|---|
+| JSONC / JSON5 | ✅ in scope (done) | the headline — `settings.json`, `tsconfig.json`, `devcontainer.json` |
+| JSON | ✅ in scope (done) | read as a JSONC subset |
+| INI | ⬜ in scope (M4) | `[section]` + `key = value` |
+| `.env` | ⬜ in scope (M5) | flat, line-level only, interpret nothing |
+| `.properties` (Java) | ⬜ in scope (M5) | `key=value` / `key:value`, `\` line-continuations |
+| flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`, `.editorconfig`-body) | ⬜ in scope (M5) | env/properties family |
+| TOML | 🔵 served (`toml_edit`, yq) | KV, but already lossless-editable |
+| YAML | 🔵 served (yq) | comments + mostly layout |
+| XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |
+| HCL (Terraform) | 🟡 candidate | structured devops config |
+| KDL | 🟡 candidate | newer config language |
+| CSV / TSV | 🟡 candidate | tabular — a different edit model |
+
+### INI dialects (one dialect-aware module)
+
+The INI module (M4) should cover the INI-shaped formats people actually edit;
+they differ in small ways (comment char, subsections, duplicate keys, quoting).
+Capture each quirk as a fixture under `fixtures/ini/` as it comes up:
+
+- Git config (`.gitconfig`, `.git/config`) — `[section "subsection"]`
+- systemd units (`.service`, `.timer`, …) — duplicate keys allowed
+- `.editorconfig`, `php.ini`, XDG desktop entries (`.desktop`)
+- `pip.conf` / `pacman.conf` / `.gitmodules` / WireGuard `wg0.conf`
 
 ## Testing philosophy (applies to every milestone)
 

@@ -137,6 +137,23 @@ fn in_place_on_stdin_errors() {
 }
 
 #[test]
+fn del_via_cli() {
+    let (out, _e, code) = run(&["-t", "jsonc", "del(.a)"], "{ \"a\": 1, \"b\": 2 }");
+    assert_eq!(out, "{ \"b\": 2 }");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn del_then_set_pipeline() {
+    let (out, _e, code) = run(
+        &["-t", "jsonc", "del(.a) | .b = 9"],
+        "{ \"a\": 1, \"b\": 2 }",
+    );
+    assert_eq!(out, "{ \"b\": 9 }");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

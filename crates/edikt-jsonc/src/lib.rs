@@ -65,6 +65,53 @@ impl Jsonc {
     pub fn value_at(&self, path: &[Step]) -> Option<Value> {
         edit::resolve_value_node(&self.root, path).map(|n| project::value_node(&n))
     }
+
+    /// Delete the value at `path`, format-preserving: the member's or element's
+    /// line is removed cleanly (no dangling comma or blank line). A missing key
+    /// or out-of-range index is a no-op (jq semantics).
+    pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        let Some((last, parent)) = path.split_last() else {
+            return Err(EditError::new("del(.) is not allowed"));
+        };
+        let root = self.root.clone_for_update();
+        let Some(container) = edit::resolve_value_node(&root, parent) else {
+            return Ok(()); // parent path absent → nothing to delete
+        };
+        match last {
+            Step::Field(k) => {
+                let member = container
+                    .children()
+                    .find(|n| n.kind() == Sk::Object)
+                    .and_then(|object| edit::find_member(&object, k));
+                if let Some(member) = member {
+                    edit::delete_member(&member);
+                    self.root = root;
+                }
+                Ok(())
+            }
+            Step::Index(i) => {
+                let value = container
+                    .children()
+                    .find(|n| n.kind() == Sk::Array)
+                    .and_then(|array| {
+                        let values: Vec<_> =
+                            array.children().filter(|n| n.kind() == Sk::Value).collect();
+                        let idx = if *i < 0 { values.len() as i64 + i } else { *i };
+                        if idx < 0 {
+                            None
+                        } else {
+                            values.into_iter().nth(idx as usize)
+                        }
+                    });
+                if let Some(value) = value {
+                    edit::delete_element(&value);
+                    self.root = root;
+                }
+                Ok(())
+            }
+            Step::Iterate => Err(EditError::new("del(.[]) is not supported yet")),
+        }
+    }
 }
 
 /// Parse JSONC source into a [`Jsonc`] document.
@@ -350,10 +397,44 @@ mod tests {
     }
 
     #[test]
-    fn set_missing_path_errors_and_del_is_deferred() {
+    fn set_missing_path_and_non_assignment_error() {
         let mut doc = parse("{ \"a\": 1 }").unwrap();
         assert!(apply(&mut doc, &parse_expr(".nope = 1").unwrap()).is_err());
-        assert!(apply(&mut doc, &parse_expr("del(.a)").unwrap()).is_err());
         assert!(apply(&mut doc, &parse_expr(".a").unwrap()).is_err()); // not an assignment
+    }
+
+    #[test]
+    fn del_object_members() {
+        let src = "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n";
+        assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n  \"c\": 3\n}\n");
+        assert_eq!(edit_src(src, "del(.a)"), "{\n  \"b\": 2,\n  \"c\": 3\n}\n");
+        // deleting the last member leaves a (valid JSONC) trailing comma
+        assert_eq!(edit_src(src, "del(.c)"), "{\n  \"a\": 1,\n  \"b\": 2,\n}\n");
+    }
+
+    #[test]
+    fn del_array_elements() {
+        assert_eq!(edit_src("[10, 20, 30]", "del(.[1])"), "[10, 30]");
+        assert_eq!(edit_src("[10, 20, 30]", "del(.[0])"), "[20, 30]");
+        assert_eq!(edit_src("[10, 20, 30]", "del(.[-1])"), "[10, 20]");
+        assert_eq!(edit_src("[10]", "del(.[0])"), "[]");
+    }
+
+    #[test]
+    fn del_missing_is_noop() {
+        let src = "{ \"a\": 1 }";
+        assert_eq!(edit_src(src, "del(.nope)"), src);
+        assert_eq!(edit_src("[1, 2]", "del(.[9])"), "[1, 2]");
+    }
+
+    #[test]
+    fn del_removes_one_line_and_keeps_comments() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let out = edit_src(&src, "del(.compilerOptions.module)");
+        assert!(!out.contains("\"module\""));
+        assert_eq!(src.lines().count() - out.lines().count(), 1);
+        assert!(out.contains("// TypeScript compiler configuration"));
+        assert!(out.contains("/* language level */"));
+        assert!(parse(&out).is_ok(), "edited output must re-parse");
     }
 }
