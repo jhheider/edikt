@@ -27,6 +27,11 @@ fn apply_inner(
             apply_inner(doc, a, warnings)?;
             apply_inner(doc, b, warnings)
         }
+        // Bulk: transform / clear every comment in the document.
+        Expr::UpdateAssign(lhs, rhs) | Expr::AddAssign(lhs, rhs) if is_comments_stream(lhs) => {
+            let append = matches!(expr, Expr::AddAssign(..));
+            bulk_edit(doc, rhs, append, warnings)
+        }
         Expr::Assign(lhs, rhs) => {
             let (prefix, kind) = comment_target(lhs)?;
             let text = eval_text(rhs, &doc.to_value())?;
@@ -50,7 +55,10 @@ fn apply_inner(
         }
         Expr::Call(name, args) if name == "del" => {
             if args.len() != 1 {
-                return Err(EditError::new("del(...) takes one path argument"));
+                return Err(EditError::new("del(...) takes one argument"));
+            }
+            if is_comments_stream(&args[0]) {
+                return bulk_delete(doc);
             }
             let steps = args[0]
                 .as_path()
@@ -59,9 +67,53 @@ fn apply_inner(
             doc.delete_comment(prefix, kind)
         }
         _ => Err(EditError::new(
-            "unsupported comment edit — use `.path.# = …`, `|=`, `+=`, or `del(.path.#)`",
+            "unsupported comment edit — use `.path.# = …`, `|=`, `+=`, `del(.path.#)`, \
+             or the bulk `comments |= …` / `del(comments)`",
         )),
     }
+}
+
+/// Is `expr` the bare document-wide `comments` stream?
+fn is_comments_stream(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call(name, args) if name == "comments" && args.is_empty())
+}
+
+/// `comments |= f` / `comments += x`: apply `f` (or append `x`) to every
+/// comment's text, in document order. Targets are snapshotted first; their
+/// paths stay valid as each write lands (logical, not byte-based).
+fn bulk_edit(
+    doc: &mut dyn Document,
+    rhs: &Expr,
+    append: bool,
+    warnings: &mut Vec<String>,
+) -> Result<(), EditError> {
+    let targets = doc
+        .to_commented()
+        .ok_or_else(|| EditError::new("this format has no comments"))?
+        .comment_targets();
+    for (steps, kind, current) in targets {
+        let text = if append {
+            let mut t = current;
+            t.push_str(&eval_text(rhs, &doc.to_value())?);
+            t
+        } else {
+            eval_text(rhs, &Value::Str(current))?
+        };
+        warnings.extend(doc.set_comment(&steps, kind, &text)?);
+    }
+    Ok(())
+}
+
+/// `del(comments)`: remove every comment in the document.
+fn bulk_delete(doc: &mut dyn Document) -> Result<(), EditError> {
+    let targets = doc
+        .to_commented()
+        .ok_or_else(|| EditError::new("this format has no comments"))?
+        .comment_targets();
+    for (steps, kind, _) in targets {
+        doc.delete_comment(&steps, kind)?;
+    }
+    Ok(())
 }
 
 /// The (value-prefix, kind) of a comment-assignment left side.

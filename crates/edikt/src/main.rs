@@ -476,9 +476,12 @@ fn run(args: Args) -> Result<ExitCode> {
             .filter(|a| a.len() == results.len());
 
         // A synthesized result carries no comments; converting a commented
-        // source through one still loses them, and that stays honest.
+        // source through one still loses them, and that stays honest. But a
+        // comment query (`.foo.#`, `comments`) *surfaces* comments — its result
+        // is the comment text, nothing is dropped — so it never warns.
         if target != in_fmt
             && annotated.is_none()
+            && !expr.has_comment()
             && doc.has_comments()
             && results
                 .iter()

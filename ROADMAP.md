@@ -63,10 +63,10 @@ Release infra is intentionally **last** — build the capability, then ship it.
   clean exit-2 error; a no-match `match`/`capture` is an empty stream (a miss).
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
-- 🚧 **v0.2.0 — comments as first-class content** (query + edit **done**; the
-  bulk `comments` stream remains — see
+- ✅ **v0.2.0 — comments as first-class content** (query + edit + the bulk
+  `comments` stream all **done** — see
   [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
-  Make comments **addressable and editable**, not just preserved/carried:
+  Comments are **addressable and editable**, not just preserved/carried:
   query them (`.foo.#` → head comment, `.foo.#.inline`, a document-wide
   `comments` stream), attach/edit/delete them format-preservingly
   (`.foo.# = "TODO"`, `.foo.# |= gsub(...)`), and search a comment back to the
