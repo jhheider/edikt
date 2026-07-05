@@ -64,7 +64,7 @@ Release infra is intentionally **last** — build the capability, then ship it.
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
 - ⏸️ **Per-format feature flags — deferred.** The whole binary is ~1.5 MB
-  stripped for all six formats; the per-format delta doesn't justify a Cargo
+  stripped for all seven formats; the per-format delta doesn't justify a Cargo
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`
   build) if a concrete consumer needs a thinner binary.
 - ✅ **Release infra.** Coverage job (cargo-llvm-cov → Coveralls) on the test
@@ -103,10 +103,11 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
 | TOML | ✅ in scope (done) | full lossless edit via `toml_edit` (comments, tables, layout) |
 | YAML | ✅ in scope (done) | lossless edit + query + convert, pure Rust via `libyaml-safer`; merge keys (`<<`) resolve in queries |
-| XML (`.csproj`, `pom.xml`, `web.config`, `plist`) | 🟡 candidate | structured, high demand, heavier CST |
-| HCL (Terraform) | 🟡 candidate | structured devops config |
-| KDL | 🟡 candidate | newer config language |
-| CSV / TSV | 🟡 candidate | tabular — a different edit model |
+| KDL | ✅ in scope (done) | lossless via `kdl-rs` (the `toml_edit` of KDL); zellij/niri configs. Args/props/children → `Value` per the convention in CLAUDE.md (`"-"` args key, repeats → arrays) |
+| XML (`.csproj`, `pom.xml`, `web.config`) | 🟡 candidate — demand-gated | genuine unserved gap (xmlstarlet/yq can't round-trip losslessly), but the biggest CST yet: no `toml_edit`-analog in Rust, and attributes-vs-children need a design doc + new `Feature` variants. Scope to *data-XML*; XML-plist rides as a dialect if this lands |
+| HCL (Terraform) | ⛔ served | `hcledit` already edits HCL losslessly; `terraform fmt` canonicalizes layout anyway; HCL values are *expressions* the `Value` model can't honestly project |
+| plist | ⛔ out of scope | hand-edited plists ≈ only Xcode's `project.pbxproj`, whose emitter is a moving target (the `.env` bottomless-bug-queue trap). Only ever a thin XML dialect, never standalone |
+| CSV / TSV | ⛔ served | tabular, not path-shaped; ~no comments/layout to preserve — the moat doesn't apply. Miller / qsv own it |
 
 ### INI dialects (one dialect-aware module)
 

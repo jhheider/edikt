@@ -1,8 +1,8 @@
 //! The `edikt` CLI.
 //!
 //! Execution model is sed-shaped: read stdin (or files), apply an expression,
-//! write stdout. Dispatches query, mutation, and conversion modes across all six
-//! formats (JSONC/JSON5, INI, `.env`/`.properties`, TOML, YAML) over the
+//! write stdout. Dispatches query, mutation, and conversion modes across all
+//! seven formats (JSONC/JSON5, INI, `.env`/`.properties`, TOML, YAML, KDL) over the
 //! format-agnostic `Document` seam.
 //!
 //! Exit codes are sed-shaped: 0 = success — including a query that matched
@@ -22,11 +22,11 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Lossless, format-preserving config editor: JSONC, INI, .env, TOML, YAML.",
+    about = "Lossless, format-preserving config editor: JSONC, INI, .env, TOML, YAML, KDL.",
     long_about = "Query and losslessly edit JSONC/JSON5, INI, .env/.properties, TOML, \
-and YAML with a jq-flavored expression language, changing only the bytes you target \
-and leaving comments and layout untouched. Convert between formats with -T. Reads \
-stdin and writes stdout by default, like sed.",
+YAML, and KDL with a jq-flavored expression language, changing only the bytes you \
+target and leaving comments and layout untouched. Convert between formats with -T. \
+Reads stdin and writes stdout by default, like sed.",
     after_help = "Examples:
   edikt '.compilerOptions.target' tsconfig.json         query: raw scalar out
   edikt -i '.compilerOptions.strict = true' tsconfig.jsonc
@@ -69,12 +69,12 @@ struct Args {
     )]
     output: Option<PathBuf>,
 
-    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml.
+    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml | kdl.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
 
     /// Output format. Default: the input format is preserved. (`-T FMT` and the
-    /// `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` shorthands are equivalent.)
+    /// `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml`/`--kdl` shorthands are equivalent.)
     #[arg(short = 'T', long = "to", value_name = "FMT", group = "outfmt")]
     to: Option<String>,
 
@@ -93,6 +93,9 @@ struct Args {
     /// Output as YAML (shorthand for `-T yaml`).
     #[arg(long, group = "outfmt")]
     yaml: bool,
+    /// Output as KDL (shorthand for `-T kdl`).
+    #[arg(long, group = "outfmt")]
+    kdl: bool,
 
     /// When the output format differs from the input, treat lossy degradations
     /// (dropped comments, flattening) as errors instead of warnings.
@@ -131,6 +134,8 @@ impl Args {
             Ok(Some(Format::Toml))
         } else if self.yaml {
             Ok(Some(Format::Yaml))
+        } else if self.kdl {
+            Ok(Some(Format::Kdl))
         } else {
             self.to.as_deref().map(format_from_name).transpose()
         }
@@ -177,6 +182,7 @@ enum Format {
     Env,
     Toml,
     Yaml,
+    Kdl,
 }
 
 /// Plain JSON's capabilities: everything JSONC has except comments.
@@ -196,6 +202,7 @@ impl Format {
             Format::Env => edikt_env::FEATURES,
             Format::Toml => edikt_toml::FEATURES,
             Format::Yaml => edikt_yaml::FEATURES,
+            Format::Kdl => edikt_kdl::FEATURES,
         }
     }
     /// The canonical name, for messages.
@@ -207,22 +214,25 @@ impl Format {
             Format::Env => "env",
             Format::Toml => "toml",
             Format::Yaml => "yaml",
+            Format::Kdl => "kdl",
         }
     }
 }
 
 /// All formats, for candidate suggestions.
-const ALL_FORMATS: [Format; 6] = [
+const ALL_FORMATS: [Format; 7] = [
     Format::Jsonc,
     Format::Json,
     Format::Ini,
     Format::Env,
     Format::Toml,
     Format::Yaml,
+    Format::Kdl,
 ];
 
 /// Every format name accepted by `-t`/`-T`, for error messages.
-const FORMAT_NAMES: &str = "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml";
+const FORMAT_NAMES: &str =
+    "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml, kdl";
 
 /// Resolve a `-t`/`-T` format name.
 fn format_from_name(name: &str) -> Result<Format> {
@@ -233,6 +243,7 @@ fn format_from_name(name: &str) -> Result<Format> {
         "env" | "properties" | "props" => Ok(Format::Env),
         "toml" => Ok(Format::Toml),
         "yaml" | "yml" => Ok(Format::Yaml),
+        "kdl" => Ok(Format::Kdl),
         other => bail!("unknown format `{other}` (expected one of: {FORMAT_NAMES})"),
     }
 }
@@ -246,6 +257,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
         Format::Env => Box::new(edikt_env::parse(src)?),
         Format::Toml => Box::new(edikt_toml::parse(src)?),
         Format::Yaml => Box::new(edikt_yaml::parse(src)?),
+        Format::Kdl => Box::new(edikt_kdl::parse(src)?),
     })
 }
 
@@ -261,6 +273,7 @@ fn emit(format: Format, c: &Commented) -> Result<(String, Vec<String>)> {
         Format::Env => edikt_env::emit_commented(c)?,
         Format::Toml => edikt_toml::emit_commented(c)?,
         Format::Yaml => edikt_yaml::emit_commented(c)?,
+        Format::Kdl => edikt_kdl::emit_commented(c)?,
     })
 }
 
@@ -642,6 +655,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
         Some("env" | "properties" | "props") => Ok(Format::Env),
         Some("toml") => Ok(Format::Toml),
         Some("yaml" | "yml") => Ok(Format::Yaml),
+        Some("kdl") => Ok(Format::Kdl),
         Some(ext) => bail!("cannot infer format from `.{ext}`; pass -t (one of: {FORMAT_NAMES})"),
         None => bail!("cannot infer format (no extension); pass -t (one of: {FORMAT_NAMES})"),
     }

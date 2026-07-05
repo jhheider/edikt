@@ -522,6 +522,48 @@ fn yaml_edit_is_lossless() {
 }
 
 #[test]
+fn kdl_query_edit_and_convert() {
+    // Query a nested child node's argument.
+    let src = "server {\n    port 8080\n    host \"0.0.0.0\"\n}\n";
+    let (out, _e, code) = run(&["-t", "kdl", ".server.port"], src);
+    assert_eq!(out, "8080\n");
+    assert_eq!(code, 0);
+
+    // Lossless edit: the leading + inline comments and layout survive.
+    let (edited, _e, c2) = run(
+        &["-t", "kdl", ".server.port = 9090"],
+        "// prod\nserver {\n    port 8080 // listen\n}\n",
+    );
+    assert_eq!(edited, "// prod\nserver {\n    port 9090 // listen\n}\n");
+    assert_eq!(c2, 0);
+
+    // KDL → JSON and JSON → KDL.
+    let (json, _e, c3) = run(&["-t", "kdl", "-T", "json"], src);
+    assert_eq!(
+        json,
+        "{\n  \"server\": {\n    \"port\": 8080,\n    \"host\": \"0.0.0.0\"\n  }\n}\n"
+    );
+    assert_eq!(c3, 0);
+
+    let (kdl, _e, c4) = run(
+        &["-t", "json", "-T", "kdl"],
+        "{ \"pkg\": { \"name\": \"edikt\" } }",
+    );
+    assert!(kdl.contains("pkg {"), "got: {kdl}");
+    assert!(kdl.contains("name edikt"), "got: {kdl}");
+    assert_eq!(c4, 0);
+
+    // Comment carries KDL → YAML (`//` becomes `#`).
+    let (yaml, err, c5) = run(
+        &["-t", "kdl", "-T", "yaml"],
+        "// the server\nserver {\n    port 8080\n}\n",
+    );
+    assert_eq!(yaml, "# the server\nserver:\n  port: 8080\n");
+    assert_eq!(err, "");
+    assert_eq!(c5, 0);
+}
+
+#[test]
 fn object_literal_and_bracket_key() {
     let (out, _e, code) = run(&["-t", "jsonc", ".config = {}"], "{ \"config\": 1 }");
     assert_eq!(out, "{ \"config\": {} }");

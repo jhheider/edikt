@@ -1,0 +1,17 @@
+// zellij-style layout config
+layout {
+    // the main pane
+    pane size=1 borderless=#true {
+        plugin location="zellij:tab-bar"
+    }
+    pane split_direction="vertical" {
+        pane
+        pane command="htop"
+    }
+}
+keybinds {
+    normal {
+        bind "Alt h" "Alt Left" { MoveFocus "Left"; }
+        bind "Alt l" "Alt Right" { MoveFocus "Right"; }
+    }
+}

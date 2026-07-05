@@ -1,0 +1,21 @@
+// niri compositor config
+input {
+    keyboard {
+        xkb {
+            layout "us"
+        }
+    }
+    touchpad {
+        tap
+        natural-scroll
+        accel-speed 0.2
+    }
+}
+output "eDP-1" {
+    scale 1.5
+    mode "2880x1800@90.001"
+}
+binds {
+    Mod+Return { spawn "alacritty"; }
+    Mod+Q { close-window; }
+}

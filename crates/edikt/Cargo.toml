@@ -14,6 +14,7 @@ edikt-ini = { workspace = true }
 edikt-env = { workspace = true }
 edikt-toml = { workspace = true }
 edikt-yaml = { workspace = true }
+edikt-kdl = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
