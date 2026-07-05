@@ -1,0 +1,9 @@
+[package]
+name = "edikt-env"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "edikt .env/.properties format module: honest line-level editing, Document + Convert."
+
+[dependencies]

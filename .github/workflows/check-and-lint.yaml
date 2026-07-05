@@ -1,0 +1,62 @@
+on:
+  pull_request:
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+  push:
+    branches:
+      - main
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
+
+# Cancel a superseded in-progress run when a new commit lands on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+name: Check and Lint
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: "debug"
+          cache-targets: true
+          cache-all-crates: true
+      - run: cargo check --workspace --all-features
+        env:
+          RUSTFLAGS: "-D warnings"
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: "debug"
+          cache-targets: true
+          cache-all-crates: true
+      - run: cargo clippy --workspace --all-targets --all-features
+        env:
+          RUSTFLAGS: "-D warnings"
