@@ -166,6 +166,8 @@ fn step_into(value_node: &SyntaxNode, step: &Step) -> Option<SyntaxNode> {
         }
         // Setting through `[]` (all elements) needs multi-target splicing; later.
         Step::Iterate => None,
+        // A comment is not a navigable value node.
+        Step::Comment(_) => None,
     }
 }
 
@@ -354,6 +356,9 @@ pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditErr
         }
         Some((Step::Index(_), _)) => Err(EditError::new("cannot create array elements by index")),
         Some((Step::Iterate, _)) => Err(EditError::new("cannot create through `[]`")),
+        Some((Step::Comment(_), _)) => Err(EditError::new(
+            "editing comments (`#`) is not supported yet (planned for v0.2)",
+        )),
     }
 }
 

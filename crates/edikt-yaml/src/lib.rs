@@ -20,10 +20,15 @@ mod emit;
 mod scalar;
 
 use compose::{Node, node_to_value};
-use edikt_core::{Document, EditError, Expr, Feature, Value};
+use edikt_core::{CommentKind, Document, EditError, Expr, Feature, Value};
 
 pub use comments::emit_commented;
 pub use emit::emit;
+
+/// Comment kinds this format supports (empty ⇒ none); the comment
+/// capability, subsuming the boolean `Feature::Comments`.
+pub const COMMENT_KINDS: &[CommentKind] =
+    &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
 
 /// Capabilities of YAML: everything but sections.
 pub const FEATURES: &[Feature] = &[

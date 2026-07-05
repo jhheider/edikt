@@ -124,6 +124,9 @@ fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
             _ => Resolved::NotFound,
         },
         Step::Iterate => Resolved::NotFound,
+        // Comment edits (`#`) are a Phase-2 feature; resolve treats them as
+        // absent so the set/delete paths fall through to their clean errors.
+        Step::Comment(_) => Resolved::NotFound,
     }
 }
 
@@ -407,6 +410,9 @@ pub(crate) fn source_slices(source: &str, root: &Node, path: &[Step]) -> Vec<Str
                     NodeKind::Mapping(entries) => next.extend(entries.iter().map(|e| &e.value)),
                     _ => {}
                 },
+                // A comment addresses no value node — source slices never
+                // resolve one (the CLI reads comments via `to_commented`).
+                Step::Comment(_) => {}
             }
         }
         current = next;

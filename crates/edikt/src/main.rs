@@ -397,6 +397,13 @@ fn run(args: Args) -> Result<ExitCode> {
     if args.in_place && !is_mutation && explicit_out.is_none() {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
+    // Comment editing is a v0.2 feature; reading (`.foo.#`) works today.
+    if is_mutation && expr.has_comment() {
+        bail!(
+            "editing comments (`#`) is not supported yet (planned for v0.2); \
+             reading works — e.g. `edikt '.foo.#' file`"
+        );
+    }
 
     let inputs = read_inputs(&files)?;
 
@@ -429,7 +436,16 @@ fn run(args: Args) -> Result<ExitCode> {
         // Query / conversion (one unified mode: output format = explicit or
         // input-preserved).
         let target = explicit_out.unwrap_or(in_fmt);
-        let results = edikt_core::eval(&expr, &doc.to_value()).with_context(|| loc.clone())?;
+        // A comment query (`.foo.#`) resolves against the commented projection;
+        // everything else over the value model.
+        let results = if expr.has_comment() {
+            let commented = doc
+                .to_commented()
+                .with_context(|| format!("{loc}: this format has no comments to query"))?;
+            edikt_core::eval_with_comments(&expr, &commented).with_context(|| loc.clone())?
+        } else {
+            edikt_core::eval(&expr, &doc.to_value()).with_context(|| loc.clone())?
+        };
 
         // Format-preserving get: a pure-path query staying in-format returns the
         // original source slices (comments and layout intact). The counts must
