@@ -27,4 +27,8 @@ pub trait Document {
     /// format-preserving. Query expressions should be evaluated against
     /// [`Document::to_value`] instead; use [`Expr::is_mutation`] to choose.
     fn apply(&mut self, expr: &Expr) -> Result<(), EditError>;
+
+    /// Whether the source contains any comments — used to warn on conversion,
+    /// which drops them.
+    fn has_comments(&self) -> bool;
 }

@@ -10,6 +10,7 @@
 //! slice, once there is a concrete CST to shape them against.
 
 mod ast;
+pub mod convert;
 mod document;
 mod error;
 mod eval;
