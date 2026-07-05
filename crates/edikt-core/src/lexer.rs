@@ -43,6 +43,8 @@ pub enum Lx {
     Gt,
     #[token("+")]
     Plus,
+    #[token("+=")]
+    PlusAssign,
     #[token("-")]
     Minus,
     #[token("*")]

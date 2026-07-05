@@ -154,6 +154,23 @@ fn del_then_set_pipeline() {
 }
 
 #[test]
+fn append_via_cli() {
+    let (out, _e, code) = run(
+        &["-t", "jsonc", r#".lib += ["X"]"#],
+        "{ \"lib\": [\"A\", \"B\"] }",
+    );
+    assert_eq!(out, "{ \"lib\": [\"A\", \"B\", \"X\"] }");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn add_assign_number_via_cli() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".count += 1"], "{ \"count\": 41 }");
+    assert_eq!(out, "{ \"count\": 42 }");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

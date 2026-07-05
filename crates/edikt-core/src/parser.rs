@@ -143,6 +143,11 @@ impl Parser {
                 let rhs = self.parse_assign()?;
                 Ok(Expr::UpdateAssign(Box::new(lhs), Box::new(rhs)))
             }
+            Some(Lx::PlusAssign) => {
+                self.pos += 1;
+                let rhs = self.parse_assign()?;
+                Ok(Expr::AddAssign(Box::new(lhs), Box::new(rhs)))
+            }
             _ => Ok(lhs),
         }
     }
@@ -210,6 +215,16 @@ impl Parser {
                 let e = self.parse_pipe()?;
                 self.expect(Lx::RParen, "`)`")?;
                 Ok(e)
+            }
+            Some(Lx::LBrack) => {
+                self.pos += 1;
+                if self.peek() == Some(Lx::RBrack) {
+                    self.pos += 1;
+                    return Ok(Expr::Collect(None));
+                }
+                let inner = self.parse_pipe()?;
+                self.expect(Lx::RBrack, "`]`")?;
+                Ok(Expr::Collect(Some(Box::new(inner))))
             }
             Some(Lx::Num) => {
                 let v = number_value(self.text());

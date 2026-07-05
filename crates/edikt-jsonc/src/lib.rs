@@ -66,6 +66,22 @@ impl Jsonc {
         edit::resolve_value_node(&self.root, path).map(|n| project::value_node(&n))
     }
 
+    /// Append `items` to the array at `path`, format-preserving: existing
+    /// elements and layout are untouched; new elements match the array's indent
+    /// and comma style.
+    pub fn append(&mut self, path: &[Step], items: &[Value]) -> Result<(), EditError> {
+        let value_node = edit::resolve_value_node(&self.root, path)
+            .ok_or_else(|| EditError::new("path not found"))?;
+        let array = value_node
+            .children()
+            .find(|n| n.kind() == Sk::Array)
+            .ok_or_else(|| EditError::new("`+= [..]` target is not an array"))?;
+        let new_text = edit::insert_into_array(&array.text().to_string(), items);
+        let new_root = array.replace_with(edit::array_green_from_text(&new_text));
+        self.root = SyntaxNode::new_root(new_root);
+        Ok(())
+    }
+
     /// Delete the value at `path`, format-preserving: the member's or element's
     /// line is removed cleanly (no dangling comma or blank line). A missing key
     /// or out-of-range index is a no-op (jq semantics).
@@ -436,5 +452,45 @@ mod tests {
         assert!(out.contains("// TypeScript compiler configuration"));
         assert!(out.contains("/* language level */"));
         assert!(parse(&out).is_ok(), "edited output must re-parse");
+    }
+
+    #[test]
+    fn add_assign_scalar_reduces_to_set() {
+        assert_eq!(
+            edit_src("{ \"count\": 5 }", ".count += 3"),
+            "{ \"count\": 8 }"
+        );
+        assert_eq!(
+            edit_src("{ \"s\": \"a\" }", r#".s += "b""#),
+            "{ \"s\": \"ab\" }"
+        );
+    }
+
+    #[test]
+    fn append_single_line_array() {
+        assert_eq!(
+            edit_src(r#"["a", "b"]"#, r#". += ["c"]"#),
+            r#"["a", "b", "c"]"#
+        );
+        assert_eq!(edit_src("[]", ". += [1, 2]"), "[1, 2]");
+    }
+
+    #[test]
+    fn append_multiline_array_matches_indent_and_trailing_comma() {
+        let src = "{\n  \"exclude\": [\n    \"node_modules\",\n    \"dist\",\n  ]\n}\n";
+        let out = edit_src(src, r#".exclude += ["coverage"]"#);
+        assert_eq!(
+            out,
+            "{\n  \"exclude\": [\n    \"node_modules\",\n    \"dist\",\n    \"coverage\",\n  ]\n}\n"
+        );
+    }
+
+    #[test]
+    fn append_to_fixture_lib_keeps_comments() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let out = edit_src(&src, r#".compilerOptions.lib += ["WebWorker"]"#);
+        assert!(out.contains(r#"["ES2020", "DOM", "WebWorker"]"#));
+        assert!(out.contains("// TypeScript compiler configuration"));
+        assert!(parse(&out).is_ok());
     }
 }

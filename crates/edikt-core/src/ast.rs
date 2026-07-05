@@ -50,10 +50,15 @@ pub enum Expr {
     Comma(Vec<Expr>),
     /// A function call, e.g. `length`, `select(.x == 1)`, `ltrimstr("pre")`.
     Call(String, Vec<Expr>),
+    /// `[ expr ]` — collect the inner stream into an array (`None` = `[]`).
+    Collect(Option<Box<Expr>>),
     /// `path = rhs` — assign; `rhs` is evaluated against the whole input.
     Assign(Box<Expr>, Box<Expr>),
     /// `path |= rhs` — update-assign; `rhs` sees the current value at `path`.
     UpdateAssign(Box<Expr>, Box<Expr>),
+    /// `path += rhs` — add-assign; `path = path + rhs` (numeric add, string/array
+    /// concat). `rhs` is evaluated against the whole input.
+    AddAssign(Box<Expr>, Box<Expr>),
 }
 
 impl Expr {
@@ -61,12 +66,13 @@ impl Expr {
     /// `del(...)`)? The CLI uses this to pick mutation mode vs query mode.
     pub fn is_mutation(&self) -> bool {
         match self {
-            Expr::Assign(..) | Expr::UpdateAssign(..) => true,
+            Expr::Assign(..) | Expr::UpdateAssign(..) | Expr::AddAssign(..) => true,
             Expr::Call(name, args) => name == "del" || args.iter().any(Expr::is_mutation),
             Expr::Pipe(a, b) => a.is_mutation() || b.is_mutation(),
             Expr::Comma(items) => items.iter().any(Expr::is_mutation),
             Expr::Neg(inner) => inner.is_mutation(),
             Expr::Binary(_, a, b) => a.is_mutation() || b.is_mutation(),
+            Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.is_mutation()),
             Expr::Path(_) | Expr::Literal(_) => false,
         }
     }
