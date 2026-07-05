@@ -17,6 +17,7 @@ edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.0.0" }
 edikt-ini = { path = "crates/edikt-ini", version = "0.0.0" }
 edikt-env = { path = "crates/edikt-env", version = "0.0.0" }
 edikt-toml = { path = "crates/edikt-toml", version = "0.0.0" }
+edikt-yaml = { path = "crates/edikt-yaml", version = "0.0.0" }
 # Third-party.
 rowan = "0.16"
 logos = "0.16"

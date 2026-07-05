@@ -334,6 +334,37 @@ fn convert_toml_to_json_and_back() {
 }
 
 #[test]
+fn yaml_query_and_convert() {
+    let (out, _e, code) = run(&["-t", "yaml", ".web.replicas"], "web:\n  replicas: 3\n");
+    assert_eq!(out, "3\n");
+    assert_eq!(code, 0);
+
+    let (json, _e, c2) = run(&["-t", "yaml", "-T", "json"], "a:\n  b: 1\n");
+    assert_eq!(json, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");
+    assert_eq!(c2, 0);
+
+    let (yaml, _e, c3) = run(&["-t", "jsonc", "-T", "yaml"], "{ \"a\": { \"b\": 1 } }");
+    assert_eq!(yaml, "a:\n  b: 1\n");
+    assert_eq!(c3, 0);
+}
+
+#[test]
+fn yaml_edit_is_lossless() {
+    // A one-scalar edit preserves the comment and every untouched byte.
+    let (out, _e, code) = run(
+        &["-t", "yaml", ".replicas = 5"],
+        "# stack\nreplicas: 3   # count\ndebug: false\n",
+    );
+    assert_eq!(out, "# stack\nreplicas: 5   # count\ndebug: false\n");
+    assert_eq!(code, 0);
+
+    // del + append through the CLI.
+    let (out2, _e, c2) = run(&["-t", "yaml", "del(.debug)"], "a: 1\ndebug: true\n");
+    assert_eq!(out2, "a: 1\n");
+    assert_eq!(c2, 0);
+}
+
+#[test]
 fn object_literal_and_bracket_key() {
     let (out, _e, code) = run(&["-t", "jsonc", ".config = {}"], "{ \"config\": 1 }");
     assert_eq!(out, "{ \"config\": {} }");
