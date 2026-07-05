@@ -626,6 +626,16 @@ fn output_file_untouched_on_miss() {
 }
 
 #[test]
+fn identity_expression_is_never_a_directory() {
+    // `.` names a directory that always exists, but as an operand it is the
+    // identity *expression* — with -T it must convert stdin, not try to read
+    // the current directory.
+    let (out, _e, code) = run(&["-t", "jsonc", "-T", "json", "."], "{ \"a\": 1 }");
+    assert_eq!(out, "{\n  \"a\": 1\n}\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn packager_flags_emit_docs() {
     // The binary is its own doc generator: completions and the man page come
     // from hidden flags, so release archives and package builds need no

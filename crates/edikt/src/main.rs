@@ -344,13 +344,16 @@ fn run(args: Args) -> Result<ExitCode> {
 
     // Operands → program + files (sed-shaped: first operand is the expression
     // when no -e/-f). With an output format set, a whole-document conversion is
-    // the common intent, so a first operand that names a file (or `-`) is taken
-    // as a file with program `.` — while `-T json '.a' f.yaml` still reads `.a`
-    // as the expression.
+    // the common intent, so a first operand that names a readable path (or `-`)
+    // is taken as a file with program `.` — while `-T json '.a' f.yaml` still
+    // reads `.a` as the expression. Directories are excluded (`.` — a directory
+    // that always exists — is the identity expression, never an input), but not
+    // narrowed to regular files: process substitution hands us fifos.
     let (program, files): (String, Vec<String>) = if !sources.is_empty() {
         (join_pipe(&sources), args.operands.clone())
     } else if let Some(first) = args.operands.first() {
-        if explicit_out.is_some() && (first == "-" || Path::new(first).exists()) {
+        let p = Path::new(first);
+        if explicit_out.is_some() && (first == "-" || (p.exists() && !p.is_dir())) {
             (".".to_string(), args.operands.clone())
         } else {
             (first.clone(), args.operands[1..].to_vec())
