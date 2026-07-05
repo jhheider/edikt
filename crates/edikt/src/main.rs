@@ -71,12 +71,6 @@ enum Format {
 }
 
 fn run(args: Args) -> Result<ExitCode, String> {
-    if args.in_place {
-        return Err(
-            "in-place (-i) needs a mutating expression; mutation arrives in M2".to_string(),
-        );
-    }
-
     // Resolve the program and the file list. Expression sources (-f then -e) win
     // over the positional; when any are present, every operand is a file.
     let mut sources: Vec<String> = Vec::new();
@@ -98,25 +92,52 @@ fn run(args: Args) -> Result<ExitCode, String> {
     };
 
     let expr = edikt_core::parse(&program).map_err(|e| format!("bad expression: {e}"))?;
+    let is_mutation = expr.is_mutation();
+
+    if args.in_place && !is_mutation {
+        return Err("in-place (-i) needs a mutating expression, e.g. `.a.b = false`".to_string());
+    }
 
     let inputs = read_inputs(&files)?;
     let as_json = matches!((args.json, args.raw), (true, _));
 
     let mut emitted = false;
     for (path, src) in &inputs {
-        let value = load_value(path.as_deref(), args.format.as_deref(), src)?;
-        let results = edikt_core::eval(&expr, &value)
-            .map_err(|e| format!("{}: {e}", display_path(path.as_deref())))?;
-        for r in &results {
-            println!("{}", render(r, as_json));
-            emitted = true;
+        let loc = display_path(path.as_deref());
+        match detect_format(path.as_deref(), args.format.as_deref())? {
+            Format::Jsonc => {
+                if is_mutation {
+                    let mut doc = edikt_jsonc::parse(src).map_err(|e| format!("{loc}: {e}"))?;
+                    edikt_jsonc::apply(&mut doc, &expr).map_err(|e| format!("{loc}: {e}"))?;
+                    let out = doc.to_source();
+                    if args.in_place {
+                        let p = path
+                            .as_ref()
+                            .ok_or("cannot edit stdin in place; pass a file")?;
+                        std::fs::write(p, out)
+                            .map_err(|e| format!("writing {}: {e}", p.display()))?;
+                    } else {
+                        print!("{out}");
+                    }
+                    emitted = true;
+                } else {
+                    let doc = edikt_jsonc::parse(src).map_err(|e| format!("{loc}: {e}"))?;
+                    let value = doc.to_value();
+                    let results =
+                        edikt_core::eval(&expr, &value).map_err(|e| format!("{loc}: {e}"))?;
+                    for r in &results {
+                        println!("{}", render(r, as_json));
+                        emitted = true;
+                    }
+                }
+            }
         }
     }
 
     Ok(if emitted {
         ExitCode::SUCCESS
     } else {
-        // Grep-shaped miss.
+        // Grep-shaped miss (query with no results).
         ExitCode::from(1)
     })
 }
@@ -146,17 +167,6 @@ fn read_stdin() -> Result<String, String> {
         .read_to_string(&mut buf)
         .map_err(|e| format!("reading stdin: {e}"))?;
     Ok(buf)
-}
-
-/// Parse `src` in the resolved format and project it to a value.
-fn load_value(path: Option<&Path>, forced: Option<&str>, src: &str) -> Result<Value, String> {
-    match detect_format(path, forced)? {
-        Format::Jsonc => {
-            let doc =
-                edikt_jsonc::parse(src).map_err(|e| format!("{}: {e}", display_path(path)))?;
-            Ok(doc.to_value())
-        }
-    }
 }
 
 fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format, String> {

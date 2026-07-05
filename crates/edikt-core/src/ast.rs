@@ -50,4 +50,33 @@ pub enum Expr {
     Comma(Vec<Expr>),
     /// A function call, e.g. `length`, `select(.x == 1)`, `ltrimstr("pre")`.
     Call(String, Vec<Expr>),
+    /// `path = rhs` — assign; `rhs` is evaluated against the whole input.
+    Assign(Box<Expr>, Box<Expr>),
+    /// `path |= rhs` — update-assign; `rhs` sees the current value at `path`.
+    UpdateAssign(Box<Expr>, Box<Expr>),
+}
+
+impl Expr {
+    /// Does this expression mutate the document (contains an assignment or a
+    /// `del(...)`)? The CLI uses this to pick mutation mode vs query mode.
+    pub fn is_mutation(&self) -> bool {
+        match self {
+            Expr::Assign(..) | Expr::UpdateAssign(..) => true,
+            Expr::Call(name, args) => name == "del" || args.iter().any(Expr::is_mutation),
+            Expr::Pipe(a, b) => a.is_mutation() || b.is_mutation(),
+            Expr::Comma(items) => items.iter().any(Expr::is_mutation),
+            Expr::Neg(inner) => inner.is_mutation(),
+            Expr::Binary(_, a, b) => a.is_mutation() || b.is_mutation(),
+            Expr::Path(_) | Expr::Literal(_) => false,
+        }
+    }
+
+    /// The path steps if this expression is a plain path (the only valid left
+    /// side of an assignment), else `None`.
+    pub fn as_path(&self) -> Option<&[Step]> {
+        match self {
+            Expr::Path(steps) => Some(steps),
+            _ => None,
+        }
+    }
 }

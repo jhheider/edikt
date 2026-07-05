@@ -21,10 +21,14 @@ pub enum Lx {
     RParen,
     #[token("|")]
     Pipe,
+    #[token("|=")]
+    PipeAssign,
     #[token(",")]
     Comma,
     #[token(";")]
     Semi,
+    #[token("=")]
+    Assign,
     #[token("==")]
     EqEq,
     #[token("!=")]

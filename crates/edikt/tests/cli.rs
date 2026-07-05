@@ -97,10 +97,43 @@ fn expr_via_dash_e() {
 }
 
 #[test]
-fn in_place_query_errors_until_m2() {
+fn in_place_requires_a_mutation() {
     let (_o, err, code) = run(&["-t", "jsonc", "-i", ".a"], "{\"a\":1}");
     assert_eq!(code, 2);
-    assert!(err.contains("mutation"));
+    assert!(err.contains("in-place"));
+}
+
+#[test]
+fn mutation_writes_whole_doc_to_stdout() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".a = 5"], "{ \"a\": 1, \"b\": 2 }");
+    assert_eq!(out, "{ \"a\": 5, \"b\": 2 }");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn update_assign_via_cli() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".count |= . + 1"], "{ \"count\": 9 }");
+    assert_eq!(out, "{ \"count\": 10 }");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn in_place_edits_file_and_keeps_comments() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/edit.jsonc");
+    std::fs::write(&path, "{\n  // keep me\n  \"strict\": true,\n}\n").unwrap();
+    let (out, _e, code) = run(&["-i", ".strict = false", &path], "");
+    assert_eq!(out, ""); // -i writes to the file, not stdout
+    assert_eq!(code, 0);
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(after, "{\n  // keep me\n  \"strict\": false,\n}\n");
+}
+
+#[test]
+fn in_place_on_stdin_errors() {
+    let (_o, err, code) = run(&["-t", "jsonc", "-i", ".a = 1"], "{\"a\":0}");
+    assert_eq!(code, 2);
+    assert!(err.contains("stdin"));
 }
 
 #[test]
