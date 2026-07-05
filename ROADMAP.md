@@ -19,8 +19,9 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 ## Milestones
 
 - ✅ **M2 — Mutation + the format-preserving write path.** `set` (`=`, `|=`),
-  `del()`, `+=`/append, `-i`. Follow-ups: `-i.bak`, iterate-in-assignment
-  (`.a[] = x`), object literals `{...}`, new-key creation.
+  `del()`, `+=`/append, `-i`, and **new-key creation** (JSONC objects + `.env`).
+  Follow-ups: new-key creation for INI (section-aware), `-i.bak`,
+  iterate-in-assignment (`.a[] = x`), object literals `{...}`.
 - ⬜ **M3 — `select()` / iteration polish + more builtins** as real queries drive
   demand. (Iteration and `select` already work; grow the builtin registry
   deliberately.)

@@ -231,6 +231,27 @@ fn env_edit_in_place() {
 }
 
 #[test]
+fn creates_new_key_jsonc() {
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".compilerOptions.noEmit = true"],
+        "{ \"compilerOptions\": { \"strict\": true } }",
+    );
+    assert_eq!(
+        out,
+        "{ \"compilerOptions\": { \"strict\": true, \"noEmit\": true } }"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn creates_new_key_env() {
+    // The exact case the demo hit — now works.
+    let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");
+    assert_eq!(out, "K=v\nK2=x\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");

@@ -44,18 +44,28 @@ impl Env {
         &self.root
     }
 
-    /// Set the entry `key` to a scalar, format-preserving. The entry must exist.
+    /// Set the entry `key` to a scalar, format-preserving. If `key` doesn't
+    /// exist, a new `key=value` line is appended.
     pub fn set(&mut self, key: &str, value: &Value) -> Result<(), EditError> {
         let text = edit::scalar_string(value)?;
-        let entry = edit::find_entry(&self.root, key).ok_or_else(|| {
-            EditError::new("key not found (creating new keys is not supported yet)")
-        })?;
-        let value_node = entry
-            .children()
-            .find(|n| n.kind() == Sk::Value)
-            .ok_or_else(|| EditError::new("entry has no value slot"))?;
-        let new_root = value_node.replace_with(edit::value_node_green(&text));
-        self.root = SyntaxNode::new_root(new_root);
+        match edit::find_entry(&self.root, key) {
+            Some(entry) => {
+                let value_node = entry
+                    .children()
+                    .find(|n| n.kind() == Sk::Value)
+                    .ok_or_else(|| EditError::new("entry has no value slot"))?;
+                let new_root = value_node.replace_with(edit::value_node_green(&text));
+                self.root = SyntaxNode::new_root(new_root);
+            }
+            None => {
+                let mut src = self.to_source();
+                if !src.is_empty() && !src.ends_with('\n') {
+                    src.push('\n');
+                }
+                src.push_str(&format!("{key}={text}\n"));
+                self.root = SyntaxNode::new_root(parser::build(&src));
+            }
+        }
         Ok(())
     }
 
@@ -181,10 +191,19 @@ mod tests {
     }
 
     #[test]
-    fn missing_and_malformed() {
-        let mut doc = parse(SAMPLE).unwrap();
-        assert!(apply(&mut doc, &parse_expr(".NOPE = 1").unwrap()).is_err());
+    fn malformed_line_errors() {
         assert!(parse("not an entry line\n").is_err());
+    }
+
+    #[test]
+    fn creates_new_key_by_appending() {
+        assert_eq!(edit_src("A=1\n", r#".B = "2""#), "A=1\nB=2\n");
+        // appends even when the file lacks a trailing newline
+        assert_eq!(edit_src("A=1", r#".B = "2""#), "A=1\nB=2\n");
+        // preserves the existing content and comments
+        let out = edit_src(SAMPLE, r#".NEW_FLAG = "on""#);
+        assert!(out.contains("# service env"));
+        assert!(out.ends_with("NEW_FLAG=on\n"));
     }
 
     #[test]

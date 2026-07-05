@@ -50,14 +50,34 @@ impl Jsonc {
         &self.root
     }
 
-    /// Set the value at `path` to `value`, format-preserving: only that value
-    /// node's bytes change. The path must already exist (new-key creation lands
-    /// in a later slice).
+    /// Set the value at `path` to `value`, format-preserving. If the path
+    /// already resolves, only that value node's bytes change. If a trailing part
+    /// of the path is missing, a new member is inserted into the deepest existing
+    /// object (matching its indent/comma style), creating intermediate objects as
+    /// needed. Creating through an array index or `[]` is not supported.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        let target = edit::resolve_value_node(&self.root, path).ok_or_else(|| {
-            EditError::new("path not found (creating new keys is not supported yet)")
-        })?;
-        let new_root = target.replace_with(edit::value_green(value));
+        let top = self
+            .root
+            .children()
+            .find(|n| n.kind() == Sk::Value)
+            .ok_or_else(|| EditError::new("empty document"))?;
+        let (container, remaining) = edit::walk_partial(top, path);
+        let new_root = if remaining.is_empty() {
+            container.replace_with(edit::value_green(value))
+        } else {
+            let Step::Field(key) = &remaining[0] else {
+                return Err(EditError::new(
+                    "can only create object keys, not array indices",
+                ));
+            };
+            let object = container
+                .children()
+                .find(|n| n.kind() == Sk::Object)
+                .ok_or_else(|| EditError::new("cannot create a key inside a non-object"))?;
+            let member_value = edit::nest_value(&remaining[1..], value)?;
+            let text = edit::insert_into_object(&object.text().to_string(), key, &member_value);
+            object.replace_with(edit::object_green_from_text(&text))
+        };
         self.root = SyntaxNode::new_root(new_root);
         Ok(())
     }
@@ -401,26 +421,28 @@ mod tests {
     }
 
     #[test]
-    fn every_fixture_survives_a_noop_style_roundtrip_after_edit() {
-        // Editing one value then reading the file back must still be valid JSONC
-        // and preserve unrelated bytes.
+    fn adding_a_key_on_each_fixture_keeps_it_valid() {
+        // Every fixture is a top-level object; adding a fresh key must keep the
+        // doc valid JSONC and preserve the unrelated bytes.
         for path in jsonc_fixtures() {
             let src = std::fs::read_to_string(&path).unwrap();
             let mut doc = parse(&src).unwrap();
-            // set root-level identity is meaningless; only run where a known key
-            // exists. Instead assert a re-parse of the unedited round-trip.
-            assert_eq!(doc.to_source(), src);
-            // an edit to a non-existent path must error, not corrupt the doc
-            let _ = apply(&mut doc, &parse_expr(".___nope___ = 1").unwrap());
-            assert_eq!(doc.to_source(), src, "failed edit must leave doc intact");
+            apply(&mut doc, &parse_expr(r#".__added__ = "x""#).unwrap()).unwrap();
+            let out = doc.to_source();
+            assert!(out.contains("__added__"));
+            assert!(
+                parse(&out).is_ok(),
+                "{}: edited output must re-parse",
+                path.display()
+            );
         }
     }
 
     #[test]
-    fn set_missing_path_and_non_assignment_error() {
+    fn non_assignment_and_bad_create_error() {
         let mut doc = parse("{ \"a\": 1 }").unwrap();
-        assert!(apply(&mut doc, &parse_expr(".nope = 1").unwrap()).is_err());
         assert!(apply(&mut doc, &parse_expr(".a").unwrap()).is_err()); // not an assignment
+        assert!(apply(&mut doc, &parse_expr(".a.b = 2").unwrap()).is_err()); // create in scalar
     }
 
     #[test]
@@ -496,5 +518,46 @@ mod tests {
         assert!(out.contains(r#"["ES2020", "DOM", "WebWorker"]"#));
         assert!(out.contains("// TypeScript compiler configuration"));
         assert!(parse(&out).is_ok());
+    }
+
+    // --- new-key creation -------------------------------------------------
+
+    #[test]
+    fn creates_new_key_single_line() {
+        assert_eq!(edit_src("{ \"a\": 1 }", ".b = 2"), "{ \"a\": 1, \"b\": 2 }");
+        assert_eq!(edit_src("{}", ".a = 1"), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn creates_new_key_multiline_matches_style() {
+        let src = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
+        assert_eq!(
+            edit_src(src, ".c = 3"),
+            "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3,\n}\n"
+        );
+    }
+
+    #[test]
+    fn creates_intermediate_objects() {
+        assert_eq!(
+            edit_src("{ \"x\": {} }", ".x.y.z = 1"),
+            "{ \"x\": {\"y\": {\"z\":1}} }"
+        );
+    }
+
+    #[test]
+    fn creates_key_in_fixture_keeps_comments() {
+        let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+        let out = edit_src(&src, ".compilerOptions.noEmit = true");
+        assert!(out.contains("\"noEmit\": true"));
+        assert!(out.contains("// TypeScript compiler configuration"));
+        assert!(out.contains("/* language level */"));
+        assert!(parse(&out).is_ok());
+    }
+
+    #[test]
+    fn cannot_create_key_in_a_scalar() {
+        let mut doc = parse("{ \"a\": 1 }").unwrap();
+        assert!(apply(&mut doc, &parse_expr(".a.b = 2").unwrap()).is_err());
     }
 }
