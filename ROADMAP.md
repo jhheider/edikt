@@ -33,12 +33,15 @@ Release infra is intentionally **last** — build the capability, then ship it.
   data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
   preserve comments and layout; merge keys (`<<`) resolve in queries. Replaced
   the serde floor — the greenfield-CST / `yqlib-sys` paths are moot.
-- ⬜ **Output follows the format.** A structural query result should be returned
-  in the document's format, not compact JSON: a **pure-path** result (`.services`)
-  as the original **source slice** (exact bytes, comments, layout); a
-  **synthesized** result (`keys`, `.a + .b`, an object literal) emitted via the
-  input format's emitter (or the explicit `-T`/`-o` format). `--json` is the only
-  opt-out (the pipe-to-jq escape hatch). One seam serves all six formats.
+- ✅ **Output follows the format.** A structural query result is returned in the
+  document's format: a **pure-path** result (`.services`) as the original
+  **source slice** (exact bytes, comments, layout; YAML blocks dedented); a
+  **synthesized** result (`keys`, `.a + .b`) emitted via the output format's
+  emitter. Output format = `-T`/`--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` →
+  script `toFormat:` directive → input format preserved. An unrepresentable
+  result errors naming capable formats (from `Feature` sets). `json` vs `jsonc`
+  are now distinct formats (JSON lacks Comments). Follow-up: `-o FILE` (output
+  file, format by extension).
 - ⬜ **Comment-preserving conversion.** Carry comments across `-T` via a **uniform
   comment model** — parse comments *out* to a shared vocabulary (head / inline /
   foot), and let each format's emitter decide per kind: place it, remap it to a

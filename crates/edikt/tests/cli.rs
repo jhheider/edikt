@@ -46,9 +46,18 @@ fn strings_are_raw_by_default() {
 
 #[test]
 fn json_output_flag() {
+    // `--json` is shorthand for `-T json`: structural results emit as pretty
+    // JSON (jq-shaped), scalars JSON-encode.
     let (out, _e, code) = run(&["-t", "jsonc", "--json", ".compilerOptions.lib"], TSCONFIG);
-    assert_eq!(out, "[\"ES2020\",\"DOM\"]\n");
+    assert_eq!(out, "[\n  \"ES2020\",\n  \"DOM\"\n]\n");
     assert_eq!(code, 0);
+
+    let (s, _e, c2) = run(
+        &["-t", "jsonc", "--json", ".compilerOptions.target"],
+        TSCONFIG,
+    );
+    assert_eq!(s, "\"ES2020\"\n");
+    assert_eq!(c2, 0);
 }
 
 #[test]
@@ -398,6 +407,78 @@ fn unknown_extension_errors() {
     assert!(err.contains("-t"));
     // The error lists the formats to choose from.
     assert!(err.contains("yaml") && err.contains("toml"), "got: {err}");
+}
+
+#[test]
+fn structural_query_returns_source_slice() {
+    // A pure-path structural query stays in-format: exact source bytes,
+    // comments included — not re-serialized JSON.
+    let src = "{\n  \"lib\": [\"ES2020\", \"DOM\"], // pinned\n  \"opts\": { \"strict\": true }\n}";
+    let (out, _e, code) = run(&["-t", "jsonc", ".lib"], src);
+    assert_eq!(out, "[\"ES2020\", \"DOM\"]\n");
+    assert_eq!(code, 0);
+
+    // YAML block collections come back dedented, comments intact.
+    let y = "web:\n  image: nginx   # pinned\n  ports:\n    - 80\n";
+    let (yo, _e, yc) = run(&["-t", "yaml", ".web"], y);
+    assert_eq!(yo, "image: nginx   # pinned\nports:\n  - 80\n");
+    assert_eq!(yc, 0);
+}
+
+#[test]
+fn synthesized_query_stays_in_format() {
+    // A computed result has no source slice; it renders via the input format's
+    // emitter — YAML in, YAML out.
+    let y = "web:\n  image: nginx\n  ports:\n    - 80\n";
+    let (out, _e, code) = run(&["-t", "yaml", ".web | keys"], y);
+    assert_eq!(out, "- image\n- ports\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn infeasible_output_names_candidates() {
+    // An array result cannot be a top-level env document; the error suggests
+    // formats whose feature set can hold it.
+    let (_o, err, code) = run(&["-t", "yaml", "-T", "env", ".xs"], "xs:\n  - 1\n  - 2\n");
+    assert_eq!(code, 2);
+    assert!(err.contains("cannot represent"), "got: {err}");
+    assert!(err.contains("yaml") && err.contains("toml"), "got: {err}");
+}
+
+#[test]
+fn script_directives_bake_formats() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let script = format!("{dir}/to_json.edk");
+    std::fs::write(
+        &script,
+        "#!/usr/bin/env -S edikt -f\n# a comment\ntoFormat: json\ntype: yaml\n.web\n",
+    )
+    .unwrap();
+    // The script bakes input+output formats; no -t/-T needed.
+    let (out, _e, code) = run(&["-f", &script], "web:\n  a: 1\n");
+    assert_eq!(out, "{\n  \"a\": 1\n}\n");
+    assert_eq!(code, 0);
+
+    // CLI flags override script directives.
+    let (out2, _e2, c2) = run(&["-f", &script, "-T", "yaml"], "web:\n  a: 1\n");
+    assert_eq!(out2, "a: 1\n");
+    assert_eq!(c2, 0);
+}
+
+#[test]
+fn to_with_expression_and_file() {
+    // `-T json EXPR FILE`: the first operand is the expression (not a file).
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/tq.yaml");
+    std::fs::write(&path, "a:\n  b: 2\n").unwrap();
+    let (out, _e, code) = run(&["-T", "json", ".a", &path], "");
+    assert_eq!(out, "{\n  \"b\": 2\n}\n");
+    assert_eq!(code, 0);
+
+    // `-T json FILE` still converts the whole document.
+    let (out2, _e2, c2) = run(&["-T", "json", &path], "");
+    assert_eq!(out2, "{\n  \"a\": {\n    \"b\": 2\n  }\n}\n");
+    assert_eq!(c2, 0);
 }
 
 #[test]

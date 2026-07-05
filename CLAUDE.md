@@ -40,12 +40,17 @@ edikt -f script.edk [-f …] [FILE...]
 |---|---|
 | *(positional EXPR)* | the expression, jq-style, when no `-e`/`-f` given |
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
-| `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order |
+| `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order. Scripts may open with **header directives** — `toFormat: FMT`, `type: FMT` — which CLI flags override; `#` header lines (comments, shebangs) are skipped |
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin |
 | `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`toml`\|`yaml`) |
-| `-T, --to FMT` | **output** format → conversion / data-model mode (see below) |
+| `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` are shorthands for `-T <fmt>` |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
-| `--json` | force JSON-encoded output |
+
+**Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) → script
+`toFormat:` directive → the input format, preserved. Input-format precedence:
+`-t` → script `type:` → filename detection. `json` and `jsonc` are distinct
+formats sharing one engine — JSON has no `Comments` capability, so JSONC → JSON
+is a real conversion that warns and drops comments.
 
 **I/O defaulting (sed-shaped):** no FILE or `-` → read stdin, write stdout.
 FILE without `-i` → read file, write result to stdout. `-i` → write back per
@@ -104,22 +109,30 @@ a v2 conversation, not scope creep.
 
 ## Modes & output contract
 
-edikt is in exactly one mode per run, decided by the expression + flags:
+edikt is in exactly one mode per run, decided by the expression:
 
 | mode | trigger | output |
 |---|---|---|
-| **query** | expression has no assignment/`del` and `-T` absent | the selected value(s), one per line |
-| **mutation** | expression contains `=`/`\|=`/`+=`/`del()`, `-T` absent | the **whole** document, byte-identical except touched nodes |
-| **convert** | `-T FMT` present and ≠ input format | parse → `Value` → apply expr → **emit target format** (data-model; trivia dropped) |
+| **mutation** | expression contains `=`/`\|=`/`+=`/`del()` | the **whole** document, byte-identical except touched nodes. Cannot combine with an output format — edit first, then convert |
+| **query / convert** (one unified mode) | everything else | each result, rendered **in the output format** (explicit, or the input format preserved) |
 
-**Query output:** scalar → raw (no quotes); structural (object/array) → the
-**original source slice** (format-preserving get) by default, `--json` to
-normalize; multiple matches → one per line.
+**Query/convert output — "output follows the format":**
+- **scalar** → raw text (no quotes); an explicitly-requested JSON-family output
+  JSON-encodes it instead.
+- **structural, pure path, output = input** → the **original source slice**
+  (format-preserving get: exact bytes, comments, layout; YAML block collections
+  dedented to the margin so the fragment stands alone).
+- **structural, otherwise** (computed result, or output ≠ input) → the value
+  **emitted via the output format's emitter** (data-model; trivia dropped).
+  Lossy degradations warn (`--strict` promotes); a value the output format
+  **cannot represent errors, naming the formats that can** (derived from
+  `Feature` sets).
+- multiple matches → one per line (structural results may span lines).
 
 **Exit codes (grep/jq-shaped):** `0` success / ≥1 match · `1` query with zero
 matches · `2` parse, syntax, or evaluation error.
 
-`-i` is only meaningful in mutation and convert modes.
+`-i` needs a mutating expression or an explicit output format.
 
 ---
 

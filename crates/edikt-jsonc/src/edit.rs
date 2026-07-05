@@ -90,6 +90,42 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
     eval_one(&expr, current)
 }
 
+/// The original source text of each value node selected by `path`, in document
+/// order (aligned with the evaluator). A structural result is returned as its
+/// exact bytes — comments, layout, trailing commas — not a re-serialization.
+pub fn source_slice(root: &SyntaxNode, path: &[Step]) -> Vec<String> {
+    let Some(top) = root.children().find(|n| n.kind() == Sk::Value) else {
+        return Vec::new();
+    };
+    let mut current = vec![top];
+    for step in path {
+        let mut next = Vec::new();
+        for node in &current {
+            match step {
+                Step::Iterate => next.extend(iterate_values(node)),
+                _ => next.extend(step_into(node, step)),
+            }
+        }
+        current = next;
+    }
+    current.iter().map(|n| n.text().to_string()).collect()
+}
+
+/// The element value nodes of an array, or the member value nodes of an object.
+fn iterate_values(value_node: &SyntaxNode) -> Vec<SyntaxNode> {
+    if let Some(array) = value_node.children().find(|n| n.kind() == Sk::Array) {
+        array.children().filter(|n| n.kind() == Sk::Value).collect()
+    } else if let Some(object) = value_node.children().find(|n| n.kind() == Sk::Object) {
+        object
+            .children()
+            .filter(|n| n.kind() == Sk::Member)
+            .filter_map(|m| m.children().find(|n| n.kind() == Sk::Value))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Walk `path` from the document root to the target value node.
 pub(crate) fn resolve_value_node(root: &SyntaxNode, path: &[Step]) -> Option<SyntaxNode> {
     let mut current = root.children().find(|n| n.kind() == Sk::Value)?;
