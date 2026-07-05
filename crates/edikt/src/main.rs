@@ -45,6 +45,18 @@ struct Args {
     #[arg(short = 'i', long = "in-place")]
     in_place: bool,
 
+    /// Write output to FILE instead of stdout. For queries/conversions the
+    /// output format is inferred from FILE's extension (explicit -T/--fmt wins);
+    /// for mutations FILE is just the destination. Nothing is written on a
+    /// query miss.
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "FILE",
+        conflicts_with = "in_place"
+    )]
+    output: Option<PathBuf>,
+
     /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
@@ -275,12 +287,21 @@ fn run(args: Args) -> Result<ExitCode> {
     }
     sources.extend(args.exprs.iter().cloned());
 
-    // Output format: CLI (-T / --json/--jsonc/--ini/--toml/--yaml) beats a
-    // script's `toFormat:`; absent both, the input format is preserved.
-    let explicit_out = match args.output_format()? {
-        Some(f) => Some(f),
-        None => directives.to.as_deref().map(format_from_name).transpose()?,
-    };
+    // Output format precedence: CLI (-T / --json/--jsonc/--ini/--toml/--yaml)
+    // → `-o` FILE's extension → a script's `toFormat:` → input preserved.
+    // Flag- and directive-requested formats are "hard" (a mutation cleanly
+    // errors on them); an `-o`-derived format is advisory — the file is a sink,
+    // and an unrecognized extension just means "keep the input format".
+    let out_from_directive = directives.to.as_deref().map(format_from_name).transpose()?;
+    let hard_out = args.output_format()?.or(out_from_directive);
+    let explicit_out = args
+        .output_format()?
+        .or_else(|| {
+            args.output
+                .as_deref()
+                .and_then(|p| detect_format(Some(p), None).ok())
+        })
+        .or(out_from_directive);
     // Input format: -t beats a script's `type:`; absent both, detect by name.
     let forced_type: Option<String> = args.format.clone().or(directives.ty);
 
@@ -307,7 +328,7 @@ fn run(args: Args) -> Result<ExitCode> {
         edikt_core::parse(&program).with_context(|| format!("bad expression `{program}`"))?;
     let is_mutation = expr.is_mutation();
 
-    if is_mutation && let Some(out) = explicit_out {
+    if is_mutation && let Some(out) = hard_out {
         bail!(
             "cannot combine a mutation with an output format (--{}); edit first, then convert",
             out.name()
@@ -319,6 +340,9 @@ fn run(args: Args) -> Result<ExitCode> {
 
     let inputs = read_inputs(&files)?;
 
+    // With -o, everything accumulates here and is written once at the end
+    // (nothing is written on a query miss).
+    let mut file_out: Vec<String> = Vec::new();
     let mut emitted = false;
     for (path, src) in &inputs {
         let loc = display_path(path.as_deref());
@@ -333,6 +357,8 @@ fn run(args: Args) -> Result<ExitCode> {
                     .as_ref()
                     .context("cannot edit stdin in place; pass a file")?;
                 std::fs::write(p, out).with_context(|| format!("writing {}", p.display()))?;
+            } else if args.output.is_some() {
+                file_out.push(out);
             } else {
                 print!("{out}");
             }
@@ -391,6 +417,9 @@ fn run(args: Args) -> Result<ExitCode> {
             let joined = terminated(&outputs);
             std::fs::write(p, joined).with_context(|| format!("writing {}", p.display()))?;
             emitted = true;
+        } else if args.output.is_some() {
+            emitted |= !outputs.is_empty();
+            file_out.extend(outputs);
         } else {
             for out in &outputs {
                 if out.ends_with('\n') {
@@ -401,6 +430,14 @@ fn run(args: Args) -> Result<ExitCode> {
                 emitted = true;
             }
         }
+    }
+
+    // Write the -o sink once, after all inputs — and only if something matched.
+    if let Some(p) = &args.output
+        && emitted
+    {
+        std::fs::write(p, terminated(&file_out))
+            .with_context(|| format!("writing {}", p.display()))?;
     }
 
     Ok(if emitted {

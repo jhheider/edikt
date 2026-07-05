@@ -40,8 +40,9 @@ Release infra is intentionally **last** — build the capability, then ship it.
   emitter. Output format = `-T`/`--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` →
   script `toFormat:` directive → input format preserved. An unrepresentable
   result errors naming capable formats (from `Feature` sets). `json` vs `jsonc`
-  are now distinct formats (JSON lacks Comments). Follow-up: `-o FILE` (output
-  file, format by extension).
+  are now distinct formats (JSON lacks Comments). `-o FILE` writes to a file,
+  inferring the output format from its extension (`-T` wins; mutations treat it
+  as a sink; nothing is written on a query miss).
 - ⬜ **Comment-preserving conversion.** Carry comments across `-T` via a **uniform
   comment model** — parse comments *out* to a shared vocabulary (head / inline /
   foot), and let each format's emitter decide per kind: place it, remap it to a
