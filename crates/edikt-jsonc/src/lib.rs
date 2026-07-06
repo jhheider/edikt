@@ -737,4 +737,304 @@ mod tests {
         assert!(out.contains("// language level"), "got: {out}");
         assert!(parse(&out).is_ok(), "commented emit must re-parse");
     }
+
+    // --- projection edge cases (numbers, escapes, absent values) -----------
+
+    #[test]
+    fn projects_big_int_as_float_and_unescapes_every_escape() {
+        // A magnitude past i64 falls back to float instead of clamping to 0.
+        let doc = parse("{ \"big\": 99999999999999999999 }").unwrap();
+        assert_eq!(
+            eval(&parse_expr(".big").unwrap(), &doc.to_value()).unwrap(),
+            vec![Value::Float(99999999999999999999.0)]
+        );
+        // Every string escape the unescaper handles, including an unknown escape
+        // (kept verbatim as `\q`) and an invalid `\u` (dropped).
+        let doc = parse("{ \"s\": \"a\\/b\\n\\r\\b\\f\\tz\\q\\u00e9\\uzzzz\" }").unwrap();
+        assert_eq!(
+            eval(&parse_expr(".s").unwrap(), &doc.to_value()).unwrap(),
+            vec![Value::Str("a/b\n\r\u{8}\u{c}\tz\\q\u{e9}".into())]
+        );
+    }
+
+    #[test]
+    fn projects_absent_member_value_as_null() {
+        // A malformed member with no value must project to null, not panic - and
+        // still round-trip byte-for-byte (the moat holds even on garbage input).
+        let doc = parse("{\"a\":}").unwrap();
+        assert_eq!(doc.to_source(), "{\"a\":}");
+        assert_eq!(
+            eval(&parse_expr(".a").unwrap(), &doc.to_value()).unwrap(),
+            vec![Value::Null]
+        );
+    }
+
+    #[test]
+    fn unescape_guards_a_lone_trailing_backslash() {
+        // Defensive: the lexer never yields this, but the unescaper must not
+        // panic on a token whose content ends in a bare backslash.
+        assert_eq!(crate::project::unescape("\"a\\\""), "a\\");
+    }
+
+    // --- source_slice / resolve edge cases --------------------------------
+
+    #[test]
+    fn source_slice_iterates_objects_and_skips_scalars() {
+        let doc = parse(TSCONFIG).unwrap();
+        let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+        // Iterating an object yields each member's value source, in order.
+        assert_eq!(slice(".compilerOptions.paths[]"), vec!["[\"./src/*\"]"]);
+        // Iterating a scalar yields nothing (not an error).
+        assert!(slice(".compilerOptions.strict[]").is_empty());
+        // An index that lands below the start of the array resolves to nothing.
+        assert!(slice(".exclude[-5]").is_empty());
+    }
+
+    #[test]
+    fn value_at_rejects_iterate_and_comment_steps() {
+        let doc = parse(TSCONFIG).unwrap();
+        let at = |p: &str| doc.value_at(parse_expr(p).unwrap().as_path().unwrap());
+        // `[]` is not a single navigable value node.
+        assert!(at(".compilerOptions.lib[]").is_none());
+        // A `#` comment step never resolves to a value.
+        assert!(at(".compilerOptions.strict.#").is_none());
+    }
+
+    // --- append / create edge cases ---------------------------------------
+
+    #[test]
+    fn append_single_line_array_with_trailing_comma() {
+        // A single-line array that already carries a trailing comma keeps it.
+        assert_eq!(edit_src("[1, 2,]", ". += [3]"), "[1, 2, 3,]");
+    }
+
+    fn edit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        apply(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn creating_through_index_iterate_or_comment_errors() {
+        assert!(
+            edit_err("{}", ".a[0] = 1").contains("cannot create array elements by index"),
+            "index create"
+        );
+        assert!(
+            edit_err("{}", ".a[] = 1").contains("cannot create through `[]`"),
+            "iterate create"
+        );
+        assert!(
+            edit_err("{}", ".a.# = 1").contains("editing comments"),
+            "comment create"
+        );
+    }
+
+    #[test]
+    fn del_with_extra_arguments_errors() {
+        assert!(
+            edit_err("{ \"a\": 1 }", "del(.a; .b)").contains("one path argument"),
+            "del arity"
+        );
+    }
+
+    #[test]
+    fn del_dot_iterate_and_comment_are_rejected_or_noop() {
+        // del(.) is refused outright.
+        assert!(
+            edit_err("{ \"a\": 1 }", "del(.)").contains("del(.) is not allowed"),
+            "del(.)"
+        );
+        // del(.[]) is a known-unsupported form.
+        assert!(
+            edit_err("[1, 2]", "del(.[])").contains("del(.[]) is not supported"),
+            "del(.[])"
+        );
+        // del of a comment through the plain edit path is refused (comment edits
+        // route elsewhere).
+        assert!(
+            edit_err("{ \"a\": 1 }", "del(.a.#)").contains("deleting comments"),
+            "del(.a.#)"
+        );
+        // Deleting through an absent parent is a silent no-op.
+        assert_eq!(edit_src("{ \"a\": 1 }", "del(.nope.deep)"), "{ \"a\": 1 }");
+    }
+
+    // --- comment write-back edge cases ------------------------------------
+
+    fn cedit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn comment_delete_edge_cases() {
+        // Deleting a comment at a missing key is a no-op.
+        assert_eq!(
+            cedit("{\n  \"a\": 1\n}\n", "del(.nope.#)"),
+            "{\n  \"a\": 1\n}\n"
+        );
+        // Deleting a head/foot on a compact object has nothing to drop.
+        assert_eq!(
+            cedit("{ \"a\": 1, \"b\": 2 }", "del(.b.#)"),
+            "{ \"a\": 1, \"b\": 2 }"
+        );
+        // Deleting an inline comment removes exactly its bytes.
+        assert_eq!(
+            cedit(
+                "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n",
+                "del(.a.#.inline)"
+            ),
+            "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+        );
+    }
+
+    #[test]
+    fn inline_comment_layout_errors() {
+        // A compact object leaves no room for a trailing inline comment.
+        assert!(
+            cedit_err("{ \"a\": 1 }", ".a.#.inline = \"x\"").contains("layout expansion"),
+            "compact inline"
+        );
+        // An inline comment on a value that spans lines is not yet supported.
+        assert!(
+            cedit_err(
+                "{\n  \"obj\": {\n    \"x\": 1\n  }\n}\n",
+                ".obj.#.inline = \"n\""
+            )
+            .contains("multi-line"),
+            "multi-line inline"
+        );
+    }
+
+    #[test]
+    fn comment_target_resolution_errors() {
+        // The document banner `.#` is not editable for JSONC yet.
+        assert!(
+            cedit_err("{ \"a\": 1 }", ".# = \"x\"").contains("document-level"),
+            "banner"
+        );
+        // An out-of-range array index is a clean error.
+        assert!(
+            cedit_err("{\n  \"xs\": [1, 2]\n}\n", ".xs[9].# = \"x\"").contains("out of range"),
+            "index range"
+        );
+        // A `[]` before `#` addresses no single element.
+        assert!(
+            cedit_err("{\n  \"xs\": [1, 2]\n}\n", ".xs[].# = \"x\"")
+                .contains("object keys or array elements"),
+            "iterate comment"
+        );
+    }
+
+    // --- comment extraction edge cases ------------------------------------
+
+    #[test]
+    fn extracts_member_internal_head_and_inline_comments() {
+        // Comments *inside* a member: before the value (head), and after it but
+        // before the comma (inline), the latter joined across two lines.
+        let src = "{\"x\": /* h */ 1 /* i\nj */, \"y\": 2}";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(entries[0].0, "x");
+        assert_eq!(entries[0].1.comments.head, vec!["h"]);
+        assert_eq!(entries[0].1.comments.inline.as_deref(), Some("i j"));
+    }
+
+    #[test]
+    fn empty_inline_comment_contributes_nothing() {
+        let src = "{\n  \"a\": 1, //\n  \"b\": 2\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].1.comments.inline, None);
+    }
+
+    #[test]
+    fn empty_container_keeps_its_own_foot_comment() {
+        let src = "{\n  // note\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.foot, vec!["note"]);
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn extracts_top_level_inline_and_multiline_trailer() {
+        // An inline comment on the top-level value.
+        let c = parse("true // yes\n").unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.inline.as_deref(), Some("yes"));
+        // A multi-line block comment after the value becomes a multi-line foot.
+        let c = parse("{}\n/* a\nb */\n").unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.foot, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn stray_trailing_token_does_not_break_the_commented_projection() {
+        // Trailing garbage past the top value is tolerated (parsed losslessly);
+        // the commented projection just reflects the leading value.
+        let c = parse("true false").unwrap().to_commented().unwrap();
+        assert_eq!(c.to_value(), Value::Bool(true));
+    }
+
+    // --- commented emit edge cases ----------------------------------------
+
+    #[test]
+    fn emits_document_level_head_inline_and_foot() {
+        let c = parse("// banner\ntrue // yes\n// trailer\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        assert_eq!(emit_commented(&c), "// banner\ntrue // yes\n// trailer\n");
+    }
+
+    #[test]
+    fn emits_array_element_inline_and_foot() {
+        let c = parse("[\n  1 /* one */,\n  2\n  // foot\n]\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        assert_eq!(emit_commented(&c), "[\n  1, // one\n  2\n  // foot\n]\n");
+    }
+
+    #[test]
+    fn emits_object_member_foot() {
+        let c = parse("{\n  \"a\": 1\n  // foot\n}\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        assert_eq!(emit_commented(&c), "{\n  \"a\": 1\n  // foot\n}\n");
+    }
+
+    // --- public API surface ------------------------------------------------
+
+    #[test]
+    fn document_trait_and_public_accessors() {
+        use edikt_core::Document;
+        let mut doc = parse(TSCONFIG).unwrap();
+        // syntax() exposes the lossless root node.
+        assert_eq!(doc.syntax().text().to_string(), TSCONFIG);
+        // Capability + comment probes.
+        assert!(doc.features().contains(&Feature::Comments));
+        assert!(doc.has_comments());
+        // A mutation driven through the trait method (not the free `apply`).
+        Document::apply(
+            &mut doc,
+            &parse_expr(".compilerOptions.strict = false").unwrap(),
+        )
+        .unwrap();
+        assert!(doc.to_source().contains("\"strict\": false"));
+        // emit(): the pretty-JSON conversion target.
+        let json = emit(&doc.to_value());
+        assert!(json.contains("\"compilerOptions\""));
+    }
 }

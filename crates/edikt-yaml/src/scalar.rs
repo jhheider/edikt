@@ -263,4 +263,60 @@ mod tests {
         assert_eq!(emit_string("has # comment"), "\"has # comment\""); // ' #' starts a comment
         assert_eq!(emit_string("- dash"), "\"- dash\"");
     }
+
+    #[test]
+    fn resolves_octal_and_str_tagged_scalars() {
+        // `0o` octal (the `0x` hex path is covered by `resolves_core_schema`).
+        assert_eq!(
+            resolve_scalar("0o17", ScalarStyle::Plain, None),
+            Value::Int(15)
+        );
+        // An explicit `!!str` (or its long form) tag pins a plain scalar to
+        // string, even when its text would otherwise resolve to a number/bool.
+        assert_eq!(
+            resolve_scalar("42", ScalarStyle::Plain, Some("!!str")),
+            Value::Str("42".into())
+        );
+        assert_eq!(
+            resolve_scalar("true", ScalarStyle::Plain, Some("tag:yaml.org,2002:str")),
+            Value::Str("true".into())
+        );
+    }
+
+    #[test]
+    fn inline_refuses_collections() {
+        // A block mapping/sequence can't be spliced in as an inline token.
+        let err = emit_scalar_inline(&Value::Array(vec![Value::Int(1)]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("mapping/sequence in block context"),
+            "got: {err}"
+        );
+        assert!(emit_scalar_inline(&Value::Object(vec![])).is_err());
+    }
+
+    #[test]
+    fn format_float_specials_and_fraction() {
+        // NaN / infinities take their YAML spellings.
+        assert_eq!(format_float(f64::NAN), ".nan");
+        assert_eq!(format_float(f64::INFINITY), ".inf");
+        assert_eq!(format_float(f64::NEG_INFINITY), "-.inf");
+        // A value whose default formatting already carries a `.` is kept as-is
+        // (the `.0` suffix is only appended when the text would read as an int).
+        assert_eq!(format_float(1.5), "1.5");
+    }
+
+    #[test]
+    fn double_quote_escapes_every_branch() {
+        // Quote, backslash, newline, tab, CR, NUL, and a generic control char -
+        // each forces quoting (via `needs_quoting`) and hits its own escape arm.
+        assert_eq!(emit_string("a\"b"), r#""a\"b""#);
+        assert_eq!(emit_string("a\\b"), r#""a\\b""#);
+        assert_eq!(emit_string("a\nb"), r#""a\nb""#);
+        assert_eq!(emit_string("a\tb"), r#""a\tb""#);
+        assert_eq!(emit_string("a\rb"), r#""a\rb""#);
+        assert_eq!(emit_string("a\0b"), r#""a\0b""#);
+        assert_eq!(emit_string("a\u{1}b"), "\"a\\x01b\"");
+    }
 }

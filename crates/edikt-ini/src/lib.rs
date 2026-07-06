@@ -398,4 +398,242 @@ mod tests {
         );
         assert!(out.contains("; Application configuration"));
     }
+
+    // --- edit paths: piped mutations, bad paths, del arity, insert edges ---
+
+    fn edit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        apply(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn piped_mutations_apply_in_order() {
+        // Two assignments joined by `|` both land.
+        let out = edit_src(SAMPLE, r#".global = 2 | .server.host = "127.0.0.1""#);
+        assert!(out.contains("global = 2"), "got: {out}");
+        assert!(out.contains("host = 127.0.0.1"), "got: {out}");
+    }
+
+    #[test]
+    fn del_requires_exactly_one_path() {
+        // `;`-separated args make two arguments; `del` takes exactly one.
+        assert!(edit_err(SAMPLE, "del(.a; .b)").contains("del(...) takes one path argument"));
+    }
+
+    #[test]
+    fn non_mutation_expr_is_rejected_by_apply() {
+        assert!(
+            edit_err(SAMPLE, ".server.host")
+                .contains("expected an assignment (`path = value`) or `del(path)`")
+        );
+    }
+
+    #[test]
+    fn three_step_path_is_not_a_valid_ini_target() {
+        assert!(
+            edit_err(SAMPLE, r#".a.b.c = "x""#).contains("INI paths are `.key` or `.section.key`")
+        );
+    }
+
+    #[test]
+    fn cannot_store_object() {
+        assert!(edit_err(SAMPLE, ".global = {}").contains("cannot store an array or object"));
+    }
+
+    #[test]
+    fn insert_into_source_without_trailing_newline() {
+        // A new key in an existing section: the missing final newline is supplied
+        // before the inserted line.
+        assert_eq!(
+            edit_src("[server]\nhost = x", r#".server.port = "8080""#),
+            "[server]\nhost = x\nport = 8080\n"
+        );
+        // A new section appended at EOF, likewise terminating the last line first.
+        assert_eq!(
+            edit_src("[server]\nhost = x", r#".db.url = "pg""#),
+            "[server]\nhost = x\n\n[db]\nurl = pg\n"
+        );
+    }
+
+    #[test]
+    fn document_trait_surface() {
+        // `features()` reports the static capability set.
+        assert_eq!(Document::features(&parse("k = v\n").unwrap()), FEATURES);
+        // `has_comments()`: false without any comment token, true with one.
+        assert!(!Document::has_comments(&parse("k = v\n").unwrap()));
+        assert!(Document::has_comments(&parse("; c\nk = v\n").unwrap()));
+        // `syntax()` exposes the tree root.
+        assert_eq!(parse("k = v\n").unwrap().syntax().kind(), Sk::Root);
+        // The trait `apply` routes to the format-preserving edit path.
+        let mut doc = parse("[s]\nk = v\n").unwrap();
+        let d: &mut dyn Document = &mut doc;
+        d.apply(&parse_expr(r#".s.k = "z""#).unwrap()).unwrap();
+        assert!(d.to_source().contains("k = z"));
+    }
+
+    // --- comment edits: headers, deletes, error paths ----------------------
+
+    fn cedit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn inline_comment_on_section_header() {
+        // Set an inline on a `[section]` header - it has no Value node, so the
+        // comment hangs off the `]`.
+        assert_eq!(
+            cedit("[server]\nhost = x\n", r#".server.#.inline = "svc""#),
+            "[server]  ; svc\nhost = x\n"
+        );
+        // Delete it again.
+        assert_eq!(
+            cedit("[server]  ; svc\nhost = x\n", "del(.server.#.inline)"),
+            "[server]\nhost = x\n"
+        );
+    }
+
+    #[test]
+    fn delete_head_and_foot_comments() {
+        // A head block above a preamble entry.
+        assert_eq!(cedit("; note\nkey = v\n", "del(.key.#)"), "key = v\n");
+        // A foot block below an entry.
+        assert_eq!(cedit("key = v\n; foot\n", "del(.key.#.foot)"), "key = v\n");
+    }
+
+    #[test]
+    fn delete_comment_on_missing_target_is_a_noop() {
+        assert_eq!(cedit("key = v\n", "del(.missing.#)"), "key = v\n");
+    }
+
+    #[test]
+    fn document_level_comment_edit_is_unsupported() {
+        assert!(
+            cedit_err("key = v\n", r#".# = "banner""#)
+                .contains("document-level (`.#`) comment editing for INI is a follow-up")
+        );
+    }
+
+    #[test]
+    fn deep_comment_path_is_rejected() {
+        assert!(
+            cedit_err("key = v\n", r#".a.b.c.# = "x""#)
+                .contains("INI comment paths are `.key`, `.section`, or `.section.key`")
+        );
+    }
+
+    #[test]
+    fn emit_commented_rejects_non_object_root() {
+        let c = edikt_core::Commented::from_value(&Value::Str("x".into()));
+        let err = emit_commented(&c).unwrap_err().to_string();
+        assert!(
+            err.contains("INI output requires a top-level object"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn emit_commented_places_banners_headers_feet_and_flattens() {
+        use edikt_core::{Commented, CommentedNode, Comments};
+        // A document banner + foot, a preamble entry with a foot, and a section
+        // carrying head/inline/foot around a nested object (which flattens).
+        let tree = Commented {
+            comments: Comments {
+                head: vec!["banner line".into()],
+                inline: None,
+                foot: vec!["trailing note".into()],
+            },
+            node: CommentedNode::Object(vec![
+                (
+                    "g".into(),
+                    Commented {
+                        comments: Comments {
+                            head: Vec::new(),
+                            inline: None,
+                            foot: vec!["after g".into()],
+                        },
+                        node: CommentedNode::Scalar(Value::Str("1".into())),
+                    },
+                ),
+                (
+                    "server".into(),
+                    Commented {
+                        comments: Comments {
+                            head: vec!["about server".into()],
+                            inline: Some("svc".into()),
+                            foot: vec!["done server".into()],
+                        },
+                        node: CommentedNode::Object(vec![
+                            ("host".into(), Commented::scalar(Value::Str("x".into()))),
+                            (
+                                "tls".into(),
+                                Commented {
+                                    comments: Comments::default(),
+                                    node: CommentedNode::Object(vec![(
+                                        "enabled".into(),
+                                        Commented::scalar(Value::Str("true".into())),
+                                    )]),
+                                },
+                            ),
+                        ]),
+                    },
+                ),
+            ]),
+        };
+        let (out, warnings) = emit_commented(&tree).unwrap();
+        assert_eq!(
+            out,
+            "; banner line\ng = 1\n; after g\n\n; about server\n[server]  ; svc\nhost = x\ntls.enabled = true\n; done server\n; trailing note\n"
+        );
+        assert_eq!(
+            warnings,
+            vec!["nested/array values were flattened to dotted keys".to_string()]
+        );
+    }
+
+    // --- parser edges: CRLF terminators, unclosed headers ------------------
+
+    #[test]
+    fn crlf_lines_round_trip_and_read() {
+        let src = "a = 1\r\nb = 2\r\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(q(src, ".a"), vec![Value::Str("1".into())]);
+    }
+
+    #[test]
+    fn unclosed_header_is_flagged_but_bare_bracket_round_trips() {
+        // `[` with content but no `]` is an error line (parse fails, exit 2).
+        assert!(parse("[unclosed\n").is_err());
+        // A bare `[` (nothing after the bracket) is losslessly preserved.
+        assert_eq!(parse("[\n").unwrap().to_source(), "[\n");
+    }
+
+    #[test]
+    fn syntax_kind_raw_round_trips() {
+        use rowan::Language;
+        for k in [
+            Sk::Ws,
+            Sk::Newline,
+            Sk::Comment,
+            Sk::Open,
+            Sk::Close,
+            Sk::Name,
+            Sk::Key,
+            Sk::Sep,
+            Sk::ValStr,
+            Sk::Error,
+            Sk::Value,
+            Sk::Entry,
+            Sk::Header,
+            Sk::Section,
+            Sk::Root,
+        ] {
+            let raw = crate::syntax::IniLang::kind_to_raw(k);
+            assert_eq!(crate::syntax::IniLang::kind_from_raw(raw), k);
+        }
+    }
 }
