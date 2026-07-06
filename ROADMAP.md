@@ -96,19 +96,20 @@ Release infra is intentionally **last** - build the capability, then ship it.
   workflow; `release.yml` on a published GitHub Release - five-target binary
   matrix (linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64) with the
   man page + bash/zsh/fish completions inside each unix archive, then
-  `katyo/publish-crates` in dependency order; `homebrew-bump.yml` PRs
-  jhheider/homebrew-tap. The binary is its own doc generator (hidden
-  `--manpage` / `--completions SHELL` flags, for packagers); `--help` closes
-  with examples. Crates are at 0.2.0, dual-licensed MIT OR Apache-2.0.
+  `katyo/publish-crates` in dependency order, then a `bump-formula` job that
+  refreshes the binary Homebrew formula on jhheider/homebrew-tap
+  (`.github/scripts/bump-tap-formula.py` retags each per-platform URL and
+  recomputes its sha). The binary is its own doc generator (hidden `--manpage` /
+  `--completions SHELL` flags, for packagers); `--help` closes with examples.
 
-  **Release ceremony** (the remaining manual steps, in order):
-  1. repo secrets: `CARGO_REGISTRY_TOKEN` (crates.io), `HOMEBREW_TAP_TOKEN`
-     (PAT, `public_repo`+`workflow`); enable the repo in Coveralls.
-  2. `gh release create v0.2.0 --generate-notes` - binaries, crates, and the
-     tap bump all flow from that one event.
-  3. after the release exists: seed the `edikt` formula in jhheider/homebrew-tap
-     (the bump action only updates an existing formula) and open the pkgx
-     pantry PR.
+  **✅ Shipped: v0.2.0**, dual-licensed MIT OR Apache-2.0, installable three ways:
+  - **crates.io** - all nine crates published; `cargo install edikt`.
+  - **Homebrew** - `brew install jhheider/tap/edikt`; a prebuilt binary formula,
+    auto-refreshed on every release by the `bump-formula` job above.
+  - **pkgx** - `pkgx install edikt` (`crates.io/edikt` in the pantry).
+
+  Future releases are hands-off: `gh release create vX.Y.Z --generate-notes`
+  cascades to binaries, crates, and the refreshed formula.
 
 ## Format coverage
 
