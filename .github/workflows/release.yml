@@ -7,9 +7,17 @@ name: Release
 on:
   release:
     types: [published]
+  # Manual trigger to (re)build binaries and refresh the tap formula for an
+  # existing release. Builds from the tag's own code; the crates publish is
+  # skipped on dispatch (binaries + formula only).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach binaries to (e.g. v0.2.0)"
+        required: true
 
 concurrency:
-  group: release-${{ github.event.release.tag_name }}
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
 
 permissions:
   contents: write
@@ -40,7 +48,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset_name: edikt-windows-x86_64.zip
     steps:
+      # Build the tag's own code (matters on dispatch), so attached binaries
+      # match the released source.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -81,13 +93,15 @@ jobs:
 
       - name: Attach to release
         shell: bash
-        run: gh release upload '${{ github.event.release.tag_name }}' '${{ matrix.asset_name }}' --clobber
+        run: gh release upload '${{ github.event.release.tag_name || inputs.tag }}' '${{ matrix.asset_name }}' --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
   publish-crates:
     name: Publish to crates.io
     needs: build
+    # Only on a real release; a manual dispatch is for binaries + formula.
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -99,3 +113,31 @@ jobs:
       - uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  bump-formula:
+    name: Refresh the Homebrew formula
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the default branch for the current bump script (the release
+      # tag may predate it); the script retags URLs and recomputes the shas.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Refresh the binary formula on the tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/jhheider/homebrew-tap.git" tap
+          python3 .github/scripts/bump-tap-formula.py "$TAG" tap/Formula/edikt.rb
+          cd tap
+          if git diff --quiet; then
+            echo "formula already at ${TAG}; nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "edikt ${TAG#v}: refresh binary formula"
+          git push
