@@ -38,6 +38,34 @@ back a file that is byte-identical except for the one value you changed.
 Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
 
+## A worked example: bumping a Cargo workspace
+
+edikt is happy editing the config it ships in. Here is the whole version bump
+for a release - a `Cargo.toml` per crate plus the internal dependency pins in
+the workspace root - done losslessly:
+
+```sh
+# each crate's own version
+for c in crates/*/Cargo.toml; do
+  edikt -i '.package.version = "0.2.0"' "$c"
+done
+
+# the [workspace.dependencies] pins (inline tables), chained with -e
+edikt -i \
+  -e '.workspace.dependencies."edikt-core".version   = "0.2.0"' \
+  -e '.workspace.dependencies."edikt-syntax".version = "0.2.0"' \
+  Cargo.toml
+```
+
+Each edit moves exactly one `version = "..."`. The `# Internal crates` comment
+above the dependency table, the `path = "crates/edikt-core"` sitting next to
+each version, the brace-and-space style of every inline table, and every other
+byte come back unchanged - the kind of diff a reviewer reads at a glance.
+
+One quoting note: a key containing `-` is written `."edikt-core"` (or
+`.["edikt-core"]`), because a bare `.edikt-core` would read the `-` as
+subtraction. edikt says so with a clear error rather than guessing.
+
 ## Why edikt?
 
 Honestly, a weekend project - one that started with a real itch. The problem
