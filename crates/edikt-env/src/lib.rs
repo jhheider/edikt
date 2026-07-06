@@ -216,6 +216,9 @@ mod tests {
             "a:1\nb : 2\n",
             "  spaced = yes  \n# comment\n",
             "! properties comment\nkey.with.dots=1\n",
+            "A=1\r\nB=2\r\n", // CRLF terminators preserved
+            "A=1\n\nB=2\n",   // a blank line between entries
+            "\n\n",           // blank-only document
         ] {
             assert_eq!(parse(src).unwrap().to_source(), src, "round-trip: {src:?}");
         }
@@ -350,5 +353,167 @@ mod tests {
             count += 1;
         }
         assert!(count >= 2, "expected env fixtures, found {count}");
+    }
+
+    // --- edit dispatch: pipe, del arity, non-assignment ---------------------
+
+    #[test]
+    fn piped_mutations_apply_in_order() {
+        assert_eq!(
+            edit_src("A=1\nB=2\n", r#".A = "x" | .B = "y""#),
+            "A=x\nB=y\n"
+        );
+    }
+
+    #[test]
+    fn del_with_wrong_arity_errors() {
+        // Function args are `;`-separated, so `del(.A; .B)` is two arguments.
+        let mut doc = parse("A=1\nB=2\n").unwrap();
+        let err = apply(&mut doc, &parse_expr("del(.A; .B)").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("del(...) takes one path argument"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bare_query_is_not_a_mutation() {
+        let mut doc = parse("A=1\n").unwrap();
+        let err = apply(&mut doc, &parse_expr(".A").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected an assignment"), "got: {err}");
+    }
+
+    // --- comment paths: document-level and nested are refused ---------------
+
+    #[test]
+    fn comment_document_banner_is_a_followup() {
+        let mut doc = parse("A=1\n").unwrap();
+        let err =
+            edikt_core::apply_comment_mutation(&mut doc, &parse_expr(r#".# = "banner""#).unwrap())
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("document-level"), "got: {err}");
+    }
+
+    #[test]
+    fn nested_comment_path_is_refused() {
+        let mut doc = parse("A=1\n").unwrap();
+        let err =
+            edikt_core::apply_comment_mutation(&mut doc, &parse_expr(r#".a.b.# = "x""#).unwrap())
+                .unwrap_err()
+                .to_string();
+        assert!(
+            err.contains("flat: comment paths are a single"),
+            "got: {err}"
+        );
+    }
+
+    // --- comment deletion: inline and missing-key no-ops --------------------
+
+    #[test]
+    fn deleting_inline_comment_is_a_noop() {
+        // `.env` has no inline comments, so `del(.K.#.inline)` changes nothing.
+        assert_eq!(cedit("# h\nK=v\n", "del(.K.#.inline)"), "# h\nK=v\n");
+    }
+
+    #[test]
+    fn deleting_comment_on_missing_key_is_a_noop() {
+        assert_eq!(cedit("# h\nK=v\n", "del(.NOPE.#)"), "# h\nK=v\n");
+    }
+
+    // --- extraction: trailing comments with no entries ----------------------
+
+    #[test]
+    fn all_comments_no_entries_become_document_foot() {
+        let doc = parse("# just a note\n# and another\n").unwrap();
+        let c = doc.to_commented().unwrap();
+        let edikt_core::CommentedNode::Object(entries) = &c.node else {
+            panic!("expected object");
+        };
+        assert!(entries.is_empty(), "no entries in a comment-only file");
+        assert_eq!(
+            c.comments.foot,
+            vec!["just a note".to_string(), "and another".to_string()]
+        );
+    }
+
+    // --- emission edge cases ------------------------------------------------
+
+    #[test]
+    fn emit_rejects_a_top_level_scalar() {
+        let err = emit(&Value::Str("x".into())).unwrap_err().to_string();
+        assert!(err.contains("requires a top-level object"), "got: {err}");
+    }
+
+    #[test]
+    fn emit_carries_an_entry_foot_comment() {
+        let mut c = edikt_core::Commented::from_value(&Value::Object(vec![(
+            "A".into(),
+            Value::Str("1".into()),
+        )]));
+        let edikt_core::CommentedNode::Object(entries) = &mut c.node else {
+            unreachable!();
+        };
+        entries[0].1.comments.foot.push("tail".into());
+        let (out, warnings) = emit_commented(&c).unwrap();
+        assert_eq!(out, "A=1\n# tail\n");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn emit_flattens_nesting_and_warns() {
+        let (out, warnings) = emit(&Value::Object(vec![(
+            "a".into(),
+            Value::Object(vec![("b".into(), Value::Str("1".into()))]),
+        )]))
+        .unwrap();
+        assert_eq!(out, "a.b=1\n");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("flattened"), "got: {warnings:?}");
+    }
+
+    // --- Document trait surface + syntax accessor ---------------------------
+
+    #[test]
+    fn syntax_accessor_exposes_the_tree() {
+        let doc = parse("A=1\n# c\n").unwrap();
+        assert_eq!(doc.syntax().text().to_string(), "A=1\n# c\n");
+    }
+
+    #[test]
+    fn document_trait_features_comments_and_apply() {
+        let mut doc = parse("# note\nA=1\n").unwrap();
+        assert_eq!(doc.features(), FEATURES);
+        assert!(doc.has_comments());
+        assert!(!parse("A=1\n").unwrap().has_comments());
+        // The trait's `apply` dispatches into the format-preserving edit path.
+        Document::apply(&mut doc, &parse_expr(r#".A = "2""#).unwrap()).unwrap();
+        assert_eq!(doc.to_source(), "# note\nA=2\n");
+    }
+
+    // --- Language mapping invariant -----------------------------------------
+
+    #[test]
+    fn language_kind_mapping_roundtrips() {
+        use rowan::Language;
+        for k in [
+            Sk::Ws,
+            Sk::Newline,
+            Sk::Comment,
+            Sk::Key,
+            Sk::Sep,
+            Sk::ValStr,
+            Sk::Error,
+            Sk::Value,
+            Sk::Entry,
+            Sk::Root,
+        ] {
+            let raw = crate::syntax::EnvLang::kind_to_raw(k);
+            assert_eq!(crate::syntax::EnvLang::kind_from_raw(raw), k);
+        }
     }
 }
