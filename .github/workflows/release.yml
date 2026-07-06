@@ -105,14 +105,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Publishes workspace crates in dependency order (core/syntax -> the
-      # format crates -> the edikt bin), waiting for the index between steps.
-      - uses: katyo/publish-crates@v2
-        with:
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # Publish only the crates whose current version is not already on
+      # crates.io, in dependency order (core/syntax -> format crates -> the
+      # edikt bin), waiting for the index between each. This publishes exactly
+      # the crates a release bumped; a crate changed without a version bump
+      # (e.g. a test-only edit) stays at its published version. `cargo publish`
+      # is used directly because `katyo/publish-crates` aborts the whole run
+      # when any crate has unpublished changes without a bump.
+      - name: Publish changed crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          ua="edikt-release (jhheider@gmail.com)"
+          on_registry() { # crate ver -> success if that version is on crates.io
+            [ "$(curl -s -o /dev/null -w '%{http_code}' -A "$ua" \
+                "https://crates.io/api/v1/crates/$1/$2")" = "200" ]
+          }
+          for c in edikt-core edikt-syntax edikt-jsonc edikt-ini edikt-env \
+                   edikt-toml edikt-yaml edikt-kdl edikt; do
+            ver=$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c "import sys,json;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$c'))")
+            if on_registry "$c" "$ver"; then
+              echo "$c $ver already on crates.io - skip"
+              continue
+            fi
+            echo "publishing $c $ver"
+            cargo publish -p "$c"
+            echo "waiting for $c $ver to appear on the index..."
+            for _ in $(seq 1 60); do on_registry "$c" "$ver" && break; sleep 5; done
+          done
 
   bump-formula:
     name: Refresh the Homebrew formula
