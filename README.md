@@ -38,6 +38,17 @@ back a file that is byte-identical except for the one value you changed.
 Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
 
+## Install
+
+```sh
+brew install jhheider/tap/edikt   # Homebrew
+cargo install edikt               # Cargo (crates.io)
+pkgx install edikt                # pkgx (builds from source)
+```
+
+Or grab a prebuilt binary (Linux, macOS, and Windows; x86_64 and arm64) from the
+[releases page](https://github.com/jhheider/edikt/releases).
+
 ## A worked example: bumping a Cargo workspace
 
 edikt is happy editing the config it ships in. Here is the whole version bump
@@ -86,9 +97,9 @@ KDL, and `.env`, touching only the bytes you point at. If your need is
 single-format, reach for the specialist; if it's "the same surgical edit, across
 all of these," that's the gap this fills.
 
-Status: **alpha** - seven formats with lossless in-place edit, query, and
-conversion (comments carried across); release infra is wired and awaiting the
-first cut. See [`CLAUDE.md`](./CLAUDE.md) for the build contract.
+Status: **v0.2.0** - seven formats with lossless in-place edit, query, and
+conversion (comments carried across), on crates.io, Homebrew, and pkgx. See
+[`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## Scripting notes
 
