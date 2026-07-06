@@ -816,8 +816,8 @@ mod tests {
         );
 
         // A head comment on a nested child recurses into the children block.
-        // (Built directly: `node_commented` only lifts a node's own comments,
-        // so nested decor is what a converting source hands the emitter.)
+        // (Built directly here; extraction produces the same shape - see
+        // `nested_child_comments_survive_extraction`.)
         let head = |text: &str, v: Value| edikt_core::Commented {
             comments: edikt_core::Comments {
                 head: vec![text.into()],
@@ -839,6 +839,31 @@ mod tests {
             emit_commented(&c4).unwrap().0,
             "parent {\n    // kid\n    child 1\n}\n"
         );
+    }
+
+    #[test]
+    fn nested_child_comments_survive_extraction() {
+        // Regression: a comment on a *child* node now carries through
+        // to_commented (node_commented recurses), so conversion keeps it.
+        // Previously the child's decor was flattened away at extraction.
+        let src = "parent {\n    // kid note\n    child 1 // trailing\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+
+        let CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        let parent = &top.iter().find(|(k, _)| k == "parent").unwrap().1;
+        let CommentedNode::Object(kids) = &parent.node else {
+            panic!("expected nested object");
+        };
+        let child = &kids.iter().find(|(k, _)| k == "child").unwrap().1;
+        assert_eq!(child.comments.head, vec!["kid note"]);
+        assert_eq!(child.comments.inline.as_deref(), Some("trailing"));
+
+        // ...and round-trips through emission byte-for-byte (the emit path
+        // autoformats scalars, so an integer child keeps this exact; comment
+        // placement is what the fix guarantees).
+        assert_eq!(emit_commented(&c).unwrap().0, src);
     }
 
     // --- lib.rs: whole-document guards & Document trait -------------------
