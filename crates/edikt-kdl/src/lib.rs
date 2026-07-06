@@ -125,6 +125,7 @@ impl Document for Kdl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edikt_core::CommentedNode;
     use edikt_core::eval;
     use edikt_core::parse as parse_expr;
 
@@ -144,6 +145,22 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    /// The error string from applying a (mutating) expression through `apply`.
+    fn edit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        apply(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    /// The error string from applying a comment mutation.
+    fn cedit_err(src: &str, expr: &str) -> String {
+        let mut doc = parse(src).unwrap();
+        edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap())
+            .unwrap_err()
+            .to_string()
     }
 
     #[test]
@@ -401,5 +418,470 @@ mod tests {
             count += 1;
         }
         assert!(count >= 2, "expected kdl fixtures, found {count}");
+    }
+
+    // --- edit dispatch: pipe, del arity, non-mutation --------------------
+
+    #[test]
+    fn pipe_applies_both_mutations() {
+        // Two edits piped land in order over the same document.
+        assert_eq!(edit_src("a 1\nb 2\n", ".a = 10 | .b = 20"), "a 10\nb 20\n");
+    }
+
+    #[test]
+    fn add_assign_propagates_a_computation_error() {
+        // `+=` evaluates `current + addend`; an un-addable addend errors out.
+        assert!(
+            apply(
+                &mut parse(SAMPLE).unwrap(),
+                &parse_expr(".layout.gaps += [1]").unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn del_arity_and_non_path_and_non_mutation_errors() {
+        // `del(...)` wants exactly one path argument.
+        assert!(edit_err("a 1\n", "del(.a; .b)").contains("one path argument"));
+        // A bare query expression isn't a mutation.
+        assert!(edit_err("a 1\n", ".a").contains("expected an assignment"));
+    }
+
+    // --- set: path shape and missing-intermediate errors -----------------
+
+    #[test]
+    fn assignment_path_must_start_with_a_node_name() {
+        assert!(edit_err("a 1\n", ".[0] = 1").contains("start with a node name"));
+    }
+
+    #[test]
+    fn set_through_a_missing_node_errors() {
+        assert!(edit_err("a 1\n", ".nope.child = 1").contains("no node `nope`"));
+    }
+
+    // --- set: repeated nodes ---------------------------------------------
+
+    #[test]
+    fn set_repeated_occurrence_whole_node_by_index() {
+        // `.bind[0] = [...]` addresses one occurrence and replaces its args.
+        let out = edit_src(SAMPLE, ".bind[0] = [\"Mod+x\", \"focus-x\"]");
+        assert_eq!(
+            q(&out, ".bind[0]"),
+            vec![Value::Array(vec![
+                Value::Str("Mod+x".into()),
+                Value::Str("focus-x".into()),
+            ])]
+        );
+        // The other occurrence is untouched.
+        assert!(out.contains("bind \"Mod+l\" \"focus-right\""), "got: {out}");
+    }
+
+    #[test]
+    fn set_repeated_with_a_field_step_is_ambiguous() {
+        assert!(edit_err(SAMPLE, ".bind.foo = 1").contains("is repeated"));
+    }
+
+    // --- set: the `-` args key on a mixed node ----------------------------
+
+    #[test]
+    fn set_args_key_whole_and_by_index() {
+        // Replace the whole argument row of a mixed node via `-`.
+        let out = edit_src(SAMPLE, ".layout.[\"-\"] = \"wide\"");
+        assert_eq!(q(&out, ".layout.[\"-\"]"), vec![Value::Str("wide".into())]);
+        assert!(out.contains("gaps=8"), "props untouched: {out}");
+        // ...and by index.
+        let out2 = edit_src(SAMPLE, ".layout.[\"-\"][0] = \"narrow\"");
+        assert_eq!(
+            q(&out2, ".layout.[\"-\"]"),
+            vec![Value::Str("narrow".into())]
+        );
+    }
+
+    #[test]
+    fn set_deeper_than_an_argument_scalar_errors() {
+        assert!(edit_err(SAMPLE, ".layout.[\"-\"][0].x = 1").contains("arguments are scalars"));
+    }
+
+    // --- set: properties, bare nodes, arg-nodes ---------------------------
+
+    #[test]
+    fn set_through_a_scalar_property_errors() {
+        assert!(edit_err(SAMPLE, ".layout.gaps.x = 1").contains("property `gaps` is a scalar"));
+    }
+
+    #[test]
+    fn a_bare_node_grows_a_children_block() {
+        // The autoformatter attaches the fresh children block directly (no space).
+        assert_eq!(
+            edit_src("flag\n", ".flag.child = 1"),
+            "flag{\n    child 1\n}\n"
+        );
+    }
+
+    #[test]
+    fn an_argument_node_refuses_a_child() {
+        assert!(
+            edit_err("title \"hello\"\n", ".title.child = 1")
+                .contains("holds arguments, not children")
+        );
+    }
+
+    #[test]
+    fn iterate_in_an_assignment_path_errors() {
+        assert!(edit_err(SAMPLE, ".layout[] = 1").contains("`[]` in assignment paths"));
+    }
+
+    #[test]
+    fn a_comment_step_through_plain_apply_errors() {
+        // Comment edits route through `apply_comment_mutation`; the plain edit
+        // path refuses a `#` step cleanly.
+        assert!(edit_err(SAMPLE, ".layout.# = \"x\"").contains("editing comments"));
+        assert!(edit_err(SAMPLE, "del(.layout.#)").contains("deleting comments"));
+    }
+
+    // --- set: replace_args prefix-append / rebuild ------------------------
+
+    #[test]
+    fn set_single_leaf_replaces_its_arguments() {
+        // A lone leaf node updates its argument in place (byte-preserving shape).
+        let out = edit_src("title \"hello\"\n", ".title = \"world\"");
+        assert_eq!(q(&out, ".title"), vec![Value::Str("world".into())]);
+    }
+
+    #[test]
+    fn set_arguments_appends_a_matching_prefix() {
+        // New array starts with the current args -> the extra appends, the
+        // existing `"a"` keeps its quoted bytes.
+        let out = edit_src("node \"a\"\n", ".node = [\"a\", \"b\"]");
+        assert!(out.contains("node \"a\" b"), "got: {out}");
+    }
+
+    #[test]
+    fn set_arguments_rebuilds_on_a_different_shape() {
+        // Shrinking the arg row (not a prefix) rebuilds it; props would survive.
+        assert_eq!(
+            edit_src("node \"a\" \"b\"\n", ".node = [\"x\"]"),
+            "node x\n"
+        );
+    }
+
+    // --- set: extend_repeated failure modes -------------------------------
+
+    #[test]
+    fn assigning_a_scalar_to_repeated_nodes_errors() {
+        assert!(edit_err(SAMPLE, ".bind = 1").contains("is repeated"));
+    }
+
+    #[test]
+    fn assigning_a_non_prefix_array_to_repeated_nodes_errors() {
+        let err = edit_err(SAMPLE, ".bind = [[\"nomatch\"], [\"y\"]]");
+        assert!(err.contains("wholesale is not supported"), "got: {err}");
+    }
+
+    // --- delete edge cases ------------------------------------------------
+
+    #[test]
+    fn delete_path_must_start_with_a_node_name() {
+        assert!(edit_err("a 1\n", "del(.[0])").contains("start with a node name"));
+    }
+
+    #[test]
+    fn delete_repeated_index_out_of_range_is_a_noop() {
+        assert_eq!(edit_src(SAMPLE, "del(.bind[99])"), SAMPLE);
+    }
+
+    #[test]
+    fn delete_an_argument_of_one_repeated_occurrence() {
+        // `del(.bind[0][0])` removes the first arg of the first bind only.
+        let out = edit_src(SAMPLE, "del(.bind[0][0])");
+        assert_eq!(q(&out, ".bind[0]"), vec![Value::Str("focus-left".into())]);
+        assert!(out.contains("bind \"Mod+l\" \"focus-right\""), "got: {out}");
+    }
+
+    #[test]
+    fn delete_a_field_of_a_repeated_node_is_ambiguous() {
+        assert!(edit_err(SAMPLE, "del(.bind.foo)").contains("is repeated"));
+    }
+
+    #[test]
+    fn delete_args_key_whole_and_by_index() {
+        // Clearing `-` drops the positional arguments, keeping props/children.
+        let out = edit_src(SAMPLE, "del(.layout.[\"-\"])");
+        assert!(!out.contains("\"tall\""), "arg gone: {out}");
+        assert!(
+            out.contains("gaps=8") && out.contains("border width=2"),
+            "got: {out}"
+        );
+        // By index removes just that argument.
+        let out2 = edit_src(SAMPLE, "del(.layout.[\"-\"][0])");
+        assert!(!out2.contains("\"tall\""), "arg gone: {out2}");
+    }
+
+    #[test]
+    fn delete_deeper_than_an_argument_scalar_errors() {
+        assert!(edit_err(SAMPLE, "del(.layout.[\"-\"][0][0])").contains("arguments are scalars"));
+    }
+
+    #[test]
+    fn delete_through_a_scalar_property_errors() {
+        assert!(edit_err(SAMPLE, "del(.layout.gaps.x)").contains("property `gaps` is a scalar"));
+    }
+
+    #[test]
+    fn delete_a_child_node_through_a_field() {
+        let out = edit_src(SAMPLE, "del(.layout.border)");
+        assert!(!out.contains("border"), "got: {out}");
+        assert!(out.contains("layout \"tall\" gaps=8"), "parent kept: {out}");
+    }
+
+    #[test]
+    fn delete_a_missing_field_of_a_childless_node_is_a_noop() {
+        assert_eq!(
+            edit_src("title \"x\"\n", "del(.title.nope)"),
+            "title \"x\"\n"
+        );
+    }
+
+    #[test]
+    fn delete_iterate_is_unsupported() {
+        assert!(edit_err(SAMPLE, "del(.layout[])").contains("del(.[]) is not supported"));
+    }
+
+    // --- build: value_to_nodes / emit -------------------------------------
+
+    #[test]
+    fn create_a_node_with_multiple_dash_arguments() {
+        let out = edit_src(
+            "root {\n    x 1\n}\n",
+            ".root.node = {\"-\": [\"a\", \"b\"], \"k\": 9}",
+        );
+        assert!(out.contains("node a b {"), "got: {out}");
+        assert!(out.contains("k 9"), "got: {out}");
+    }
+
+    #[test]
+    fn emit_requires_a_top_level_object() {
+        let err = emit(&Value::Int(1)).unwrap_err().to_string();
+        assert!(err.contains("top-level object"), "got: {err}");
+    }
+
+    // --- project.rs: scalar kinds & mixed-arg projection ------------------
+
+    #[test]
+    fn projects_multiple_arguments_of_a_mixed_node() {
+        assert_eq!(
+            q("node \"a\" \"b\" x=1\n", ".node.[\"-\"]"),
+            vec![Value::Array(vec![
+                Value::Str("a".into()),
+                Value::Str("b".into())
+            ])]
+        );
+    }
+
+    #[test]
+    fn projects_every_scalar_kind() {
+        // An integer wider than i64 degrades to a float, like JSON parsers.
+        assert_eq!(
+            q("big 9999999999999999999\n", ".big"),
+            vec![Value::Float(1e19)]
+        );
+        assert_eq!(q("f 1.5\n", ".f"), vec![Value::Float(1.5)]);
+        assert_eq!(q("flag #true\n", ".flag"), vec![Value::Bool(true)]);
+        assert_eq!(q("n #null\n", ".n"), vec![Value::Null]);
+    }
+
+    #[test]
+    fn emits_float_and_null_scalars() {
+        assert_eq!(edit_src("x 0\n", ".x = 1.5"), "x 1.5\n");
+        assert_eq!(edit_src("node \"a\"\n", ".node[0] = null"), "node #null\n");
+    }
+
+    // --- comments.rs: unsupported foot, inline delete, CRLF ---------------
+
+    #[test]
+    fn foot_comment_edits_are_unsupported() {
+        assert!(cedit_err("n 1\n", ".n.#.foot = \"x\"").contains("foot comment isn't supported"));
+        assert!(cedit_err("n 1\n", "del(.n.#.foot)").contains("foot comment isn't supported"));
+    }
+
+    #[test]
+    fn deletes_an_inline_comment() {
+        // The comment goes; the space that preceded it (the node's own decor,
+        // not the terminator) stays.
+        assert_eq!(cedit("n 1 // pinned\n", "del(.n.#.inline)"), "n 1 \n");
+    }
+
+    #[test]
+    fn inline_comment_keeps_crlf_line_ending() {
+        assert_eq!(
+            cedit("n 1\r\nm 2\r\n", ".n.#.inline = \"hi\""),
+            "n 1 // hi\r\nm 2\r\n"
+        );
+    }
+
+    // --- comments.rs: comment-target resolution errors --------------------
+
+    #[test]
+    fn comment_target_resolution_errors() {
+        // Document-level `.#` editing isn't wired for KDL yet.
+        assert!(cedit_err("a 1\n", ".# = \"banner\"").contains("document-level"));
+        // A missing node.
+        assert!(cedit_err("a 1\n", ".nope.# = \"x\"").contains("no node `nope`"));
+        // An out-of-range occurrence index.
+        assert!(cedit_err(SAMPLE, ".bind[99].# = \"x\"").contains("index out of range"));
+        // Descending into a node with no children.
+        assert!(cedit_err("a 1\n", ".a.child.# = \"x\"").contains("has no child nodes"));
+    }
+
+    // --- comments.rs: extraction of foot / repeated / block ---------------
+
+    #[test]
+    fn extracts_foot_repeated_and_block_comments() {
+        // A trailing document comment lands as the last entry's foot.
+        let c = parse("a 1\n// foot\n").unwrap().to_commented().unwrap();
+        let CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        assert_eq!(top.last().unwrap().1.comments.foot, vec!["foot"]);
+
+        // A repeated node projects to a comment-carrying array.
+        let c2 = parse(SAMPLE).unwrap().to_commented().unwrap();
+        let CommentedNode::Object(top2) = &c2.node else {
+            panic!("expected object");
+        };
+        let bind = &top2.iter().find(|(k, _)| k == "bind").unwrap().1;
+        assert!(
+            matches!(bind.node, CommentedNode::Array(_)),
+            "bind is an array"
+        );
+
+        // A `/* */` block comment extracts, delimiter-stripped.
+        let c3 = parse("/* block */\nn 1\n").unwrap().to_commented().unwrap();
+        let CommentedNode::Object(top3) = &c3.node else {
+            panic!("expected object");
+        };
+        assert_eq!(top3[0].1.comments.head, vec!["block"]);
+    }
+
+    // --- comments.rs: commented emission ----------------------------------
+
+    #[test]
+    fn emit_commented_requires_a_top_level_object() {
+        let c = edikt_core::Commented::from_value(&Value::Int(1));
+        assert!(
+            emit_commented(&c)
+                .unwrap_err()
+                .to_string()
+                .contains("top-level object")
+        );
+    }
+
+    #[test]
+    fn emit_commented_places_foot_inline_and_nested_head() {
+        // A document-level foot emits as trailing `//` lines after the nodes.
+        let c = edikt_core::Commented {
+            comments: edikt_core::Comments {
+                foot: vec!["bye".into()],
+                ..Default::default()
+            },
+            node: CommentedNode::Object(vec![(
+                "a".into(),
+                edikt_core::Commented::scalar(Value::Int(1)),
+            )]),
+        };
+        assert_eq!(emit_commented(&c).unwrap().0, "a 1\n// bye\n");
+
+        // Head comments on a run of repeated nodes emit above each. (Each bind
+        // carries two args so the occurrences stay distinct nodes rather than
+        // collapsing into one multi-arg node on re-emit.)
+        let c2 = parse("// a\nbind \"x\" \"1\"\n// b\nbind \"y\" \"2\"\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        let out2 = emit_commented(&c2).unwrap().0;
+        assert!(
+            out2.contains("// a") && out2.contains("// b"),
+            "got: {out2}"
+        );
+
+        // An inline comment emits after the node.
+        let c3 = parse("layout \"tall\" // pinned\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        assert!(
+            emit_commented(&c3).unwrap().0.contains("// pinned"),
+            "inline"
+        );
+
+        // A head comment on a nested child recurses into the children block.
+        // (Built directly here; extraction produces the same shape - see
+        // `nested_child_comments_survive_extraction`.)
+        let head = |text: &str, v: Value| edikt_core::Commented {
+            comments: edikt_core::Comments {
+                head: vec![text.into()],
+                ..Default::default()
+            },
+            node: CommentedNode::Scalar(v),
+        };
+        let c4 = edikt_core::Commented {
+            comments: edikt_core::Comments::default(),
+            node: CommentedNode::Object(vec![(
+                "parent".into(),
+                edikt_core::Commented {
+                    comments: edikt_core::Comments::default(),
+                    node: CommentedNode::Object(vec![("child".into(), head("kid", Value::Int(1)))]),
+                },
+            )]),
+        };
+        assert_eq!(
+            emit_commented(&c4).unwrap().0,
+            "parent {\n    // kid\n    child 1\n}\n"
+        );
+    }
+
+    #[test]
+    fn nested_child_comments_survive_extraction() {
+        // Regression: a comment on a *child* node now carries through
+        // to_commented (node_commented recurses), so conversion keeps it.
+        // Previously the child's decor was flattened away at extraction.
+        let src = "parent {\n    // kid note\n    child 1 // trailing\n}\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+
+        let CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        let parent = &top.iter().find(|(k, _)| k == "parent").unwrap().1;
+        let CommentedNode::Object(kids) = &parent.node else {
+            panic!("expected nested object");
+        };
+        let child = &kids.iter().find(|(k, _)| k == "child").unwrap().1;
+        assert_eq!(child.comments.head, vec!["kid note"]);
+        assert_eq!(child.comments.inline.as_deref(), Some("trailing"));
+
+        // ...and round-trips through emission byte-for-byte (the emit path
+        // autoformats scalars, so an integer child keeps this exact; comment
+        // placement is what the fix guarantees).
+        assert_eq!(emit_commented(&c).unwrap().0, src);
+    }
+
+    // --- lib.rs: whole-document guards & Document trait -------------------
+
+    #[test]
+    fn whole_document_set_and_delete_are_refused() {
+        let mut doc = parse("a 1\n").unwrap();
+        assert!(doc.set(&[], &Value::Int(1)).is_err());
+        assert!(doc.delete(&[]).is_err());
+    }
+
+    #[test]
+    fn document_trait_surface() {
+        let mut doc = parse("a 1\n").unwrap();
+        assert_eq!(doc.features(), FEATURES);
+        assert!(!doc.has_comments());
+        // The trait `apply` routes to `edit::apply`.
+        Document::apply(&mut doc, &parse_expr(".a = 2").unwrap()).unwrap();
+        assert_eq!(doc.to_source(), "a 2\n");
     }
 }

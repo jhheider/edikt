@@ -8,7 +8,7 @@
 
 use crate::project;
 use edikt_core::wrap::{wrap_comment, wrap_width};
-use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step};
+use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value};
 use kdl::{KdlDocument, KdlNode};
 
 // --- in-place comment write-back ---------------------------------------
@@ -199,7 +199,7 @@ fn doc_commented(doc: &KdlDocument) -> Commented {
 }
 
 fn node_commented(node: &KdlNode) -> Commented {
-    let mut c = Commented::from_value(&project::node_to_value(node));
+    let mut c = node_body_commented(node);
     if let Some(fmt) = node.format() {
         c.comments.head = own_line_comments(&fmt.leading);
         // A trailing `// ...` on the node's line rides in the terminator decor
@@ -207,6 +207,35 @@ fn node_commented(node: &KdlNode) -> Commented {
         c.comments.inline = trailing_comment(&fmt.terminator);
     }
     c
+}
+
+/// A node's value projection, carrying its **child nodes'** comments. Mirrors
+/// [`project::node_to_value`] - args and properties are comment-free scalars, so
+/// they come straight from the value - but recurses through [`doc_commented`]
+/// for a children block, so a comment on a nested node survives extraction (and
+/// thus conversion) instead of being flattened away.
+fn node_body_commented(node: &KdlNode) -> Commented {
+    let Some(children) = node.children() else {
+        return Commented::from_value(&project::node_to_value(node));
+    };
+    let Value::Object(pairs) = project::node_to_value(node) else {
+        unreachable!("a node with children projects to an object");
+    };
+    let CommentedNode::Object(kids) = doc_commented(children).node else {
+        unreachable!("a document projects to an object");
+    };
+    // node_to_value appends the children entries last, so the leading
+    // `pairs.len() - kids.len()` entries are the arguments (`-`) and properties.
+    let split = pairs.len() - kids.len();
+    let mut entries: Vec<(String, Commented)> = pairs[..split]
+        .iter()
+        .map(|(k, v)| (k.clone(), Commented::from_value(v)))
+        .collect();
+    entries.extend(kids);
+    Commented {
+        comments: Comments::default(),
+        node: CommentedNode::Object(entries),
+    }
 }
 
 /// The `//` and `/* */` comments in a decor string, delimiter-stripped, one
