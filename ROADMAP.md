@@ -99,12 +99,12 @@ Release infra is intentionally **last** - build the capability, then ship it.
   `katyo/publish-crates` in dependency order; `homebrew-bump.yml` PRs
   jhheider/homebrew-tap. The binary is its own doc generator (hidden
   `--manpage` / `--completions SHELL` flags, for packagers); `--help` closes
-  with examples. Crates are at 0.1.0, dual-licensed MIT OR Apache-2.0.
+  with examples. Crates are at 0.2.0, dual-licensed MIT OR Apache-2.0.
 
   **Release ceremony** (the remaining manual steps, in order):
   1. repo secrets: `CARGO_REGISTRY_TOKEN` (crates.io), `HOMEBREW_TAP_TOKEN`
      (PAT, `public_repo`+`workflow`); enable the repo in Coveralls.
-  2. `gh release create v0.1.0 --generate-notes` - binaries, crates, and the
+  2. `gh release create v0.2.0 --generate-notes` - binaries, crates, and the
      tap bump all flow from that one event.
   3. after the release exists: seed the `edikt` formula in jhheider/homebrew-tap
      (the bump action only updates an existing formula) and open the pkgx
