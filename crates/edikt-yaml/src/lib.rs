@@ -601,4 +601,303 @@ mod tests {
             ])]
         );
     }
+
+    // --- emit: null / float / nested collections ---------------------------
+
+    #[test]
+    fn emit_covers_null_float_and_nested_collections() {
+        let value = Value::Object(vec![
+            ("nothing".into(), Value::Null),
+            ("ratio".into(), Value::Float(1.5)),
+            (
+                "list".into(),
+                Value::Array(vec![Value::Null, Value::Int(1)]),
+            ),
+        ]);
+        let (yaml, warnings) = emit(&value).unwrap();
+        assert!(warnings.is_empty());
+        // Round-trips through the value model.
+        assert_eq!(parse(&yaml).unwrap().to_value(), value);
+        // Null emits plain; a float keeps its decimal point.
+        assert!(yaml.contains("nothing: null"), "got: {yaml}");
+        assert!(yaml.contains("ratio: 1.5"), "got: {yaml}");
+    }
+
+    // --- edit: error and edge paths ----------------------------------------
+
+    #[test]
+    fn edit_error_paths_are_clean() {
+        let e = |src: &str, expr: &str| {
+            let mut d = parse(src).unwrap();
+            d.apply(&parse_expr(expr).unwrap()).unwrap_err().to_string()
+        };
+        // A bare query isn't a mutation.
+        assert!(e("a: 1\n", ".a").contains("expected an assignment"));
+        // `del` with the wrong arity, and `del` of the whole document.
+        assert!(e("a: 1\n", "del(.a; .b)").contains("one path"));
+        assert!(e("a: 1\n", "del(.)").contains("whole document"));
+        // Set through a missing intermediate key (Field on a mapping, no key),
+        // a Field into a non-mapping, an out-of-range index, an iterate, and a
+        // comment step all report "path not found".
+        assert!(e("a: 1\n", ".missing.child = 1").contains("path not found"));
+        assert!(e("xs:\n  - 1\n", ".xs.name = 1").contains("path not found"));
+        assert!(e("xs:\n  - 1\n", ".xs[5] = 9").contains("path not found"));
+        assert!(e("xs:\n  - 1\n", ".xs[] = 9").contains("path not found"));
+        assert!(e("a: 1\n", ".a.# = \"x\"").contains("path not found"));
+        // A new key on an empty (flow) mapping can't match an entry's indent.
+        assert!(e("foo: {}\n", ".foo.bar = 1").contains("empty or flow"));
+        // Append onto empty / flow sequences is refused cleanly.
+        assert!(e("xs: []\n", ".xs += [1]").contains("empty sequence"));
+        assert!(e("xs: [1, 2]\n", ".xs += [3]").contains("flow sequence"));
+    }
+
+    #[test]
+    fn append_to_aliased_sequence_is_refused() {
+        // An alias resolves to a `Value::Array` held in a *scalar* node, so `+=`
+        // can't splice into it as a block sequence - refuse rather than reflow.
+        let src = "base: &b\n  - 1\n  - 2\nprod: *b\n";
+        let mut d = parse(src).unwrap();
+        let err = d
+            .apply(&parse_expr(".prod += [3]").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("needs a sequence"), "got: {err}");
+    }
+
+    #[test]
+    fn edits_without_trailing_newline() {
+        // New key: a fresh line is started before the added entry; the file's
+        // lack of a trailing newline is preserved.
+        assert_eq!(edit("a: 1", ".b = 2"), "a: 1\nb: 2");
+        // Append: the inserted item leads with a newline and drops the trailer,
+        // so the no-trailing-newline shape survives.
+        assert_eq!(edit("xs:\n  - 1", ".xs += [2]"), "xs:\n  - 1\n  - 2");
+    }
+
+    #[test]
+    fn delete_empty_collections_and_mismatched_paths() {
+        // Deleting an entry whose value is an empty flow collection (block_end
+        // over an empty sequence / mapping).
+        assert_eq!(edit("xs: []\nother: 1\n", "del(.xs)"), "other: 1\n");
+        assert_eq!(edit("foo: {}\nother: 1\n", "del(.foo)"), "other: 1\n");
+        // A path shape that can't address a deletable node (field of a
+        // sequence) is a silent no-op.
+        assert_eq!(edit("xs:\n  - 1\n", "del(.xs.name)"), "xs:\n  - 1\n");
+    }
+
+    #[test]
+    fn source_slice_index_iterate_and_comment_steps() {
+        let doc = parse(SAMPLE).unwrap();
+        let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+        // A specific (and negative) index selects one element's exact bytes.
+        assert_eq!(slice(".web.ports[0]"), vec!["80"]);
+        assert_eq!(slice(".web.ports[-1]"), vec!["443"]);
+        // Iterating a mapping yields one slice per value (a scalar is its exact
+        // bytes - the inline comment is trivia outside the scalar's span).
+        assert_eq!(slice(".web[]"), vec!["nginx:1.25", "- 80\n- 443", "3"]);
+        // Iterating a scalar, or a trailing comment step, resolves nothing.
+        assert_eq!(slice(".web.image[]"), Vec::<String>::new());
+        assert_eq!(slice(".web.image.#"), Vec::<String>::new());
+    }
+
+    // --- comments: error paths, delete edges, extraction, emit -------------
+
+    #[test]
+    fn comment_edit_error_paths() {
+        let cerr = |src: &str, expr: &str| {
+            let mut d = parse(src).unwrap();
+            edikt_core::apply_comment_mutation(&mut d, &parse_expr(expr).unwrap())
+                .unwrap_err()
+                .to_string()
+        };
+        // Document-level (`.#`) comment editing is a follow-up.
+        assert!(cerr("a: 1\n", ".# = \"x\"").contains("document-level"));
+        // A field comment whose container isn't a mapping.
+        assert!(cerr("a: 1\n", ".a.b.# = \"x\"").contains("not a mapping key"));
+        // An index comment whose container isn't a sequence.
+        assert!(
+            cerr("a:\n  x: 1\n", ".a[0].# = \"x\"").contains("not a sequence element"),
+            "container-not-sequence"
+        );
+        // A sequence index out of range.
+        assert!(cerr("ports:\n  - 80\n", ".ports[5].# = \"x\"").contains("out of range"));
+        // A comment on an iterate step (neither a key nor an element).
+        assert!(
+            cerr("ports:\n  - 80\n", ".ports[].# = \"x\"")
+                .contains("mapping keys or sequence elements")
+        );
+        // A comment path that doesn't resolve through an intermediate.
+        assert!(cerr("a: 1\n", ".a.b.c.# = \"x\"").contains("does not resolve to a node"));
+    }
+
+    #[test]
+    fn comment_delete_edge_paths() {
+        // Deleting a comment on a missing path is a silent no-op.
+        assert_eq!(cedit("a: 1\n", "del(.nope.#)"), "a: 1\n");
+        // Deleting an inline comment keeps the value; result re-parses clean.
+        assert_eq!(
+            cedit(
+                "web:\n  image: nginx  # pinned\n",
+                "del(.web.image.#.inline)"
+            ),
+            "web:\n  image: nginx\n"
+        );
+        // Deleting a comment on a flow-collection element is a no-op (no own
+        // line to drop a comment from).
+        assert_eq!(
+            cedit("flags: [ssl, verify]\n", "del(.flags[0].#)"),
+            "flags: [ssl, verify]\n"
+        );
+    }
+
+    #[test]
+    fn comment_inline_set_preserves_crlf() {
+        // Setting an inline comment on a CRLF line keeps the `\r` with the tail.
+        assert_eq!(
+            cedit("a: 1\r\nb: 2\r\n", ".a.#.inline = \"note\""),
+            "a: 1  # note\r\nb: 2\r\n"
+        );
+    }
+
+    #[test]
+    fn comment_set_descends_through_sequence_index() {
+        // The comment target's parent path runs through a sequence index.
+        assert_eq!(
+            cedit(
+                "items:\n  - name: web\n    port: 80\n",
+                ".items[0].name.# = \"note\""
+            ),
+            "items:\n  # note\n  - name: web\n    port: 80\n"
+        );
+    }
+
+    #[test]
+    fn scalar_root_comments_extract_and_emit() {
+        // A bare-scalar document carries its head/inline on the scalar itself.
+        let c = parse("# lead\n42  # yep\n")
+            .unwrap()
+            .to_commented()
+            .unwrap();
+        assert_eq!(c.comments.head, vec!["lead"]);
+        assert_eq!(c.comments.inline.as_deref(), Some("yep"));
+        assert_eq!(c.to_value(), Value::Int(42));
+        // ...and they re-emit around the scalar.
+        let (out, _) = emit_commented(&c).unwrap();
+        assert_eq!(out, "# lead\n42 # yep\n");
+    }
+
+    #[test]
+    fn document_foot_emits() {
+        let c = parse("a: 1\n# the end\n").unwrap().to_commented().unwrap();
+        assert_eq!(c.comments.foot, vec!["the end"]);
+        let (out, _) = emit_commented(&c).unwrap();
+        assert_eq!(out, "a: 1\n# the end\n");
+    }
+
+    #[test]
+    fn commented_resolves_merge_keys() {
+        let src = "base: &b\n  a: 1\n  b: 2\nprod:\n  <<: *b\n  b: 3\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        // The commented projection matches the value projection (`<<` resolved).
+        assert_eq!(c.to_value(), parse(src).unwrap().to_value());
+        let edikt_core::CommentedNode::Object(top) = &c.node else {
+            panic!("expected object");
+        };
+        let (_, prod) = top.iter().find(|(k, _)| k == "prod").unwrap();
+        let edikt_core::CommentedNode::Object(pentries) = &prod.node else {
+            panic!("expected mapping");
+        };
+        // `a` is merged in (no physical `a` under prod); `b` is the override.
+        assert!(pentries.iter().any(|(k, _)| k == "a"));
+        assert_eq!(
+            pentries
+                .iter()
+                .find(|(k, _)| k == "b")
+                .map(|(_, v)| v.to_value()),
+            Some(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn commented_emit_places_item_inline_and_head() {
+        // A scalar item's inline stays on its line; an own-line comment above a
+        // later item becomes that item's head.
+        let src = "ports:\n  - 80 # http\n  # note\n  - 443\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let (out, _) = emit_commented(&c).unwrap();
+        assert_eq!(out, "ports:\n- 80 # http\n# note\n- 443\n");
+    }
+
+    #[test]
+    fn commented_emit_places_nested_foot_and_container_item_inline() {
+        use edikt_core::{Commented, CommentedNode, Comments};
+        // A foot comment on a mapping entry's value lands after that entry.
+        let entry_with_foot = {
+            let mut cc = Commented::scalar(Value::Int(1));
+            cc.comments.foot = vec!["after a".into()];
+            cc
+        };
+        let c = Commented {
+            comments: Comments::default(),
+            node: CommentedNode::Object(vec![
+                ("a".into(), entry_with_foot),
+                ("b".into(), Commented::scalar(Value::Int(2))),
+            ]),
+        };
+        let (out, _) = emit_commented(&c).unwrap();
+        assert_eq!(out, "a: 1\n# after a\nb: 2\n");
+
+        // A foot on a scalar sequence item lands after that item.
+        let item0 = {
+            let mut cc = Commented::scalar(Value::Int(1));
+            cc.comments.foot = vec!["mid".into()];
+            cc
+        };
+        let seq = Commented {
+            comments: Comments::default(),
+            node: CommentedNode::Array(vec![item0, Commented::scalar(Value::Int(2))]),
+        };
+        let c2 = Commented {
+            comments: Comments::default(),
+            node: CommentedNode::Object(vec![("xs".into(), seq)]),
+        };
+        let (out2, _) = emit_commented(&c2).unwrap();
+        assert_eq!(out2, "xs:\n- 1\n# mid\n- 2\n");
+
+        // An inline on a *container* sequence item has no own line to trail, so
+        // it joins the head above the item.
+        let obj_item = {
+            let mut cc = Commented {
+                comments: Comments::default(),
+                node: CommentedNode::Object(vec![(
+                    "name".into(),
+                    Commented::scalar(Value::Str("web".into())),
+                )]),
+            };
+            cc.comments.inline = Some("primary".into());
+            cc
+        };
+        let c3 = Commented {
+            comments: Comments::default(),
+            node: CommentedNode::Object(vec![(
+                "servers".into(),
+                Commented {
+                    comments: Comments::default(),
+                    node: CommentedNode::Array(vec![obj_item]),
+                },
+            )]),
+        };
+        let (out3, _) = emit_commented(&c3).unwrap();
+        assert_eq!(out3, "servers:\n# primary\n- name: web\n");
+    }
+
+    #[test]
+    fn commented_emit_places_container_key_inline() {
+        // An inline comment on a key whose value opens on the next line hangs
+        // after the key (the plan's non-same-line branch).
+        let src = "web: # svc\n  image: nginx\n";
+        let c = parse(src).unwrap().to_commented().unwrap();
+        let (out, _) = emit_commented(&c).unwrap();
+        assert_eq!(out, "web: # svc\n  image: nginx\n");
+    }
 }
