@@ -1,5 +1,10 @@
 # edikt
 
+[![CI](https://github.com/jhheider/edikt/actions/workflows/ci.yml/badge.svg)](https://github.com/jhheider/edikt/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/jhheider/edikt/badge.svg?branch=main)](https://coveralls.io/github/jhheider/edikt?branch=main)
+[![crates.io](https://img.shields.io/crates/v/edikt.svg)](https://crates.io/crates/edikt)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 **Edit config files without reflowing them.**
 
 *edit, meets edict.* A lossless, format-preserving config editor for
