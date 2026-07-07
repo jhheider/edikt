@@ -1,170 +1,34 @@
 name: Release
 
-# Fires when a GitHub Release is published. The full release ceremony:
-#   gh release create vX.Y.Z --generate-notes
-# (version must already be committed in the Cargo.tomls) - this builds the
-# platform binaries, attaches them, and publishes the workspace crates.
+# Publish a release with `gh release create vX.Y.Z --generate-notes` (versions
+# already committed). The workflow_dispatch path rebuilds an existing release's
+# binaries and refreshes the tap formula, without re-publishing crates.
 on:
   release:
     types: [published]
-  # Manual trigger to (re)build binaries and refresh the tap formula for an
-  # existing release. Builds from the tag's own code; the crates publish is
-  # skipped on dispatch (binaries + formula only).
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to build and attach binaries to (e.g. v0.2.0)"
+        description: "Existing release tag to rebuild binaries + refresh formula (e.g. v0.2.1)"
         required: true
 
-concurrency:
-  group: release-${{ github.event.release.tag_name || inputs.tag }}
-
-permissions:
-  contents: write
-
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  build:
-    name: Build (${{ matrix.asset_name }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset_name: edikt-linux-x86_64.tar.gz
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            asset_name: edikt-linux-aarch64.tar.gz
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            asset_name: edikt-macos-x86_64.tar.gz
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            asset_name: edikt-macos-aarch64.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset_name: edikt-windows-x86_64.zip
-    steps:
-      # Build the tag's own code (matters on dispatch), so attached binaries
-      # match the released source.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      # Installs the cross linker for the non-native linux-aarch64 build
-      - uses: taiki-e/setup-cross-toolchain-action@v1
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        with:
-          target: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      # The binary generates its own docs: man page + completions ride along
-      # in every archive so packagers don't have to run the build.
-      - name: Package
-        shell: bash
-        run: |
-          bin=target/${{ matrix.target }}/release/edikt
-          staging=edikt-stage
-          mkdir -p "$staging"
-          if [[ "${{ matrix.asset_name }}" == *.zip ]]; then
-            cp "$bin.exe" "$staging/"
-            7z a "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" "./$staging/edikt.exe"
-          else
-            cp "$bin" "$staging/"
-            "$bin" --manpage > "$staging/edikt.1"
-            for shell in bash zsh fish; do
-              "$bin" --completions $shell > "$staging/edikt.$shell"
-            done
-            tar czf "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" -C "$staging" .
-          fi
-
-      - name: Attach to release
-        shell: bash
-        run: gh release upload '${{ github.event.release.tag_name || inputs.tag }}' '${{ matrix.asset_name }}' --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  publish-crates:
-    name: Publish to crates.io
-    needs: build
-    # Only on a real release; a manual dispatch is for binaries + formula.
-    if: ${{ github.event_name == 'release' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # Publish only the crates whose current version is not already on
-      # crates.io, in dependency order (core/syntax -> format crates -> the
-      # edikt bin), waiting for the index between each. This publishes exactly
-      # the crates a release bumped; a crate changed without a version bump
-      # (e.g. a test-only edit) stays at its published version. `cargo publish`
-      # is used directly because `katyo/publish-crates` aborts the whole run
-      # when any crate has unpublished changes without a bump.
-      - name: Publish changed crates
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          ua="edikt-release (jhheider@gmail.com)"
-          on_registry() { # crate ver -> success if that version is on crates.io
-            [ "$(curl -s -o /dev/null -w '%{http_code}' -A "$ua" \
-                "https://crates.io/api/v1/crates/$1/$2")" = "200" ]
-          }
-          for c in edikt-core edikt-syntax edikt-jsonc edikt-ini edikt-env \
-                   edikt-toml edikt-yaml edikt-kdl edikt; do
-            ver=$(cargo metadata --no-deps --format-version 1 \
-              | python3 -c "import sys,json;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$c'))")
-            if on_registry "$c" "$ver"; then
-              echo "$c $ver already on crates.io - skip"
-              continue
-            fi
-            echo "publishing $c $ver"
-            cargo publish -p "$c"
-            echo "waiting for $c $ver to appear on the index..."
-            for _ in $(seq 1 60); do on_registry "$c" "$ver" && break; sleep 5; done
-          done
-
-  bump-formula:
-    name: Refresh the Homebrew formula
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      # Check out the default branch for the current bump script (the release
-      # tag may predate it); the script retags URLs and recomputes the shas.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Refresh the binary formula on the tap
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: |
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/jhheider/homebrew-tap.git" tap
-          python3 .github/scripts/bump-tap-formula.py "$TAG" tap/Formula/edikt.rb
-          cd tap
-          if git diff --quiet; then
-            echo "formula already at ${TAG}; nothing to do"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "edikt ${TAG#v}: refresh binary formula"
-          git push
+  release:
+    uses: jhheider/rust-ci/.github/workflows/release.yml@v1
+    with:
+      bin-name: edikt
+      tag: ${{ github.event.inputs.tag }}
+      gen-docs: true
+      publish-crates: true
+      crates: "edikt-core edikt-syntax edikt-jsonc edikt-ini edikt-env edikt-toml edikt-yaml edikt-kdl edikt"
+      tap-repo: jhheider/homebrew-tap
+      tap-formula: Formula/edikt.rb
+      targets: |
+        [
+          {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","asset":"edikt-linux-x86_64.tar.gz"},
+          {"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","asset":"edikt-linux-aarch64.tar.gz"},
+          {"os":"macos-latest","target":"x86_64-apple-darwin","asset":"edikt-macos-x86_64.tar.gz"},
+          {"os":"macos-latest","target":"aarch64-apple-darwin","asset":"edikt-macos-aarch64.tar.gz"},
+          {"os":"windows-latest","target":"x86_64-pc-windows-msvc","asset":"edikt-windows-x86_64.zip"}
+        ]
+    secrets: inherit
