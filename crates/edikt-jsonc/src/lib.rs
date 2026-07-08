@@ -123,7 +123,7 @@ impl Jsonc {
                     .and_then(|object| edit::find_member(&object, k));
                 if let Some(member) = member {
                     edit::delete_member(&member);
-                    self.root = root;
+                    self.root = SyntaxNode::new_root(root.green().into_owned());
                 }
                 Ok(())
             }
@@ -143,7 +143,7 @@ impl Jsonc {
                     });
                 if let Some(value) = value {
                     edit::delete_element(&value);
-                    self.root = root;
+                    self.root = SyntaxNode::new_root(root.green().into_owned());
                 }
                 Ok(())
             }
@@ -565,11 +565,25 @@ mod tests {
     }
 
     #[test]
+    fn del_object_members_in_pipeline() {
+        let src = "{\n  \"remote\": {\n    \"a\": 1,\n    \"b\": 2,\n    \"c\": 3\n  }\n}\n";
+        assert_eq!(
+            edit_src(src, "del(.remote.a) | del(.remote.b)"),
+            "{\n  \"remote\": {\n    \"c\": 3\n  }\n}\n"
+        );
+    }
+
+    #[test]
     fn del_array_elements() {
         assert_eq!(edit_src("[10, 20, 30]", "del(.[1])"), "[10, 30]");
         assert_eq!(edit_src("[10, 20, 30]", "del(.[0])"), "[20, 30]");
         assert_eq!(edit_src("[10, 20, 30]", "del(.[-1])"), "[10, 20]");
         assert_eq!(edit_src("[10]", "del(.[0])"), "[]");
+    }
+
+    #[test]
+    fn del_array_elements_in_pipeline() {
+        assert_eq!(edit_src("[10, 20, 30]", "del(.[0]) | del(.[0])"), "[30]");
     }
 
     #[test]
