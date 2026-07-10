@@ -80,7 +80,7 @@ impl Env {
         let root = self.root.clone_for_update();
         if let Some(entry) = edit::find_entry(&root, key) {
             entry.detach();
-            self.root = root;
+            self.root = SyntaxNode::new_root(root.green().into_owned());
         }
         Ok(())
     }
@@ -251,6 +251,11 @@ mod tests {
         assert!(!out.contains("DEBUG"));
         assert!(out.contains("# service env"));
         assert!(out.contains("DATABASE_URL="));
+    }
+
+    #[test]
+    fn del_entries_in_pipeline() {
+        assert_eq!(edit_src("A=1\nB=2\nC=3\n", "del(.A) | del(.B)"), "C=3\n");
     }
 
     #[test]

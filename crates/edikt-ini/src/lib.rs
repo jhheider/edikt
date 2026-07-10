@@ -81,7 +81,7 @@ impl Ini {
         let root = self.root.clone_for_update();
         if let Some(entry) = edit::resolve_entry(&root, path) {
             entry.detach();
-            self.root = root;
+            self.root = SyntaxNode::new_root(root.green().into_owned());
         }
         Ok(())
     }
@@ -264,6 +264,17 @@ mod tests {
         assert!(out.contains("port=8080"));
         assert!(out.contains("[server]"));
         assert!(out.contains("[logging]"));
+    }
+
+    #[test]
+    fn del_entries_in_pipeline() {
+        assert_eq!(
+            edit_src(
+                "[server]\nhost = 0.0.0.0\nport=8080\n",
+                "del(.server.host) | del(.server.port)"
+            ),
+            "[server]\n"
+        );
     }
 
     #[test]
