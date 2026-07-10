@@ -190,12 +190,59 @@ pub(crate) fn find_member(object: &SyntaxNode, key: &str) -> Option<SyntaxNode> 
 /// Detach a member together with the whitespace before it (its line indent), so
 /// the whole line disappears. The member owns its trailing comma, so that goes
 /// with it. Operates on a `clone_for_update` tree.
+///
+/// Deleting the *last* member is the tricky case: that member carries no comma
+/// of its own (it was the terminal one), so the *previous* member's separator
+/// comma would be left dangling before `}` - invalid in strict JSON. So when we
+/// remove a last member that has no comma, we also strip the previous member's
+/// comma (mirroring `delete_element` for arrays). A last member that *does* own
+/// a trailing comma is a trailing-comma-style (JSON5/JSONC) object; there we
+/// leave the previous comma so that style is preserved.
 pub(crate) fn delete_member(member: &SyntaxNode) {
     let leading_ws = leading_ws_of(&member.prev_sibling_or_token());
+    let dangling_comma = if is_last_member(member) && !member_has_comma(member) {
+        prev_member_comma(member)
+    } else {
+        None
+    };
     member.detach();
     if let Some(ws) = leading_ws {
         ws.detach();
     }
+    if let Some(comma) = dangling_comma {
+        comma.detach();
+    }
+}
+
+/// True if no `Member` node follows `member` in its object (comments/whitespace
+/// after it don't count).
+fn is_last_member(member: &SyntaxNode) -> bool {
+    let mut next = member.next_sibling();
+    while let Some(node) = next {
+        if node.kind() == Sk::Member {
+            return false;
+        }
+        next = node.next_sibling();
+    }
+    true
+}
+
+/// Whether a member owns a trailing comma token (absorbed by the parser).
+fn member_has_comma(member: &SyntaxNode) -> bool {
+    member.children_with_tokens().any(|e| e.kind() == Sk::Comma)
+}
+
+/// The trailing comma token of the member immediately before `member`, if that
+/// previous sibling is a member that owns one.
+fn prev_member_comma(member: &SyntaxNode) -> Option<SyntaxToken> {
+    let prev = member.prev_sibling()?;
+    if prev.kind() != Sk::Member {
+        return None;
+    }
+    prev.children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| t.kind() == Sk::Comma)
+        .last()
 }
 
 /// Detach an array element with exactly one comma+whitespace separator, so no
@@ -275,11 +322,19 @@ fn insert_elements(orig: &str, new_elems: &[String]) -> String {
         if !has_trailing_comma {
             out.push(',');
         }
-        for elem in new_elems {
+        // Each new element needs a separator comma before the next one; the
+        // *last* element only gets a trailing comma when the container was
+        // already in trailing-comma style. Manufacturing one otherwise yields
+        // invalid strict JSON (JSON5/JSONC tolerate it, so it hid until a strict
+        // consumer choked).
+        let last = new_elems.len() - 1;
+        for (i, elem) in new_elems.iter().enumerate() {
             out.push('\n');
             out.push_str(&indent);
             out.push_str(elem);
-            out.push(',');
+            if i < last || has_trailing_comma {
+                out.push(',');
+            }
         }
     } else if has_trailing_comma {
         for elem in new_elems {

@@ -560,8 +560,24 @@ mod tests {
         let src = "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n";
         assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n  \"c\": 3\n}\n");
         assert_eq!(edit_src(src, "del(.a)"), "{\n  \"b\": 2,\n  \"c\": 3\n}\n");
-        // deleting the last member leaves a (valid JSONC) trailing comma
-        assert_eq!(edit_src(src, "del(.c)"), "{\n  \"a\": 1,\n  \"b\": 2,\n}\n");
+        // Deleting the last member must NOT leave the previous member's separator
+        // comma dangling before `}` - that is invalid strict JSON. This source is
+        // strict (no trailing comma), so the result stays strict.
+        assert_eq!(edit_src(src, "del(.c)"), "{\n  \"a\": 1,\n  \"b\": 2\n}\n");
+    }
+
+    #[test]
+    fn del_last_member_preserves_trailing_comma_style() {
+        // When the object is already trailing-comma style (JSON5/JSONC), deleting
+        // the last member leaves the previous member's trailing comma - that is
+        // the file's own style, preserved, and still valid JSON5/JSONC.
+        let src = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
+        assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n}\n");
+    }
+
+    #[test]
+    fn del_only_member() {
+        assert_eq!(edit_src("{\n  \"a\": 1\n}\n", "del(.a)"), "{\n}\n");
     }
 
     #[test]
@@ -658,6 +674,26 @@ mod tests {
         assert_eq!(
             edit_src(src, ".c = 3"),
             "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3,\n}\n"
+        );
+    }
+
+    #[test]
+    fn creates_new_key_multiline_strict_stays_strict() {
+        // The reported bug (claude_desktop_config.json): appending a new last key
+        // to a strict-JSON object (no trailing comma) must not manufacture one.
+        let src = "{\n  \"a\": 1,\n  \"b\": 2\n}\n";
+        assert_eq!(
+            edit_src(src, ".c = 3"),
+            "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n"
+        );
+    }
+
+    #[test]
+    fn append_multiline_array_strict_stays_strict() {
+        let src = "{\n  \"xs\": [\n    1,\n    2\n  ]\n}\n";
+        assert_eq!(
+            edit_src(src, ".xs += [3]"),
+            "{\n  \"xs\": [\n    1,\n    2,\n    3\n  ]\n}\n"
         );
     }
 
