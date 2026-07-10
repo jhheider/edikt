@@ -14,7 +14,7 @@ license = "MIT OR Apache-2.0"
 # Internal crates (path + version so they can publish independently).
 edikt-core = { path = "crates/edikt-core", version = "0.2.0" }
 edikt-syntax = { path = "crates/edikt-syntax", version = "0.2.0" }
-edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.2.1" }
+edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.2.2" }
 edikt-ini = { path = "crates/edikt-ini", version = "0.2.1" }
 edikt-env = { path = "crates/edikt-env", version = "0.2.1" }
 edikt-toml = { path = "crates/edikt-toml", version = "0.2.0" }
