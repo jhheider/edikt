@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt TOML format module: lossless edits via toml_edit, implementing Document."
+readme = { workspace = true }
 
 [dependencies]
 edikt-core = { workspace = true }

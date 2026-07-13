@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt JSONC/JSON5/JSON format module: lossless rowan+logos CST implementing Document + Convert."
+readme = { workspace = true }
 
 [dependencies]
 edikt-core = { workspace = true }

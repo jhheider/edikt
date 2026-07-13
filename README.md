@@ -27,8 +27,8 @@ edikt -i '.services.web.replicas = 3' compose.yaml
 # compute, not just place
 edikt -i '.version |= . + "-dev"' package.jsonc
 
-# stream-first, like sed
-cat settings.jsonc | edikt 'del(.telemetry) | .theme = "dark"'
+# stream-first, like sed (stdin has no extension, so name the format)
+cat settings.jsonc | edikt -t jsonc 'del(.telemetry) | .theme = "dark"'
 
 # script from a file
 edikt -f release.edk -i config.jsonc

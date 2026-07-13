@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt KDL format module: lossless edits via kdl-rs, implementing Document."
+readme = { workspace = true }
 
 [dependencies]
 kdl = { workspace = true }

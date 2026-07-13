@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt YAML format module: lossless in-place edit, query, and conversion (pure Rust, via libyaml-safer)."
+readme = { workspace = true }
 
 [dependencies]
 edikt-core = { workspace = true }

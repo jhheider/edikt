@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt .env/.properties format module: flat, line-level lossless CST implementing Document."
+readme = { workspace = true }
 
 [dependencies]
 edikt-core = { workspace = true }
