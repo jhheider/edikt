@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt shared rowan substrate: lossless green-tree helpers, serialize, and structural-sharing edit utilities."
+readme = { workspace = true }
 
 [dependencies]
 rowan = { workspace = true }

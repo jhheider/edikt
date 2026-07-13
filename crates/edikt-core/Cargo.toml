@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt core: value model, Feature capabilities, the expression language, and the Document/Convert seams."
+readme = { workspace = true }
 
 [dependencies]
 logos = { workspace = true }

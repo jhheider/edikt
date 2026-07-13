@@ -6,6 +6,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt INI format module: line-oriented lossless CST implementing Document."
+readme = { workspace = true }
 
 [dependencies]
 edikt-core = { workspace = true }
