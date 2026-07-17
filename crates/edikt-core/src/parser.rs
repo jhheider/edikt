@@ -129,22 +129,40 @@ impl Parser {
         let lhs = self.parse_alt()?;
         match self.peek() {
             Some(Lx::Assign) => {
+                self.reject_hyphen_key_lhs(&lhs)?;
                 self.pos += 1;
                 let rhs = self.parse_assign()?; // right-associative
                 Ok(Expr::Assign(Box::new(lhs), Box::new(rhs)))
             }
             Some(Lx::PipeAssign) => {
+                self.reject_hyphen_key_lhs(&lhs)?;
                 self.pos += 1;
                 let rhs = self.parse_assign()?;
                 Ok(Expr::UpdateAssign(Box::new(lhs), Box::new(rhs)))
             }
             Some(Lx::PlusAssign) => {
+                self.reject_hyphen_key_lhs(&lhs)?;
                 self.pos += 1;
                 let rhs = self.parse_assign()?;
                 Ok(Expr::AddAssign(Box::new(lhs), Box::new(rhs)))
             }
             _ => Ok(lhs),
         }
+    }
+
+    /// A hyphenated bare key on the left of an assignment (`.package.rust-version
+    /// = ...`) parses as subtraction - `Path(.package.rust) - version()` - and
+    /// would only fail later with "left side of an assignment must be a path",
+    /// which points nowhere near the cause. When the doomed LHS has exactly that
+    /// subtraction shape, fail now and name the fix. Anything that doesn't match
+    /// is left alone for the eval-time check.
+    fn reject_hyphen_key_lhs(&self, lhs: &Expr) -> Result<(), ParseError> {
+        let Some((path, key)) = hyphen_key(lhs) else {
+            return Ok(());
+        };
+        Err(self.err_here(format!(
+            "key `{key}` contains `-` (parsed as subtraction); quote it: {path}"
+        )))
     }
 
     /// `a // b` - right-associative, binding tighter than `=` (so
@@ -263,7 +281,14 @@ impl Parser {
                 _ => return Err(self.err_here("expected an object key")),
             };
             self.pos += 1;
-            self.expect(Lx::Colon, "`:`")?;
+            // jq spells object entries `key: value`; TOML/KDL hands reach for
+            // `key = value` when the target file is TOML. Accept both - the
+            // expression parses before any file is read, so the grammar cannot
+            // be conditioned on the target format.
+            match self.peek() {
+                Some(Lx::Colon) | Some(Lx::Assign) => self.pos += 1,
+                _ => return Err(self.err_here("expected `:` or `=`")),
+            }
             // A comparison-level value keeps `,` free to separate entries.
             let value = self.parse_cmp()?;
             pairs.push((key, value));
@@ -374,6 +399,61 @@ impl Parser {
 }
 
 /// Map a `#.<word>` refinement to its comment kind.
+/// Recognize the wreckage of a hyphenated bare key used as a path: a chain of
+/// subtractions whose leftmost operand is a path ending in a field and whose
+/// right operands are bare zero-argument calls (`.a.crate-type` lexes as
+/// `.a.crate`, `-`, `type`). Returns the corrected, quoted path and the
+/// offending key (`.a."crate-type"`, `crate-type`); `None` if the shape is
+/// anything else.
+fn hyphen_key(expr: &Expr) -> Option<(String, String)> {
+    let mut tail: Vec<&str> = Vec::new();
+    let mut cur = expr;
+    while let Expr::Binary(BinOp::Sub, l, r) = cur {
+        match r.as_ref() {
+            Expr::Call(name, args) if args.is_empty() => tail.push(name.as_str()),
+            _ => return None,
+        }
+        cur = l;
+    }
+    if tail.is_empty() {
+        return None;
+    }
+    let Expr::Path(steps) = cur else {
+        return None;
+    };
+    let Some((Step::Field(first), prefix)) = steps.split_last() else {
+        return None;
+    };
+    tail.push(first.as_str());
+    tail.reverse();
+    let key = tail.join("-");
+    let mut path = String::new();
+    for step in prefix {
+        match step {
+            Step::Field(f) if is_bare_key(f) => {
+                path.push('.');
+                path.push_str(f);
+            }
+            Step::Field(f) => {
+                path.push_str(&format!(".\"{f}\""));
+            }
+            Step::Index(i) => path.push_str(&format!("[{i}]")),
+            _ => return None,
+        }
+    }
+    path.push_str(&format!(".\"{key}\""));
+    Some((path, key))
+}
+
+/// Would this key lex as a single bare `Ident` in a path?
+fn is_bare_key(k: &str) -> bool {
+    let mut chars = k.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn comment_kind(word: &str) -> Option<CommentKind> {
     match word {
         "head" => Some(CommentKind::Head),
@@ -575,5 +655,62 @@ mod tests {
         );
         // Comment is terminal - nothing may navigate past it.
         assert!(parse(".foo.#.bar").is_err());
+    }
+
+    #[test]
+    fn object_construct_accepts_toml_equals() {
+        // `key = value` (TOML inline-table spelling) and jq's `key: value`
+        // both work, even mixed in one literal.
+        assert_eq!(
+            p(r#"{version = "1", optional: true}"#),
+            Expr::ObjectConstruct(vec![
+                ("version".into(), Expr::Literal(Value::Str("1".into()))),
+                ("optional".into(), Expr::Literal(Value::Bool(true))),
+            ])
+        );
+    }
+
+    #[test]
+    fn object_construct_names_both_separators() {
+        let e = parse("{a 1}").unwrap_err();
+        assert!(e.to_string().contains("expected `:` or `=`"), "got: {e}");
+    }
+
+    #[test]
+    fn hyphenated_assign_lhs_hints_the_quoted_form() {
+        let e = parse(r#".package.rust-version = "1.85""#).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "key `rust-version` contains `-` (parsed as subtraction); \
+             quote it: .package.\"rust-version\" (at offset 22)"
+        );
+        // Multi-hyphen keys reassemble fully, and `|=` / `+=` hint too.
+        let e = parse(".lib.crate-type-x |= 1").unwrap_err();
+        assert!(e.to_string().contains("`crate-type-x`"), "got: {e}");
+        assert!(e.to_string().contains(".lib.\"crate-type-x\""), "got: {e}");
+        let e = parse(".a.b-c += 1").unwrap_err();
+        assert!(e.to_string().contains("`b-c`"), "got: {e}");
+        // A top-level hyphenated key hints the bare quoted form.
+        let e = parse(".rust-version = 1").unwrap_err();
+        assert!(e.to_string().contains(".\"rust-version\""), "got: {e}");
+    }
+
+    #[test]
+    fn hyphen_hint_leaves_real_subtraction_alone() {
+        // Query-position subtraction still parses as arithmetic.
+        assert_eq!(
+            p(".a-b"),
+            Expr::Binary(
+                BinOp::Sub,
+                Box::new(Expr::Path(vec![Step::Field("a".into())])),
+                Box::new(Expr::Call("b".into(), vec![]))
+            )
+        );
+        // An LHS that is subtraction-but-not-a-bare-key shape (numeric
+        // operand) is not intercepted; it still parses into an Assign for
+        // the eval-time "must be a path" check.
+        assert!(parse(".a - 1 = 2").is_ok());
+        // RHS containing subtraction is untouched.
+        p(".x = .a - .b");
     }
 }

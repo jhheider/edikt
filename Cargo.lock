@@ -152,7 +152,7 @@ checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
 
 [[package]]
 name = "edikt"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "logos",
  "regex",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-toml"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "edikt-core",
  "thiserror",
