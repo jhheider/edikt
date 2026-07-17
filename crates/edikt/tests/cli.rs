@@ -893,3 +893,35 @@ fn helpful_error_messages() {
     assert_eq!(c3, 2);
     assert!(err3.contains("bad expression"), "got: {err3}");
 }
+
+#[test]
+fn toml_assignment_ergonomics() {
+    let cargo = "[package]\nname = \"demo\"\n";
+
+    // Assigning under a missing table creates it (jq parity).
+    let (out, _e, code) = run(&["-t", "toml", r#".features.default = ["std"]"#], cargo);
+    assert_eq!(code, 0);
+    assert!(out.contains("[features]"), "got: {out}");
+    assert!(out.contains("default = [\"std\"]"), "got: {out}");
+
+    // TOML inline-table spelling works as an object value.
+    let (out2, _e, c2) = run(
+        &[
+            "-t",
+            "toml",
+            r#".dependencies.bar = {version = "1", optional = true}"#,
+        ],
+        cargo,
+    );
+    assert_eq!(c2, 0);
+    assert!(
+        out2.contains("bar = { version = \"1\", optional = true }"),
+        "got: {out2}"
+    );
+
+    // A hyphenated bare key on an assignment LHS names the cause and the fix.
+    let (_o, err, c3) = run(&["-t", "toml", r#".package.rust-version = "1.85""#], cargo);
+    assert_eq!(c3, 2);
+    assert!(err.contains("contains `-`"), "got: {err}");
+    assert!(err.contains(".package.\"rust-version\""), "got: {err}");
+}

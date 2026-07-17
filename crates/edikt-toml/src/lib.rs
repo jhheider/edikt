@@ -13,7 +13,7 @@ pub use edikt_core::EditError;
 pub use edit::{apply, emit};
 
 use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value, eval};
-use toml_edit::{DocumentMut, TableLike};
+use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 /// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
@@ -42,8 +42,9 @@ pub struct Toml {
 }
 
 impl Toml {
-    /// Set the value at `path`, format-preserving. Creates a key in an existing
-    /// table; intermediate-table creation and array-index paths are follow-ups.
+    /// Set the value at `path`, format-preserving. Missing keys are created,
+    /// including intermediate tables (jq's `.a.b = 1` auto-creates `.a`);
+    /// array-index paths are a follow-up.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let Some((last, parent)) = path.split_last() else {
             return Err(EditError::new("cannot set the whole document"));
@@ -56,9 +57,17 @@ impl Toml {
             let Step::Field(k) = step else {
                 return Err(EditError::new("TOML paths for set are object keys"));
             };
+            if current.get(k).is_none() {
+                // Auto-vivify the missing parent. Implicit, so a table that
+                // only ever holds sub-tables never emits a bare `[a]` header -
+                // `.a.b.c = 1` yields `[a.b]`, not `[a]` + `[a.b]`.
+                let mut t = Table::new();
+                t.set_implicit(true);
+                current.insert(k, Item::Table(t));
+            }
             let item = current
                 .get_mut(k)
-                .ok_or_else(|| EditError::new(format!("no key `{k}`")))?;
+                .expect("key exists: it was just inserted or already present");
             current = item
                 .as_table_like_mut()
                 .ok_or_else(|| EditError::new(format!("`{k}` is not a table")))?;
@@ -324,6 +333,40 @@ mod tests {
         );
         assert!(edit_src(src, ".server.port |= . + 1").contains("port = 8081"));
         assert!(edit_src(src, ".server.debug = true").contains("debug = true"));
+    }
+
+    #[test]
+    fn set_creates_missing_parent_tables() {
+        // The whole reason: `.features.x = [...]` on a Cargo.toml with no
+        // `[features]` section should create it, jq-style, not error.
+        let out = edit_src(SAMPLE, r#".features.subscripts = ["dep:bar"]"#);
+        assert!(out.contains("[features]"), "got:\n{out}");
+        assert!(out.contains("subscripts = [\"dep:bar\"]"), "got:\n{out}");
+        // Untouched regions survive byte-for-byte, comments included.
+        assert!(out.starts_with("# package\n[package]\nname = \"edikt\""));
+        assert!(out.contains("version = \"0.1.0\"   # semver"));
+    }
+
+    #[test]
+    fn set_deep_vivify_keeps_intermediates_implicit() {
+        // `.a.b.c = 1` emits only `[a.b]` - no empty `[a]` header.
+        assert_eq!(edit_src("x = 1\n", ".a.b.c = 1"), "x = 1\n\n[a.b]\nc = 1\n");
+    }
+
+    #[test]
+    fn set_vivifies_inside_inline_tables() {
+        // A missing parent under an inline table becomes an inline table
+        // (toml_edit converts the inserted table), keeping the line valid.
+        let out = edit_src(
+            "deps = { serde = { version = \"1\" } }\n",
+            ".deps.serde.features.x = 1",
+        );
+        assert!(out.contains("features = { x = 1 }"), "got:\n{out}");
+    }
+
+    #[test]
+    fn set_through_scalar_still_errors() {
+        assert_eq!(edit_err("a = 1\n", ".a.b = 2"), "`a` is not a table");
     }
 
     #[test]
