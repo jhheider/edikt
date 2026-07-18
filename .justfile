@@ -1,3 +1,5 @@
+set fallback
+
 # edikt task runner. `just --list` to see recipes.
 
 # Run the full workspace test suite.
