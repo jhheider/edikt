@@ -763,11 +763,23 @@ fn synthesized_query_stays_in_format() {
 #[test]
 fn infeasible_output_names_candidates() {
     // An array result cannot be a top-level env document; the error suggests
-    // formats whose feature set can hold it.
+    // formats that can hold a top-level array (json/jsonc/yaml) and NOT the
+    // ones that can't (toml/kdl require a table at the root) - and never the
+    // target that just failed (edikt-049 review fix F).
     let (_o, err, code) = run(&["-t", "yaml", "-T", "env", ".xs"], "xs:\n  - 1\n  - 2\n");
     assert_eq!(code, 2);
     assert!(err.contains("cannot represent"), "got: {err}");
-    assert!(err.contains("yaml") && err.contains("toml"), "got: {err}");
+    assert!(err.contains("json") && err.contains("yaml"), "got: {err}");
+    assert!(
+        !err.contains("toml") && !err.contains("kdl"),
+        "top-level array: {err}"
+    );
+    // The target format that failed is never suggested back.
+    let (_o, err2, _c) = run(&["-t", "toml", "-T", "toml", ".xs"], "xs = [1, 2]\n");
+    assert!(
+        !err2.contains("-T toml"),
+        "must not suggest the failed format: {err2}"
+    );
 }
 
 #[test]
@@ -940,10 +952,16 @@ fn frontmatter_query_and_edit() {
     assert_eq!(c2, 0);
     assert!(json.contains("\"title\": \"Hello\""), "got: {json}");
 
-    // Converting *to* frontmatter is rejected: it is an input lens.
+    // Converting *to* frontmatter is rejected early with ONE clean message -
+    // no double-wrap, no jargon, no contradictory "try" clauses (review fix H).
     let (_o, err, c3) = run(&["-t", "yaml", "-T", "markdown", "."], "a: 1\n");
     assert_eq!(c3, 2);
-    assert!(err.contains("input lens"), "got: {err}");
+    assert!(err.contains("read-only view"), "got: {err}");
+    assert!(
+        !err.contains("cannot represent"),
+        "must not double-wrap: {err}"
+    );
+    assert!(!err.contains("lens"), "no internal jargon: {err}");
 
     // No frontmatter present is a clear error.
     let (_o, err2, c4) = run(&["-t", "markdown", ".x"], "# just a heading\n");
@@ -1039,4 +1057,108 @@ fn yaml_multidoc_query_and_edit() {
         e1.contains("replicas: 9") && e1.contains("port: 80"),
         "got: {e1}"
     );
+}
+
+// --- Regression tests for the edikt-049 pre-release review findings. Each
+//     asserts the corrected behavior of a defect the merciless-critic/UX review
+//     found; every one would have failed before its fix. ------------------------
+
+#[test]
+fn review_fix_docselect_edit_works_on_any_format() {
+    // Finding B: `^d0` edit was broken on non-YAML formats with a misleading
+    // "expected an assignment" error. `^d0` names the only document.
+    let (out, _e, c) = run(&["-t", "jsonc", "^d0 | .a = 2"], "{\"a\":1}");
+    assert_eq!(c, 0);
+    assert_eq!(out, "{\"a\":2}");
+    // Out of range on a single-document input errors clearly.
+    let (_o, err, c2) = run(&["-t", "jsonc", "^d1 | .a = 2"], "{\"a\":1}");
+    assert_eq!(c2, 2);
+    assert!(err.contains("out of range"), "got: {err}");
+    // PEP 723 (TOML-backed frontmatter) edit via ^d0 works too.
+    let py = "# /// script\n# a = 1\n# ///\nx = 2\n";
+    let (o3, _e, c3) = run(&["-t", "frontmatter", "^d0 | .a = 9"], py);
+    assert_eq!(c3, 0);
+    assert!(o3.contains("# a = 9"), "got: {o3}");
+}
+
+#[test]
+fn review_fix_docselect_query_out_of_range_errors() {
+    // Finding E: an out-of-range `^dN` read was a silent empty; now it errors
+    // like the edit does (an explicit selector is strict).
+    let stream = "---\nk: 1\n---\nk: 2\n";
+    let (_o, err, c) = run(&["-t", "yaml", "^d5.k"], stream);
+    assert_eq!(c, 2);
+    assert!(err.contains("out of range"), "got: {err}");
+}
+
+#[test]
+fn review_fix_query_fallback_is_scoped_to_top_level_arrays() {
+    // Finding D: the JSON fallback swallowed genuine value-fidelity errors. A
+    // top-level array still falls back to JSON...
+    let (out, _e, c) = run(&["-t", "toml", ".xs"], "xs = [1, 2, 3]\n");
+    assert_eq!(c, 0);
+    assert!(
+        out.contains('[') && out.contains('3'),
+        "array as json: {out}"
+    );
+    // ...but an object that can't be represented for a *value* reason (a null in
+    // TOML) is a real error, not silently rendered as JSON.
+    let (_o, err, c2) = run(&["-t", "toml", "{x: .a, y: null}"], "a = 1\n");
+    assert_eq!(c2, 2);
+    assert!(
+        err.contains("null"),
+        "null must error, not fall back: {err}"
+    );
+}
+
+#[test]
+fn review_fix_multidoc_comment_ops_touch_every_document() {
+    // Finding A: comment ops silently scoped to document 0. Now they map over
+    // every document.
+    let s = "---\nkind: A  # one\n---\nkind: B  # two\n";
+    // Query yields a comment per document.
+    let (q, _e, c) = run(&["-t", "yaml", ".kind.#.inline"], s);
+    assert_eq!(c, 0);
+    assert_eq!(q, "one\ntwo\n");
+    // Set applies to both.
+    let (set, _e, c2) = run(&["-t", "yaml", ".kind.#.inline = \"NOTE\""], s);
+    assert_eq!(c2, 0);
+    assert_eq!(set.matches("# NOTE").count(), 2, "got: {set}");
+    // del(comments) clears both.
+    let (del, _e, c3) = run(&["-t", "yaml", "del(comments)"], s);
+    assert_eq!(c3, 0);
+    assert!(!del.contains('#'), "all comments gone: {del}");
+}
+
+#[test]
+fn review_fix_docselect_and_select_with_comments_error_clearly() {
+    // Finding C: `^dN`/`select` combined with a comment edit gave a misleading
+    // "use a comment path" error even when the user used one. Now it names the
+    // real limitation.
+    let s = "---\nkind: A  # one\n---\nkind: B  # two\n";
+    let (_o, e1, c1) = run(&["-t", "yaml", "^d1 | .kind.# = \"x\""], s);
+    assert_eq!(c1, 2);
+    assert!(e1.contains("^dN") && e1.contains("comment"), "got: {e1}");
+    let (_o, e2, c2) = run(
+        &["-t", "yaml", "select(.kind == \"A\") | .kind.# = \"x\""],
+        s,
+    );
+    assert_eq!(c2, 2);
+    assert!(e2.contains("select") && e2.contains("comment"), "got: {e2}");
+}
+
+#[test]
+fn review_fix_select_skips_and_warns_on_predicate_error() {
+    // Finding G: `select` aborted the whole edit if the predicate type-errored
+    // on one document. Now it skips that document (with a warning) and edits the
+    // ones that match.
+    let s = "---\nkind: Deployment\n---\njustascalar\n";
+    let (out, err, c) = run(
+        &["-t", "yaml", "select(.kind == \"Deployment\") | .x = 1"],
+        s,
+    );
+    assert_eq!(c, 0);
+    assert!(out.contains("x: 1"), "matching doc edited: {out}");
+    assert!(out.contains("justascalar"), "scalar doc preserved: {out}");
+    assert!(err.contains("skipped document"), "warns on skip: {err}");
 }
