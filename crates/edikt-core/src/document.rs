@@ -55,6 +55,15 @@ pub trait Document {
         Vec::new()
     }
 
+    /// The name of the format a query should default its output to, when this
+    /// document's own format isn't itself emittable. A lens (frontmatter) is not
+    /// an output format, so a query over it renders in the underlying block's
+    /// format (`"yaml"`/`"toml"`/`"json"`) instead. `None` (the default) means
+    /// "my own format is the natural output" - the ordinary case.
+    fn inner_format(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Set the `kind` comment on the node at `path` to `text` (raw, unwrapped),
     /// format-preserving: only that comment's bytes change, or one comment line
     /// is inserted. Multi-line head/foot text is wrapped to the document's

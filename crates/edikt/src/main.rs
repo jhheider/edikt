@@ -451,8 +451,11 @@ fn run(args: Args) -> Result<ExitCode> {
         }
 
         // Query / conversion (one unified mode: output format = explicit or
-        // input-preserved).
-        let target = explicit_out.unwrap_or(in_fmt);
+        // input-preserved). A lens (frontmatter) is not itself emittable, so an
+        // un-directed query over it renders in the block's own format.
+        let target = explicit_out
+            .or_else(|| doc.inner_format().and_then(|n| format_from_name(n).ok()))
+            .unwrap_or(in_fmt);
         // A comment query (`.foo.#`) resolves against the commented projection;
         // everything else over the value model.
         let results = if expr.has_comment() {
