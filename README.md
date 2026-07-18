@@ -52,8 +52,10 @@ file (or `-t markdown`), edikt operates on the leading metadata block - YAML
 (`---`), TOML (`+++`), tagged (`---json`), or Hugo bare-brace JSON - and leaves
 the document body byte-for-byte opaque. `edikt '.title' post.md` queries it;
 `edikt -i '.draft = false' post.md` rewrites one key with everything else, prose
-included, intact. (Commented host-language frontmatter - PEP 723 `# /// script`,
-uv, scriptbox - is a planned follow-up.)
+included, intact. It also reads **commented host-language blocks** - PEP 723
+`# /// script` ... `# ///` in a Python file (uv) or shell script (scriptbox):
+`edikt -t frontmatter -i '.["requires-python"] = ">=3.12"' app.py` bumps the pin
+and re-applies the `# ` prefix, the code below untouched.
 
 ## Install
 
