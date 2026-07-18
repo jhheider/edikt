@@ -45,18 +45,27 @@ pub struct ParseError {
     pub msg: String,
 }
 
-/// A parsed YAML document: the original source plus its span tree.
+/// A parsed YAML stream: the original source plus one span tree per document.
+/// A single-document stream (the common case) has one entry in `docs`; a
+/// `---`-separated stream has one per document.
 pub struct Yaml {
     pub(crate) source: String,
-    pub(crate) doc: Node,
+    pub(crate) docs: Vec<Node>,
 }
 
-/// Parse YAML `src` into a [`Yaml`] document.
+/// Parse YAML `src` into a [`Yaml`] stream.
 pub fn parse(src: &str) -> Result<Yaml, ParseError> {
-    let doc = compose::compose_source(src).map_err(|msg| ParseError { msg })?;
+    let mut docs = compose::compose_all(src)
+        .map_err(|msg| ParseError { msg })?
+        .into_vec();
+    // An empty or comment-only stream is one null document, so every caller has
+    // at least one document to project or edit.
+    if docs.is_empty() {
+        docs.push(compose::null_node());
+    }
     Ok(Yaml {
         source: src.to_string(),
-        doc,
+        docs,
     })
 }
 
@@ -65,7 +74,17 @@ impl Document for Yaml {
         self.source.clone()
     }
     fn to_value(&self) -> Value {
-        node_to_value(&self.doc)
+        match self.docs.first() {
+            Some(d) => node_to_value(d),
+            None => Value::Null,
+        }
+    }
+    fn to_values(&self) -> Vec<Value> {
+        if self.docs.is_empty() {
+            vec![Value::Null]
+        } else {
+            self.docs.iter().map(node_to_value).collect()
+        }
     }
     fn features(&self) -> &'static [Feature] {
         FEATURES
@@ -82,7 +101,10 @@ impl Document for Yaml {
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
-        Some(comments::to_commented(&self.source, &self.doc))
+        // Comment queries target the first document; multi-doc comment
+        // addressing is a follow-up. An empty stream has no comments.
+        let node = self.docs.first()?;
+        Some(comments::to_commented(&self.source, node))
     }
     fn set_comment(
         &mut self,
@@ -90,8 +112,11 @@ impl Document for Yaml {
         kind: edikt_core::CommentKind,
         text: &str,
     ) -> Result<Vec<String>, EditError> {
-        let (source, warnings) =
-            comments::set_node_comment(&self.source, &self.doc, path, kind, text)?;
+        let node = self
+            .docs
+            .first()
+            .ok_or_else(|| EditError::new("no document to annotate"))?;
+        let (source, warnings) = comments::set_node_comment(&self.source, node, path, kind, text)?;
         *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
         Ok(warnings)
     }
@@ -100,12 +125,20 @@ impl Document for Yaml {
         path: &[edikt_core::Step],
         kind: edikt_core::CommentKind,
     ) -> Result<(), EditError> {
-        let source = comments::delete_node_comment(&self.source, &self.doc, path, kind)?;
+        let Some(node) = self.docs.first() else {
+            return Ok(());
+        };
+        let source = comments::delete_node_comment(&self.source, node, path, kind)?;
         *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
         Ok(())
     }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
-        edit::source_slices(&self.source, &self.doc, path)
+        // One document's slices after another, in stream order, so the result
+        // aligns 1:1 with a per-document query (`to_values`).
+        self.docs
+            .iter()
+            .flat_map(|node| edit::source_slices(&self.source, node, path))
+            .collect()
     }
 }
 
@@ -132,6 +165,106 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    /// Query mapped over every document, concatenated (as the CLI does).
+    fn qall(src: &str, expr: &str) -> Vec<Value> {
+        let e = parse_expr(expr).unwrap();
+        parse(src)
+            .unwrap()
+            .to_values()
+            .iter()
+            .flat_map(|v| eval(&e, v).unwrap())
+            .collect()
+    }
+
+    const STREAM: &str =
+        "---\nkind: Deployment\nspec:\n  replicas: 2\n---\nkind: Service\nspec:\n  port: 80\n";
+
+    #[test]
+    fn multidoc_round_trip_is_identity() {
+        // A no-op edit (delete a missing key) leaves every document byte-identical.
+        assert_eq!(edit(STREAM, "del(.nope)"), STREAM);
+        // And a stream with comments/framing survives too.
+        let s = "# head\n---\nkind: A   # x\nn: 1\n---\nkind: B\n...\n";
+        assert_eq!(edit(s, "del(.nope)"), s);
+    }
+
+    #[test]
+    fn multidoc_query_yields_one_result_per_document() {
+        assert_eq!(
+            qall(STREAM, ".kind"),
+            vec![
+                Value::Str("Deployment".into()),
+                Value::Str("Service".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn multidoc_edit_maps_over_all_documents() {
+        // `.spec` exists in both, so the key is set/created in both (the brief's
+        // "label them all" semantics).
+        let out = edit(STREAM, ".spec.replicas = 5");
+        assert_eq!(
+            out,
+            "---\nkind: Deployment\nspec:\n  replicas: 5\n---\nkind: Service\nspec:\n  port: 80\n  replicas: 5\n"
+        );
+    }
+
+    #[test]
+    fn multidoc_edit_skips_documents_without_the_parent() {
+        // Doc B has no `.meta`, so it is a no-op there; doc A is edited.
+        let s = "---\nkind: A\nmeta:\n  name: foo\n---\nkind: B\n";
+        assert_eq!(
+            edit(s, r#".meta.name = "bar""#),
+            "---\nkind: A\nmeta:\n  name: bar\n---\nkind: B\n"
+        );
+    }
+
+    #[test]
+    fn multidoc_select_targets_by_content() {
+        // Only the Service document is edited.
+        let out = edit(STREAM, r#"select(.kind == "Service") | .spec.port = 443"#);
+        assert_eq!(
+            out,
+            "---\nkind: Deployment\nspec:\n  replicas: 2\n---\nkind: Service\nspec:\n  port: 443\n"
+        );
+        // A non-matching predicate touches nothing.
+        assert_eq!(
+            edit(STREAM, r#"select(.kind == "Ingress") | .x = 1"#),
+            STREAM
+        );
+    }
+
+    #[test]
+    fn multidoc_del_maps_over_documents() {
+        // `kind` exists in both; del removes it from each.
+        let out = edit(STREAM, "del(.kind)");
+        assert_eq!(out, "---\nspec:\n  replicas: 2\n---\nspec:\n  port: 80\n");
+    }
+
+    #[test]
+    fn anchors_do_not_cross_document_boundaries() {
+        // `*x` in doc 2 references an anchor defined only in doc 1. Anchor scope
+        // is per-document, so it does not resolve to 1 - it composes to null
+        // (each document gets a fresh anchor scope). If scopes leaked, `.b`
+        // would be 1.
+        assert_eq!(qall("---\na: &x 1\n---\nb: *x\n", ".b"), vec![Value::Null]);
+        // Within a document, aliases still resolve normally.
+        let s = "---\nx: &a 1\ny: *a\n---\nz: &b two\nw: *b\n";
+        assert_eq!(qall(s, ".y"), vec![Value::Int(1)]);
+        assert_eq!(qall(s, ".w"), vec![Value::Str("two".into())]);
+    }
+
+    #[test]
+    fn single_document_behavior_is_unchanged() {
+        // No `---`: strict single-doc semantics - a missing path still errors.
+        let mut doc = parse("a: 1\n").unwrap();
+        assert!(
+            doc.apply(&parse_expr(".missing.deep = 2").unwrap())
+                .is_err()
+        );
     }
 
     #[test]

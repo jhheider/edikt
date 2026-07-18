@@ -12,7 +12,7 @@
 //! mapping. Restructuring a block in place (replacing a mapping/sequence wholesale,
 //! or creating nested keys) is refused rather than reflowed.
 
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, render_path};
+use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, render_path};
 use std::ops::Range;
 
 use crate::Yaml;
@@ -20,35 +20,77 @@ use crate::compose::{Node, NodeKind, node_to_value};
 use crate::scalar::{emit_key, emit_scalar_inline};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
+///
+/// A multi-document stream (`---`-separated) maps the edit over **every**
+/// document by default. A leading `select(pred)` narrows it to the documents
+/// whose value satisfies `pred` - so `select(.kind == "Service") | .spec.x = 1`
+/// edits only the Service documents. A single-document stream (the common case)
+/// behaves exactly as before.
 pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
+    let n = doc.docs.len();
+
+    // A leading `select(pred)` picks documents by content; the rest is the edit.
+    if let Some((pred, inner)) = peel_select(expr) {
+        for idx in 0..n {
+            let val = doc.doc_value(idx);
+            if doc_matches(pred, &val)? {
+                apply_one(doc, idx, &inner, Strictness::Lenient)?;
+            }
+        }
+        return Ok(());
+    }
+
+    // No selector: single doc keeps the strict, prior behavior (a missing path
+    // errors, a new leaf key is created); across many docs, apply to each with a
+    // missing path treated as a per-document no-op.
+    if n <= 1 {
+        apply_one(doc, 0, expr, Strictness::Strict)
+    } else {
+        for idx in 0..n {
+            apply_one(doc, idx, expr, Strictness::Lenient)?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether a path that doesn't resolve is an error (`Strict`, single-doc/named)
+/// or a silent no-op (`Lenient`, one of many mapped documents).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Strictness {
+    Strict,
+    Lenient,
+}
+
+/// Apply one edit program to document `idx` in isolation.
+fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Result<(), EditError> {
     match expr {
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
-            let value = eval_one(rhs, &doc.to_value())?;
-            doc.set(steps, &value)
+            let value = eval_one(rhs, &doc.doc_value(idx))?;
+            doc.set(idx, steps, &value, strict)
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new(format!("path not found: {}", render_path(steps))))?;
+            let Some(current) = doc.value_at(idx, steps) else {
+                return miss(strict, steps);
+            };
             let value = eval_one(rhs, &current)?;
-            doc.set(steps, &value)
+            doc.set(idx, steps, &value, strict)
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new(format!("path not found: {}", render_path(steps))))?;
-            let addend = eval_one(rhs, &doc.to_value())?;
+            let Some(current) = doc.value_at(idx, steps) else {
+                return miss(strict, steps);
+            };
+            let addend = eval_one(rhs, &doc.doc_value(idx))?;
             match (&current, &addend) {
-                (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
-                _ => doc.set(steps, &add_values(&current, &addend)?),
+                (Value::Array(_), Value::Array(items)) => doc.append(idx, steps, items, strict),
+                _ => doc.set(idx, steps, &add_values(&current, &addend)?, strict),
             }
         }
         Expr::Pipe(a, b) => {
-            apply(doc, a)?;
-            apply(doc, b)
+            apply_one(doc, idx, a, strict)?;
+            apply_one(doc, idx, b, strict)
         }
         Expr::Call(name, args) if name == "del" => {
             if args.len() != 1 {
@@ -57,12 +99,50 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
             let steps = args[0]
                 .as_path()
                 .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            doc.delete(steps)
+            doc.delete(idx, steps)
         }
         _ => Err(EditError::new(
             "expected an assignment (`path = value`, `path |= expr`) or `del(path)`",
         )),
     }
+}
+
+/// A path that didn't resolve: an error when strict, a no-op when lenient.
+fn miss(strict: Strictness, steps: &[Step]) -> Result<(), EditError> {
+    match strict {
+        Strictness::Strict => Err(EditError::new(format!(
+            "path not found: {}",
+            render_path(steps)
+        ))),
+        Strictness::Lenient => Ok(()),
+    }
+}
+
+/// If `expr` is a pipe whose leftmost stage is `select(pred)`, return that
+/// predicate and the edit expression with the select removed. Handles a
+/// left-associated chain (`select(p) | .a = 1 | .b = 2`).
+fn peel_select(expr: &Expr) -> Option<(&Expr, Expr)> {
+    let Expr::Pipe(left, right) = expr else {
+        return None;
+    };
+    match left.as_ref() {
+        Expr::Call(name, args) if name == "select" && args.len() == 1 => {
+            Some((&args[0], (**right).clone()))
+        }
+        Expr::Pipe(..) => {
+            let (pred, rest) = peel_select(left)?;
+            Some((pred, Expr::Pipe(Box::new(rest), right.clone())))
+        }
+        _ => None,
+    }
+}
+
+/// Does document value `val` satisfy `pred`? Reuses the `select` filter: a
+/// document matches when `select(pred)` keeps it.
+fn doc_matches(pred: &Expr, val: &Value) -> Result<bool, EditError> {
+    let filter = Expr::Call("select".into(), vec![pred.clone()]);
+    let kept = eval(&filter, val).map_err(|e| EditError::new(e.to_string()))?;
+    Ok(!kept.is_empty())
 }
 
 fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
@@ -136,17 +216,36 @@ fn normalize_index(i: i64, len: usize) -> Option<usize> {
 }
 
 impl Yaml {
-    /// The value at `path`, if it resolves (used for `|=` and `+=`).
-    pub(crate) fn value_at(&self, path: &[Step]) -> Option<Value> {
-        match resolve(&self.doc, path) {
+    /// The root node of document `idx`.
+    fn root(&self, idx: usize) -> &Node {
+        &self.docs[idx]
+    }
+
+    /// The value of document `idx` (for evaluating an edit's RHS/predicate
+    /// against that document).
+    pub(crate) fn doc_value(&self, idx: usize) -> Value {
+        node_to_value(self.root(idx))
+    }
+
+    /// The value at `path` within document `idx`, if it resolves (`|=`/`+=`).
+    pub(crate) fn value_at(&self, idx: usize, path: &[Step]) -> Option<Value> {
+        match resolve(self.root(idx), path) {
             Resolved::Found(node) => Some(node_to_value(node)),
             _ => None,
         }
     }
 
-    /// Set the scalar at `path`, or create it as a new leaf key.
-    pub(crate) fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        let (range, text) = match resolve(&self.doc, path) {
+    /// Set the scalar at `path` in document `idx`, or create it as a new leaf
+    /// key. A path that doesn't resolve is an error when strict, a no-op when
+    /// lenient (one of many mapped documents).
+    pub(crate) fn set(
+        &mut self,
+        idx: usize,
+        path: &[Step],
+        value: &Value,
+        strict: Strictness,
+    ) -> Result<(), EditError> {
+        let (range, text) = match resolve(self.root(idx), path) {
             Resolved::Found(node) => match &node.kind {
                 NodeKind::Scalar(_) => {
                     // A multi-line scalar (block `|`/`>`, or a wrapped quoted
@@ -168,19 +267,20 @@ impl Yaml {
                 }
             },
             Resolved::MissingField { parent, key } => new_key(&self.source, parent, &key, value)?,
-            Resolved::NotFound => {
-                return Err(EditError::new(format!(
-                    "path not found: {}",
-                    render_path(path)
-                )));
-            }
+            Resolved::NotFound => return miss(strict, path),
         };
         self.commit(range, &text)
     }
 
-    /// Append scalar `items` to the block sequence at `path` (`+=`).
-    pub(crate) fn append(&mut self, path: &[Step], items: &[Value]) -> Result<(), EditError> {
-        let (range, text) = match resolve(&self.doc, path) {
+    /// Append scalar `items` to the block sequence at `path` in document `idx`.
+    pub(crate) fn append(
+        &mut self,
+        idx: usize,
+        path: &[Step],
+        items: &[Value],
+        strict: Strictness,
+    ) -> Result<(), EditError> {
+        let (range, text) = match resolve(self.root(idx), path) {
             Resolved::Found(node) => match &node.kind {
                 NodeKind::Sequence(seq) => append_items(&self.source, node, seq, items)?,
                 _ => {
@@ -190,24 +290,19 @@ impl Yaml {
                     )));
                 }
             },
-            _ => {
-                return Err(EditError::new(format!(
-                    "path not found: {}",
-                    render_path(path)
-                )));
-            }
+            _ => return miss(strict, path),
         };
         self.commit(range, &text)
     }
 
-    /// Delete the mapping entry or sequence item at `path`.
-    pub(crate) fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+    /// Delete the mapping entry or sequence item at `path` in document `idx`.
+    pub(crate) fn delete(&mut self, idx: usize, path: &[Step]) -> Result<(), EditError> {
         let Some((last, parent_path)) = path.split_last() else {
             return Err(EditError::new("cannot delete the whole document"));
         };
         // jq semantics (and the other formats): deleting a missing key, an
         // out-of-range index, or through an absent parent is a **no-op**.
-        let Resolved::Found(parent) = resolve(&self.doc, parent_path) else {
+        let Resolved::Found(parent) = resolve(self.root(idx), parent_path) else {
             return Ok(());
         };
         let range = match (last, &parent.kind) {
@@ -231,15 +326,21 @@ impl Yaml {
         self.commit(range, "")
     }
 
-    /// Replace `range` with `text`, then recompose. Atomic: if the result no
-    /// longer parses, nothing changes and the error surfaces.
+    /// Replace `range` with `text`, then recompose every document. Atomic: if
+    /// the result no longer parses, nothing changes and the error surfaces.
+    /// Recomposing the whole stream keeps later documents' byte marks correct
+    /// after an edit shifts offsets.
     fn commit(&mut self, range: Range<usize>, text: &str) -> Result<(), EditError> {
         let mut new_source = self.source.clone();
         new_source.replace_range(range, text);
-        let doc = crate::compose::compose_source(&new_source)
-            .map_err(|e| EditError::new(format!("edit produced invalid YAML: {e}")))?;
+        let mut docs = crate::compose::compose_all(&new_source)
+            .map_err(|e| EditError::new(format!("edit produced invalid YAML: {e}")))?
+            .into_vec();
+        if docs.is_empty() {
+            docs.push(crate::compose::null_node());
+        }
         self.source = new_source;
-        self.doc = doc;
+        self.docs = docs;
         Ok(())
     }
 }
