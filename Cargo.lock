@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-env"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "edikt-core",
  "edikt-syntax",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-ini"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "edikt-core",
  "edikt-syntax",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-jsonc"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "edikt-core",
  "edikt-syntax",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-kdl"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "edikt-core",
  "kdl",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-toml"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "edikt-core",
  "thiserror",
