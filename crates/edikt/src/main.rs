@@ -466,11 +466,19 @@ fn run(args: Args) -> Result<ExitCode> {
         } else {
             // Evaluate against each top-level document and concatenate, so a
             // query over a multi-document YAML stream yields one result per
-            // document (single-document formats have exactly one). Source slices
-            // below are gathered in the same per-document order, staying aligned.
+            // document (single-document formats have exactly one). A leading
+            // `^dN` selects a single document by position; source slices below
+            // are gathered in the same per-document order, staying aligned.
+            let values = doc.to_values();
+            let (selected, body): (Vec<edikt_core::Value>, &edikt_core::Expr) = match &expr {
+                edikt_core::Expr::DocSelect(idx, body) => {
+                    (values.into_iter().nth(*idx).into_iter().collect(), body)
+                }
+                _ => (values, &expr),
+            };
             let mut out = Vec::new();
-            for value in doc.to_values() {
-                out.extend(edikt_core::eval(&expr, &value).with_context(|| loc.clone())?);
+            for value in selected {
+                out.extend(edikt_core::eval(body, &value).with_context(|| loc.clone())?);
             }
             out
         };

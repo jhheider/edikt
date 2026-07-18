@@ -268,6 +268,89 @@ mod tests {
     }
 
     #[test]
+    fn multidoc_positional_select_edits_one_document() {
+        // `^d1` edits only the second document.
+        assert_eq!(
+            edit(STREAM, "^d1 | .spec.port = 9090"),
+            "---\nkind: Deployment\nspec:\n  replicas: 2\n---\nkind: Service\nspec:\n  port: 9090\n"
+        );
+        // `^d0` edits only the first.
+        assert_eq!(
+            edit(STREAM, "^d0.spec.replicas = 9"),
+            "---\nkind: Deployment\nspec:\n  replicas: 9\n---\nkind: Service\nspec:\n  port: 80\n"
+        );
+    }
+
+    #[test]
+    fn multidoc_positional_select_is_strict() {
+        // A named document is strict: a missing path errors (you asked for that
+        // document specifically), unlike the lenient map-over-all default.
+        let mut doc = parse(STREAM).unwrap();
+        assert!(
+            doc.apply(&parse_expr("^d1 | .no.such = 1").unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn multidoc_positional_out_of_range_errors() {
+        let mut doc = parse(STREAM).unwrap();
+        let e = doc
+            .apply(&parse_expr("^d5 | .x = 1").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("out of range"), "{e}");
+    }
+
+    #[test]
+    fn multidoc_update_add_assign_noop_on_missing_path() {
+        // `|=` and `+=` are no-ops on documents lacking the path (lenient), not
+        // errors, across a multi-document stream.
+        let s = "---\nreplicas: 2\n---\nkind: Service\n";
+        assert_eq!(
+            edit(s, ".replicas |= . + 1"),
+            "---\nreplicas: 3\n---\nkind: Service\n"
+        );
+        let s2 = "---\nxs:\n  - 1\n---\nkind: Service\n";
+        assert_eq!(
+            edit(s2, ".xs += [2]"),
+            "---\nxs:\n  - 1\n  - 2\n---\nkind: Service\n"
+        );
+    }
+
+    #[test]
+    fn multidoc_select_chained_edits() {
+        // A left-associated pipe chain after `select` applies every stage to the
+        // matching documents only.
+        let s =
+            "---\nkind: Service\nspec:\n  a: 1\n  b: 1\n---\nkind: Pod\nspec:\n  a: 1\n  b: 1\n";
+        let out = edit(
+            s,
+            r#"select(.kind == "Service") | .spec.a = 9 | .spec.b = 8"#,
+        );
+        assert_eq!(
+            out,
+            "---\nkind: Service\nspec:\n  a: 9\n  b: 8\n---\nkind: Pod\nspec:\n  a: 1\n  b: 1\n"
+        );
+    }
+
+    #[test]
+    fn multidoc_update_and_add_assign_map_over_docs() {
+        // `|=` bumps replicas in the doc that has it; `+=` appends to the
+        // sequence in the doc that has it. Both no-op where absent.
+        let s = "---\nreplicas: 2\n---\nreplicas: 5\n";
+        assert_eq!(
+            edit(s, ".replicas |= . + 1"),
+            "---\nreplicas: 3\n---\nreplicas: 6\n"
+        );
+        let s2 = "---\nxs:\n  - 1\n---\nys:\n  - 9\n";
+        assert_eq!(
+            edit(s2, ".xs += [2]"),
+            "---\nxs:\n  - 1\n  - 2\n---\nys:\n  - 9\n"
+        );
+    }
+
+    #[test]
     fn comment_mutation_block_yaml() {
         // Head above a mapping entry.
         assert_eq!(

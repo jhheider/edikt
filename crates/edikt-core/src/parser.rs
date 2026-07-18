@@ -28,7 +28,7 @@ struct Tok {
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     let toks = lex(src)?;
     let mut p = Parser { toks, pos: 0 };
-    let e = p.parse_pipe()?;
+    let e = p.parse_program()?;
     if p.pos != p.toks.len() {
         let t = &p.toks[p.pos];
         return Err(ParseError {
@@ -100,6 +100,41 @@ impl Parser {
         } else {
             Err(self.err_here(format!("expected {what}")))
         }
+    }
+
+    /// A whole program: an optional leading `^dN` document selector (for
+    /// multi-document YAML streams), then the expression it scopes.
+    fn parse_program(&mut self) -> Result<Expr, ParseError> {
+        if self.peek() != Some(Lx::Caret) {
+            return self.parse_pipe();
+        }
+        self.pos += 1; // `^`
+        let n = match self.peek() {
+            Some(Lx::Ident) => {
+                let digits = self.text().strip_prefix('d').ok_or_else(|| {
+                    self.err_here("document selector is `^dN`, e.g. `^d0` (document 0)")
+                })?;
+                let n = digits.parse::<usize>().map_err(|_| {
+                    self.err_here("`^dN` needs a document index, e.g. `^d0` (document 0)")
+                })?;
+                self.pos += 1;
+                n
+            }
+            _ => {
+                return Err(self.err_here("expected a document index after `^`, e.g. `^d0`"));
+            }
+        };
+        // `^dN | body` and `^dN.body` both scope `body` to the document; a bare
+        // `^dN` selects the whole document (identity body).
+        if self.peek() == Some(Lx::Pipe) {
+            self.pos += 1;
+        }
+        let body = if self.peek().is_none() {
+            Expr::Path(Vec::new())
+        } else {
+            self.parse_pipe()?
+        };
+        Ok(Expr::DocSelect(n, Box::new(body)))
     }
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
@@ -527,6 +562,29 @@ mod tests {
     #[test]
     fn identity() {
         assert_eq!(p("."), Expr::Path(vec![]));
+    }
+
+    #[test]
+    fn doc_select_parses() {
+        // `^dN | body`, `^dN.body`, and a bare `^dN` (identity body).
+        assert_eq!(
+            p("^d0 | .kind"),
+            Expr::DocSelect(0, Box::new(Expr::Path(vec![Step::Field("kind".into())])))
+        );
+        assert_eq!(
+            p("^d2.spec"),
+            Expr::DocSelect(2, Box::new(Expr::Path(vec![Step::Field("spec".into())])))
+        );
+        assert_eq!(p("^d1"), Expr::DocSelect(1, Box::new(Expr::Path(vec![]))));
+        // It scopes an assignment, and reports as a mutation.
+        assert!(p("^d0 | .replicas = 3").is_mutation());
+    }
+
+    #[test]
+    fn doc_select_bad_index_errors() {
+        assert!(parse("^dfoo | .x").is_err());
+        assert!(parse("^x").is_err());
+        assert!(parse("^ | .x").is_err());
     }
 
     #[test]

@@ -200,6 +200,11 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
             }
             Ok(out)
         }
+        // `^dN` addresses documents, an axis the value evaluator has no notion
+        // of; the CLI/format dispatch selects the document and evaluates the
+        // body. Reached only when a `^dN` expression is evaluated against a
+        // lone value (e.g. a non-YAML input), where the body simply applies.
+        Expr::DocSelect(_, body) => eval(body, input),
     }
 }
 
