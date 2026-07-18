@@ -17,7 +17,7 @@ jobs:
       tag: ${{ github.event.inputs.tag }}
       gen-docs: true
       publish-crates: true
-      crates: "edikt-core edikt-syntax edikt-jsonc edikt-ini edikt-env edikt-toml edikt-yaml edikt-kdl edikt"
+      crates: edikt-core edikt-syntax edikt-jsonc edikt-ini edikt-env edikt-toml edikt-yaml edikt-kdl edikt-frontmatter edikt
       tap-repo: jhheider/homebrew-tap
       tap-formula: Formula/edikt.rb
       targets: |

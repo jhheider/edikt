@@ -1,0 +1,16 @@
+[package]
+name = "edikt-frontmatter"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "edikt frontmatter lens: losslessly edit the metadata block of a Markdown file, body untouched."
+readme = { workspace = true }
+
+[dependencies]
+edikt-core = { workspace = true }
+edikt-jsonc = { workspace = true }
+edikt-toml = { workspace = true }
+edikt-yaml = { workspace = true }
+thiserror = { workspace = true }

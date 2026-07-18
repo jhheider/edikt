@@ -1,6 +1,6 @@
 [package]
 name = "edikt"
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -16,6 +16,7 @@ edikt-env = { workspace = true }
 edikt-toml = { workspace = true }
 edikt-yaml = { workspace = true }
 edikt-kdl = { workspace = true }
+edikt-frontmatter = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }

@@ -35,6 +35,10 @@ edikt -f release.edk -i config.jsonc
 
 # convert, where feasible - comments carried across, in the target's syntax
 edikt -T yaml tsconfig.jsonc
+
+# frontmatter - edit the metadata block of a Markdown file, body untouched
+edikt '.status' post.md
+edikt -i '.status = "Shipped"' post.md
 ```
 
 **What it does:** edits commented, hand-formatted config - `settings.json`,
@@ -42,6 +46,14 @@ edikt -T yaml tsconfig.jsonc
 back a file that is byte-identical except for the one value you changed.
 Comments, trailing commas, indentation, and quoting all survive. Query it like
 jq; convert between formats with `-T`.
+
+It also edits **Markdown frontmatter**: for a `.md`/`.markdown`/`.mdx`/`.qmd`
+file (or `-t markdown`), edikt operates on the leading metadata block - YAML
+(`---`), TOML (`+++`), tagged (`---json`), or Hugo bare-brace JSON - and leaves
+the document body byte-for-byte opaque. `edikt '.title' post.md` queries it;
+`edikt -i '.draft = false' post.md` rewrites one key with everything else, prose
+included, intact. (Commented host-language frontmatter - PEP 723 `# /// script`,
+uv, scriptbox - is a planned follow-up.)
 
 ## Install
 
@@ -103,7 +115,8 @@ single-format, reach for the specialist; if it's "the same surgical edit, across
 all of these," that's the gap this fills.
 
 Status: **v0.2.0** - seven formats with lossless in-place edit, query, and
-conversion (comments carried across), on crates.io, Homebrew, and pkgx. See
+conversion (comments carried across), plus a Markdown frontmatter lens over
+those formats, on crates.io, Homebrew, and pkgx. See
 [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## Scripting notes
