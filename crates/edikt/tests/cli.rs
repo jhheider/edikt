@@ -950,3 +950,28 @@ fn frontmatter_query_and_edit() {
     assert_eq!(c4, 2);
     assert!(err2.contains("no frontmatter block"), "got: {err2}");
 }
+
+#[test]
+fn frontmatter_commented_pep723() {
+    let py = "#!/usr/bin/env python\n# /// script\n# requires-python = \">=3.11\"\n# dependencies = [\"rich\"]\n# ///\nimport rich\n";
+
+    // Scalar query of a commented (PEP 723) block.
+    let (out, _e, c) = run(&["-t", "frontmatter", r#".["requires-python"]"#], py);
+    assert_eq!(c, 0);
+    assert_eq!(out, ">=3.11\n");
+
+    // Whole block renders in its native TOML (a query over a lens defaults to
+    // the block's own format, not "frontmatter").
+    let (blk, _e, c2) = run(&["-t", "frontmatter", "."], py);
+    assert_eq!(c2, 0);
+    assert!(blk.contains("requires-python = \">=3.11\""), "got: {blk}");
+
+    // A top-level array can't render as TOML - same error and -T hint as a
+    // plain .toml file - and -T json is the way through.
+    let (_o, err, c3) = run(&["-t", "frontmatter", ".dependencies"], py);
+    assert_eq!(c3, 2);
+    assert!(err.contains("TOML output requires a table"), "got: {err}");
+    let (arr, _e, c4) = run(&["-t", "frontmatter", "-T", "json", ".dependencies"], py);
+    assert_eq!(c4, 0);
+    assert!(arr.contains("rich"), "got: {arr}");
+}

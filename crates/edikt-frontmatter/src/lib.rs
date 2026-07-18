@@ -23,10 +23,11 @@
 //! - **Tagged** - `---yaml` / `---toml` / `---json` opening fence, closed by `---`.
 //! - **JSON (bare brace)** - a `{ ... }` object at byte 0 (Hugo); the closing
 //!   brace is found by string-aware matching.
-//!
-//! Commented host-language frontmatter (PEP 723 `# /// script`, scriptbox, uv)
-//! is a deliberate follow-up: its block is TOML only after stripping a per-line
-//! comment prefix, a different mechanism from fenced blocks.
+//! - **Commented (PEP 723)** - a `# /// name` ... `# ///` block in a
+//!   host-language file (Python for uv, shell for scriptbox), optionally after a
+//!   shebang. The block is TOML once each line's `# ` prefix is stripped; the
+//!   prefix is re-applied on serialize. v1 requires the canonical `# `/bare-`#`
+//!   prefix and the block at the head of the file.
 
 use edikt_core::{CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value};
 
@@ -63,16 +64,48 @@ enum Lang {
     Json,
 }
 
+impl Lang {
+    fn name(self) -> &'static str {
+        match self {
+            Lang::Yaml => "yaml",
+            Lang::Toml => "toml",
+            Lang::Json => "json",
+        }
+    }
+}
+
 /// A Markdown document viewed through its frontmatter block.
 pub struct Frontmatter {
     prefix: String,
     inner: Box<dyn Document>,
     suffix: String,
+    /// The block's own format - what a query renders in, since "frontmatter" is
+    /// a lens, not an emittable format.
+    inner_fmt: &'static str,
+    /// A commented host-language block (PEP 723 `# ///`): the inner engine sees
+    /// the block with its per-line `# ` prefix stripped, and [`Document::to_source`]
+    /// re-applies the prefix. `false` for fenced Markdown blocks.
+    commented: bool,
 }
 
 /// Parse `src` as a frontmatter-bearing document: split off the block, parse it
 /// with the matching engine, keep the rest opaque.
 pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
+    // A commented host-language block (`# /// name` ... `# ///`) is detected
+    // first, so a shebang-led script isn't mistaken for a fence-less document.
+    // Its inner is always TOML, once de-commented.
+    if let Some(c) = detect_commented(src)? {
+        let inner =
+            Box::new(edikt_toml::parse(&c.block).map_err(|e| ParseError::new(e.to_string()))?);
+        return Ok(Frontmatter {
+            prefix: c.prefix.to_string(),
+            inner,
+            suffix: c.suffix.to_string(),
+            inner_fmt: Lang::Toml.name(),
+            commented: true,
+        });
+    }
+
     let Split {
         prefix,
         block,
@@ -94,6 +127,8 @@ pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
         prefix: prefix.to_string(),
         inner,
         suffix: suffix.to_string(),
+        inner_fmt: lang.name(),
+        commented: false,
     })
 }
 
@@ -102,7 +137,14 @@ impl Document for Frontmatter {
         // The only non-delegating method: re-splice the edited (or untouched)
         // block between the opaque prefix and suffix. This is the whole moat -
         // the body's bytes are the `suffix` we captured verbatim at parse time.
-        format!("{}{}{}", self.prefix, self.inner.to_source(), self.suffix)
+        // A commented block is re-prefixed line by line first.
+        let body = self.inner.to_source();
+        let block = if self.commented {
+            recomment(&body)
+        } else {
+            body
+        };
+        format!("{}{}{}", self.prefix, block, self.suffix)
     }
     fn to_value(&self) -> Value {
         self.inner.to_value()
@@ -132,6 +174,9 @@ impl Document for Frontmatter {
     }
     fn delete_comment(&mut self, path: &[Step], kind: CommentKind) -> Result<(), EditError> {
         self.inner.delete_comment(path, kind)
+    }
+    fn inner_format(&self) -> Option<&'static str> {
+        Some(self.inner_fmt)
     }
 }
 
@@ -211,6 +256,109 @@ fn split(src: &str) -> Result<Split<'_>, ParseError> {
     Err(ParseError::new(format!(
         "unterminated frontmatter (opened with `{opener}`, no closing fence)"
     )))
+}
+
+/// A de-commented host-language block plus the opaque bytes around it.
+struct CommentedBlock<'a> {
+    prefix: &'a str,
+    /// The block with each line's `# ` / `#` prefix removed - clean TOML.
+    block: String,
+    suffix: &'a str,
+}
+
+/// Length of `line`'s trailing newline (`\r\n`, `\n`, or none).
+fn term_len(line: &str) -> usize {
+    if line.ends_with("\r\n") {
+        2
+    } else if line.ends_with('\n') {
+        1
+    } else {
+        0
+    }
+}
+
+/// Detect a commented host-language frontmatter block (PEP 723: `# /// name`
+/// ... `# ///`), optionally after a shebang. Returns `Ok(None)` when there is
+/// no such opener (so the caller falls through to fenced detection), and an
+/// error when an opener is found but the block is malformed or unterminated.
+///
+/// v1 requires the block at the head of the file (after an optional shebang)
+/// and the canonical `# ` / bare-`#` line prefix; irregular prefixes and
+/// mid-file blocks are a follow-up.
+fn detect_commented(src: &str) -> Result<Option<CommentedBlock<'_>>, ParseError> {
+    // Skip a shebang line, if any.
+    let opener_start = if src.starts_with("#!") {
+        src.find('\n').map(|i| i + 1).unwrap_or(src.len())
+    } else {
+        0
+    };
+    let opener_end = src[opener_start..]
+        .find('\n')
+        .map(|i| opener_start + i + 1)
+        .unwrap_or(src.len());
+    let opener = src[opener_start..opener_end].trim_end();
+    let Some(name) = opener.strip_prefix("# ///") else {
+        return Ok(None);
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        // `# ///` with no name is a closer, not an opener.
+        return Ok(None);
+    }
+
+    let mut offset = opener_end;
+    let mut block = String::new();
+    while offset < src.len() {
+        let line_end = src[offset..]
+            .find('\n')
+            .map(|i| offset + i + 1)
+            .unwrap_or(src.len());
+        let line = &src[offset..line_end];
+        let split_at = line.len() - term_len(line);
+        let (content, term) = (&line[..split_at], &line[split_at..]);
+        if content.trim_end() == "# ///" {
+            return Ok(Some(CommentedBlock {
+                prefix: &src[..opener_end],
+                block,
+                suffix: &src[offset..],
+            }));
+        }
+        // De-comment the body line: bare `#` is a blank line, `# x` yields `x`.
+        if content == "#" {
+            // blank line - contributes only its terminator
+        } else if let Some(payload) = content.strip_prefix("# ") {
+            block.push_str(payload);
+        } else {
+            return Err(ParseError::new(format!(
+                "malformed commented frontmatter: line is not `# ...` or `#`: `{content}`"
+            )));
+        }
+        block.push_str(term);
+        offset = line_end;
+    }
+    Err(ParseError::new(format!(
+        "unterminated commented frontmatter (opened with `# /// {name}`, no `# ///` close)"
+    )))
+}
+
+/// Re-apply the canonical comment prefix to each line of an edited block: a
+/// non-empty line becomes `# <line>`, an empty line becomes bare `#`. The
+/// inverse of the de-comment in [`detect_commented`], so an unedited block
+/// round-trips byte-for-byte.
+fn recomment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + s.len() / 4 + 8);
+    for line in s.split_inclusive('\n') {
+        let split_at = line.len() - term_len(line);
+        let (content, term) = (&line[..split_at], &line[split_at..]);
+        if content.is_empty() {
+            out.push('#');
+        } else {
+            out.push_str("# ");
+            out.push_str(content);
+        }
+        out.push_str(term);
+    }
+    out
 }
 
 /// Byte index of the `}` matching the `{` at `start`, honoring JSON strings and
@@ -390,6 +538,87 @@ mod tests {
             out,
             "---\nk: 2\n---\n\nBefore rule.\n\n---\n\nAfter rule.\n"
         );
+    }
+
+    const PEP723: &str = "#!/usr/bin/env -S uv run\n# /// script\n# requires-python = \">=3.11\"\n# dependencies = [\n#   \"requests\",\n# ]\n# ///\n\nimport requests\n";
+
+    #[test]
+    fn commented_round_trips_untouched() {
+        let doc = parse(PEP723).unwrap();
+        assert_eq!(doc.to_source(), PEP723, "de-comment/re-comment is identity");
+    }
+
+    #[test]
+    fn commented_queries_the_block() {
+        assert_eq!(
+            query(PEP723, r#".["requires-python"]"#),
+            vec![Value::Str(">=3.11".into())]
+        );
+    }
+
+    #[test]
+    fn commented_edits_reapply_prefix_body_survives() {
+        let out = src_of(PEP723, r#".["requires-python"] = ">=3.12""#);
+        assert!(
+            out.contains("# requires-python = \">=3.12\""),
+            "prefix re-applied: {out}"
+        );
+        // Shebang, the other block lines, and the Python body are all intact.
+        assert!(out.starts_with("#!/usr/bin/env -S uv run\n# /// script\n"));
+        assert!(out.ends_with("# ///\n\nimport requests\n"));
+        assert!(out.contains("#   \"requests\","), "array line kept: {out}");
+    }
+
+    #[test]
+    fn reports_inner_format() {
+        // A query renders in the block's own format, so the lens must name it.
+        assert_eq!(parse(YAML_DOC).unwrap().inner_format(), Some("yaml"));
+        assert_eq!(parse(PEP723).unwrap().inner_format(), Some("toml"));
+        assert_eq!(
+            parse("+++\nx = 1\n+++\n").unwrap().inner_format(),
+            Some("toml")
+        );
+        assert_eq!(
+            parse("---json\n{\"a\":1}\n---\n").unwrap().inner_format(),
+            Some("json")
+        );
+    }
+
+    #[test]
+    fn commented_without_shebang() {
+        let doc = "# /// script\n# x = 1\n# ///\nbody\n";
+        assert_eq!(
+            src_of(doc, ".x = 2"),
+            "# /// script\n# x = 2\n# ///\nbody\n"
+        );
+    }
+
+    #[test]
+    fn commented_blank_line_round_trips() {
+        // A bare `#` blank line inside the block survives an edit elsewhere.
+        let doc = "# /// script\n# a = 1\n#\n# b = 2\n# ///\n";
+        let out = src_of(doc, ".a = 9");
+        assert_eq!(out, "# /// script\n# a = 9\n#\n# b = 2\n# ///\n");
+    }
+
+    #[test]
+    fn commented_unterminated_errors() {
+        let e = parse("# /// script\n# x = 1\n").err().unwrap();
+        assert!(e.to_string().contains("unterminated commented"), "{e}");
+    }
+
+    #[test]
+    fn commented_malformed_line_errors() {
+        let e = parse("# /// script\nnot a comment\n# ///\n").err().unwrap();
+        assert!(e.to_string().contains("malformed commented"), "{e}");
+    }
+
+    #[test]
+    fn bare_triple_slash_is_not_an_opener() {
+        // `# ///` with no name is a closer shape; on its own it is not
+        // frontmatter, and detection falls through to the fenced path.
+        let e = parse("# ///\n# x = 1\n").err().unwrap();
+        assert!(e.to_string().contains("no frontmatter block"), "{e}");
     }
 
     #[test]
