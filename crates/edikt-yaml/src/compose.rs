@@ -120,24 +120,65 @@ fn parse_events(src: &str) -> Result<Vec<Ev>, String> {
 /// Parse `src` and compose the first document's span tree. An empty stream (no
 /// document, or only comments) composes to a null scalar spanning nothing.
 pub(crate) fn compose_source(src: &str) -> Result<Node, String> {
+    Ok(compose_all(src)?.pop_first_or_null())
+}
+
+/// The composed documents of a YAML stream, in order. A single-document stream
+/// yields one; a `---`-separated stream yields one per document.
+pub(crate) struct Docs {
+    docs: Vec<Node>,
+}
+
+impl Docs {
+    pub(crate) fn into_vec(self) -> Vec<Node> {
+        self.docs
+    }
+    /// The first document (single-doc callers), or a null node for an empty
+    /// stream - preserving the old single-root contract.
+    fn pop_first_or_null(mut self) -> Node {
+        if self.docs.is_empty() {
+            null_node()
+        } else {
+            self.docs.remove(0)
+        }
+    }
+}
+
+/// A null document (an empty or comment-only stream). Substituted so callers
+/// always have at least one document to operate on.
+pub(crate) fn null_node() -> Node {
+    Node {
+        span: 0..0,
+        kind: NodeKind::Scalar(Value::Null),
+    }
+}
+
+/// Compose **every** document in the stream. Each document gets a fresh anchor
+/// scope (YAML anchors do not cross document boundaries), and every node's byte
+/// marks are absolute offsets into the shared `src`, so per-document editing
+/// splices the same source string.
+pub(crate) fn compose_all(src: &str) -> Result<Docs, String> {
     let events = parse_events(src)?;
     let mut pos = 0;
-    let mut anchors: HashMap<String, Value> = HashMap::new();
+    let mut docs = Vec::new();
 
-    // Skip the stream/document framing to reach the root node.
-    while matches!(
-        events.get(pos).map(|e| &e.tok),
-        Some(Tok::StreamStart | Tok::DocStart)
-    ) {
-        pos += 1;
+    while let Some(tok) = events.get(pos).map(|e| &e.tok) {
+        match tok {
+            Tok::StreamStart | Tok::DocStart => {
+                pos += 1;
+            }
+            Tok::DocEnd => {
+                pos += 1;
+            }
+            Tok::StreamEnd => break,
+            _ => {
+                // A document's root node. Fresh anchor scope per document.
+                let mut anchors: HashMap<String, Value> = HashMap::new();
+                docs.push(compose_node(&events, &mut pos, &mut anchors));
+            }
+        }
     }
-    match events.get(pos).map(|e| &e.tok) {
-        None | Some(Tok::StreamEnd | Tok::DocEnd) => Ok(Node {
-            span: 0..0,
-            kind: NodeKind::Scalar(Value::Null),
-        }),
-        _ => Ok(compose_node(&events, &mut pos, &mut anchors)),
-    }
+    Ok(Docs { docs })
 }
 
 /// Compose the node at `*pos`, advancing `pos` past it. Registers anchors so

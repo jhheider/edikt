@@ -464,7 +464,15 @@ fn run(args: Args) -> Result<ExitCode> {
                 .with_context(|| format!("{loc}: this format has no comments to query"))?;
             edikt_core::eval_with_comments(&expr, &commented).with_context(|| loc.clone())?
         } else {
-            edikt_core::eval(&expr, &doc.to_value()).with_context(|| loc.clone())?
+            // Evaluate against each top-level document and concatenate, so a
+            // query over a multi-document YAML stream yields one result per
+            // document (single-document formats have exactly one). Source slices
+            // below are gathered in the same per-document order, staying aligned.
+            let mut out = Vec::new();
+            for value in doc.to_values() {
+                out.extend(edikt_core::eval(&expr, &value).with_context(|| loc.clone())?);
+            }
+            out
         };
 
         // Format-preserving get: a pure-path query staying in-format returns the

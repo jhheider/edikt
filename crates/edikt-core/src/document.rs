@@ -20,6 +20,15 @@ pub trait Document {
     /// layout) is dropped - this is the data-model view, not the source view.
     fn to_value(&self) -> Value;
 
+    /// Project to one value **per top-level document**. Only YAML has a
+    /// multi-document stream (`---`-separated); every other format is a single
+    /// document, so the default is `[to_value()]`. The CLI evaluates a query
+    /// against each in turn and concatenates the results, so `.kind` over a
+    /// multi-doc stream yields one result per document.
+    fn to_values(&self) -> Vec<Value> {
+        vec![self.to_value()]
+    }
+
     /// The format's capabilities.
     fn features(&self) -> &'static [Feature];
 
