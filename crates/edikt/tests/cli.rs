@@ -966,12 +966,37 @@ fn frontmatter_commented_pep723() {
     assert_eq!(c2, 0);
     assert!(blk.contains("requires-python = \">=3.11\""), "got: {blk}");
 
-    // A top-level array can't render as TOML - same error and -T hint as a
-    // plain .toml file - and -T json is the way through.
-    let (_o, err, c3) = run(&["-t", "frontmatter", ".dependencies"], py);
-    assert_eq!(c3, 2);
-    assert!(err.contains("TOML output requires a table"), "got: {err}");
-    let (arr, _e, c4) = run(&["-t", "frontmatter", "-T", "json", ".dependencies"], py);
-    assert_eq!(c4, 0);
+    // A top-level array has no TOML representation, so an un-directed query
+    // falls back to JSON (edikt-051) rather than erroring.
+    let (arr, _e, c3) = run(&["-t", "frontmatter", ".dependencies"], py);
+    assert_eq!(c3, 0);
     assert!(arr.contains("rich"), "got: {arr}");
+    // An explicit -T json is of course still fine.
+    let (arr2, _e, c4) = run(&["-t", "frontmatter", "-T", "json", ".dependencies"], py);
+    assert_eq!(c4, 0);
+    assert!(arr2.contains("rich"), "got: {arr2}");
+}
+
+#[test]
+fn query_falls_back_to_json_when_source_cant_hold_it() {
+    // A TOML top-level array has no TOML representation. An un-directed *query*
+    // shows the value as JSON instead of erroring (edikt-051).
+    let (out, _e, code) = run(&["-t", "toml", ".xs"], "xs = [1, 2, 3]\n");
+    assert_eq!(code, 0);
+    assert!(
+        out.contains('[') && out.contains('3'),
+        "json array out: {out}"
+    );
+
+    // A representable result still renders in the source format (unchanged): an
+    // object queried from TOML comes back as TOML.
+    let (obj, _e, c2) = run(&["-t", "toml", ".srv"], "[srv]\nport = 8080\n");
+    assert_eq!(c2, 0);
+    assert!(obj.contains("port = 8080"), "toml object out: {obj}");
+
+    // An *explicit* -T that can't hold the value still errors - the fallback is
+    // only for the defaulted output of a read.
+    let (_o, err, c3) = run(&["-t", "yaml", "-T", "toml", ".xs"], "xs:\n  - 1\n");
+    assert_eq!(c3, 2);
+    assert!(err.contains("cannot represent"), "got: {err}");
 }

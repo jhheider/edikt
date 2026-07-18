@@ -614,6 +614,14 @@ fn render_value(
     }
     let (text, warnings) = match emit(target, commented) {
         Ok(ok) => ok,
+        Err(_) if !explicit => {
+            // The defaulted output format (the source's own) has no top-level
+            // representation for this value - e.g. a TOML or KDL top-level array
+            // or bare scalar. A read still shows the value, rendered as JSON;
+            // only an edit or an explicit -T (below) treats this as an error.
+            let plain = Commented::from_value(value);
+            emit(Format::Json, &plain)?
+        }
         Err(e) => {
             let needed = edikt_core::convert::features_used(value);
             let candidates: Vec<&str> = ALL_FORMATS
