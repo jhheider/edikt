@@ -154,7 +154,7 @@ impl Document for Frontmatter {
     fn features(&self) -> &'static [Feature] {
         self.inner.features()
     }
-    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
+    fn apply(&mut self, expr: &Expr) -> Result<Vec<String>, EditError> {
         self.inner.apply(expr)
     }
     fn has_comments(&self) -> bool {

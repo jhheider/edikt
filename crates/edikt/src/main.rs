@@ -36,7 +36,11 @@ Reads stdin and writes stdout by default, like sed.",
   edikt '.services.web' compose.yaml                    structural get: exact
                                                         source bytes
   edikt -T yaml tsconfig.jsonc                          convert; comments carried
-  cat app.cfg | edikt -t ini '.server.port'             sed-shaped stdin"
+  cat app.cfg | edikt -t ini '.server.port'             sed-shaped stdin
+  edikt '.title' post.md                                Markdown frontmatter
+  edikt '.kind' k8s.yaml                                 one result per YAML doc
+  edikt -i '^d1.spec.replicas = 3' k8s.yaml             edit the 2nd doc of a stream
+  edikt -i 'select(.kind==\"Service\") | .x = 1' k8s.yaml   target docs by content"
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -69,7 +73,7 @@ struct Args {
     )]
     output: Option<PathBuf>,
 
-    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml | kdl.
+    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml | kdl | markdown.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
 
@@ -137,7 +141,18 @@ impl Args {
         } else if self.kdl {
             Ok(Some(Format::Kdl))
         } else {
-            self.to.as_deref().map(format_from_name).transpose()
+            let fmt = self.to.as_deref().map(format_from_name).transpose()?;
+            // `frontmatter` is a read-only lens over a metadata block, not an
+            // emittable format. Reject it here so the failure is one clean
+            // sentence, not a doubled message from the emit path.
+            if fmt == Some(Format::Frontmatter) {
+                bail!(
+                    "cannot convert to frontmatter: it is a read-only view of a Markdown/script \
+                     metadata block, not an output format; use -T with the block's own \
+                     language, e.g. -T yaml"
+                );
+            }
+            Ok(fmt)
         }
     }
 }
@@ -255,6 +270,32 @@ fn format_from_name(name: &str) -> Result<Format> {
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
+/// Resolve a leading `^dN` document selector for a mutation. Errors if the
+/// index is out of range; on a single-document input returns the unwrapped body
+/// (so `^d0` works on any format, not just multi-document YAML); on a genuine
+/// multi-document input returns `None`, keeping the selector for the edit path
+/// to scope to that document.
+fn resolve_doc_select(
+    expr: &edikt_core::Expr,
+    doc: &dyn Document,
+) -> Result<Option<edikt_core::Expr>> {
+    let edikt_core::Expr::DocSelect(idx, body) = expr else {
+        return Ok(None);
+    };
+    let count = doc.to_values().len();
+    if *idx >= count {
+        bail!(
+            "document `^d{idx}` is out of range ({count} document{})",
+            if count == 1 { "" } else { "s" }
+        );
+    }
+    if count == 1 {
+        Ok(Some((**body).clone()))
+    } else {
+        Ok(None)
+    }
+}
+
 fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
     Ok(match format {
         // JSON is read by the JSONC parser (it's a subset with no comments).
@@ -421,10 +462,16 @@ fn run(args: Args) -> Result<ExitCode> {
         let mut doc = parse_document(in_fmt, src).with_context(|| loc.clone())?;
 
         if is_mutation {
+            // Resolve a leading `^dN` up front: out-of-range errors; on a
+            // single-document input `^d0` unwraps to its body (so it works on
+            // any format, not just multi-doc YAML); a genuine multi-document
+            // input keeps the selector for the edit path to scope.
+            let unwrapped = resolve_doc_select(&expr, doc.as_ref()).with_context(|| loc.clone())?;
+            let mexpr: &edikt_core::Expr = unwrapped.as_ref().unwrap_or(&expr);
             // A comment mutation (`.foo.# = ...`) writes through the comment
             // methods; everything else through the value edit path.
-            if expr.has_comment() {
-                let warnings = edikt_core::apply_comment_mutation(doc.as_mut(), &expr)
+            if mexpr.has_comment() {
+                let warnings = edikt_core::apply_comment_mutation(doc.as_mut(), mexpr)
                     .with_context(|| loc.clone())?;
                 if args.strict && !warnings.is_empty() {
                     bail!("{loc}: {} (--strict)", warnings.join("; "));
@@ -433,7 +480,13 @@ fn run(args: Args) -> Result<ExitCode> {
                     eprintln!("edikt: warning: {loc}: {w}");
                 }
             } else {
-                doc.apply(&expr).with_context(|| loc.clone())?;
+                let warnings = doc.apply(mexpr).with_context(|| loc.clone())?;
+                if args.strict && !warnings.is_empty() {
+                    bail!("{loc}: {} (--strict)", warnings.join("; "));
+                }
+                for w in &warnings {
+                    eprintln!("edikt: warning: {loc}: {w}");
+                }
             }
             let out = doc.to_source();
             if args.in_place {
@@ -459,10 +512,31 @@ fn run(args: Args) -> Result<ExitCode> {
         // A comment query (`.foo.#`) resolves against the commented projection;
         // everything else over the value model.
         let results = if expr.has_comment() {
-            let commented = doc
-                .to_commented()
-                .with_context(|| format!("{loc}: this format has no comments to query"))?;
-            edikt_core::eval_with_comments(&expr, &commented).with_context(|| loc.clone())?
+            // Map a comment query over each document's commented projection, so
+            // `.foo.#` yields one result per document (single-document formats
+            // have exactly one); a leading `^dN` selects one by position.
+            let all = doc.to_commented_all();
+            if all.is_empty() {
+                bail!("{loc}: this format has no comments to query");
+            }
+            let (selected, body): (Vec<&edikt_core::Commented>, &edikt_core::Expr) = match &expr {
+                edikt_core::Expr::DocSelect(idx, body) => {
+                    if *idx >= all.len() {
+                        bail!(
+                            "{loc}: document `^d{idx}` is out of range ({} document{})",
+                            all.len(),
+                            if all.len() == 1 { "" } else { "s" }
+                        );
+                    }
+                    (vec![&all[*idx]], body)
+                }
+                _ => (all.iter().collect(), &expr),
+            };
+            let mut out = Vec::new();
+            for c in selected {
+                out.extend(edikt_core::eval_with_comments(body, c).with_context(|| loc.clone())?);
+            }
+            out
         } else {
             // Evaluate against each top-level document and concatenate, so a
             // query over a multi-document YAML stream yields one result per
@@ -472,6 +546,15 @@ fn run(args: Args) -> Result<ExitCode> {
             let values = doc.to_values();
             let (selected, body): (Vec<edikt_core::Value>, &edikt_core::Expr) = match &expr {
                 edikt_core::Expr::DocSelect(idx, body) => {
+                    // An explicitly-named document out of range is an error (like
+                    // an out-of-range edit), not a silent empty read.
+                    if *idx >= values.len() {
+                        bail!(
+                            "{loc}: document `^d{idx}` is out of range ({} document{})",
+                            values.len(),
+                            if values.len() == 1 { "" } else { "s" }
+                        );
+                    }
                     (values.into_iter().nth(*idx).into_iter().collect(), body)
                 }
                 _ => (values, &expr),
@@ -630,19 +713,27 @@ fn render_value(
     }
     let (text, warnings) = match emit(target, commented) {
         Ok(ok) => ok,
-        Err(_) if !explicit => {
-            // The defaulted output format (the source's own) has no top-level
-            // representation for this value - e.g. a TOML or KDL top-level array
-            // or bare scalar. A read still shows the value, rendered as JSON;
-            // only an edit or an explicit -T (below) treats this as an error.
+        // A **top-level array** has no representation in a table-only format
+        // (TOML/KDL) - but the read still wants the value. When the output
+        // wasn't explicitly requested, render it as JSON (jq-shaped). This is
+        // deliberately narrow: an object that fails to emit for a value-fidelity
+        // reason (e.g. a null in TOML) is a real error and falls through below,
+        // so `--strict` and a bare read both still surface it.
+        Err(_) if !explicit && matches!(value, Value::Array(_)) => {
             let plain = Commented::from_value(value);
             emit(Format::Json, &plain)?
         }
         Err(e) => {
             let needed = edikt_core::convert::features_used(value);
+            // A top-level array can only live in a format that allows one at the
+            // root; suggesting the target that just failed (or another table-only
+            // format) would send the user in a circle.
+            let top_array = matches!(value, Value::Array(_));
             let candidates: Vec<&str> = ALL_FORMATS
                 .iter()
+                .filter(|f| **f != target)
                 .filter(|f| needed.iter().all(|n| f.features().contains(n)))
+                .filter(|f| !top_array || matches!(f, Format::Json | Format::Jsonc | Format::Yaml))
                 .map(|f| f.name())
                 .collect();
             bail!(

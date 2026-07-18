@@ -89,7 +89,7 @@ impl Document for Yaml {
     fn features(&self) -> &'static [Feature] {
         FEATURES
     }
-    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
+    fn apply(&mut self, expr: &Expr) -> Result<Vec<String>, EditError> {
         edit::apply(self, expr)
     }
     fn has_comments(&self) -> bool {
@@ -101,10 +101,16 @@ impl Document for Yaml {
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
-        // Comment queries target the first document; multi-doc comment
-        // addressing is a follow-up. An empty stream has no comments.
+        // The first document's comments (bulk enumeration and single-doc
+        // callers). Multi-document comment queries use `to_commented_all`.
         let node = self.docs.first()?;
         Some(comments::to_commented(&self.source, node))
+    }
+    fn to_commented_all(&self) -> Vec<edikt_core::Commented> {
+        self.docs
+            .iter()
+            .map(|node| comments::to_commented(&self.source, node))
+            .collect()
     }
     fn set_comment(
         &mut self,
@@ -112,12 +118,22 @@ impl Document for Yaml {
         kind: edikt_core::CommentKind,
         text: &str,
     ) -> Result<Vec<String>, EditError> {
-        let node = self
-            .docs
-            .first()
-            .ok_or_else(|| EditError::new("no document to annotate"))?;
-        let (source, warnings) = comments::set_node_comment(&self.source, node, path, kind, text)?;
-        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        // Set the comment at `path` in every document where the path resolves;
+        // in a single-document stream a non-resolving path errors (strict), as
+        // before. Each write recomposes, so the next document's marks stay
+        // correct.
+        let multi = self.docs.len() > 1;
+        let mut warnings = Vec::new();
+        for idx in 0..self.docs.len() {
+            match comments::set_node_comment(&self.source, &self.docs[idx], path, kind, text) {
+                Ok((source, warns)) => {
+                    warnings.extend(warns);
+                    *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+                }
+                Err(_) if multi => {} // path absent in this document: skip
+                Err(e) => return Err(e),
+            }
+        }
         Ok(warnings)
     }
     fn delete_comment(
@@ -125,11 +141,12 @@ impl Document for Yaml {
         path: &[edikt_core::Step],
         kind: edikt_core::CommentKind,
     ) -> Result<(), EditError> {
-        let Some(node) = self.docs.first() else {
-            return Ok(());
-        };
-        let source = comments::delete_node_comment(&self.source, node, path, kind)?;
-        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        // Delete in every document; a missing path is already a per-document
+        // no-op in `delete_node_comment`.
+        for idx in 0..self.docs.len() {
+            let source = comments::delete_node_comment(&self.source, &self.docs[idx], path, kind)?;
+            *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        }
         Ok(())
     }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {

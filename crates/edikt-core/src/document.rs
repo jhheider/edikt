@@ -35,7 +35,10 @@ pub trait Document {
     /// Apply a mutation expression (assignment / `del`) in place,
     /// format-preserving. Query expressions should be evaluated against
     /// [`Document::to_value`] instead; use [`Expr::is_mutation`] to choose.
-    fn apply(&mut self, expr: &Expr) -> Result<(), EditError>;
+    /// Returns any non-fatal warnings (e.g. a multi-document `select` predicate
+    /// that could not be evaluated against some document, so that document was
+    /// skipped) for the CLI to surface; an empty vec on a clean edit.
+    fn apply(&mut self, expr: &Expr) -> Result<Vec<String>, EditError>;
 
     /// Whether the source contains any comments - used to warn on conversion,
     /// which drops them.
@@ -49,6 +52,14 @@ pub trait Document {
     /// path and warns that comments were dropped.
     fn to_commented(&self) -> Option<Commented> {
         None
+    }
+
+    /// One comment-annotated projection **per top-level document** (the comment
+    /// analogue of [`Document::to_values`]). Only YAML has multiple; the default
+    /// is the single [`Document::to_commented`], so a comment query maps over
+    /// every document of a multi-document stream.
+    fn to_commented_all(&self) -> Vec<Commented> {
+        self.to_commented().into_iter().collect()
     }
 
     /// The **original source text** of each node selected by `path`, in document
@@ -119,8 +130,8 @@ mod tests {
         fn features(&self) -> &'static [Feature] {
             &[]
         }
-        fn apply(&mut self, _expr: &Expr) -> Result<(), EditError> {
-            Ok(())
+        fn apply(&mut self, _expr: &Expr) -> Result<Vec<String>, EditError> {
+            Ok(Vec::new())
         }
         fn has_comments(&self) -> bool {
             false

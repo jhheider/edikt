@@ -66,6 +66,17 @@ fn apply_inner(
             let (prefix, kind) = split_comment(steps)?;
             doc.delete_comment(prefix, kind)
         }
+        // Document selection with a comment edit: comment edits already apply
+        // to every document, and per-document comment editing is a follow-up.
+        // Name that, rather than falling through to the generic error below.
+        Expr::DocSelect(..) => Err(EditError::new(
+            "`^dN` document selection isn't supported with comment edits yet; \
+             a comment edit already applies to every document of the stream",
+        )),
+        Expr::Call(name, _) if name == "select" => Err(EditError::new(
+            "`select(...)` targeting isn't supported with comment edits yet; \
+             a comment edit already applies to every document of the stream",
+        )),
         _ => Err(EditError::new(
             "unsupported comment edit - use `.path.# = ...`, `|=`, `+=`, `del(.path.#)`, \
              or the bulk `comments |= ...` / `del(comments)`",
@@ -87,6 +98,21 @@ fn bulk_edit(
     append: bool,
     warnings: &mut Vec<String>,
 ) -> Result<(), EditError> {
+    // A bulk transform derives each new comment from that comment's own text, so
+    // it needs per-document scoping the comment API doesn't have yet. Over a
+    // multi-document stream, refuse rather than misapply one document's text to
+    // another. (Single-document is the common case and works.)
+    match doc.to_commented_all().len() {
+        0 => return Err(EditError::new("this format has no comments")),
+        1 => {}
+        _ => {
+            return Err(EditError::new(
+                "bulk comment transforms (`comments |= ...` / `comments += ...`) over a \
+                 multi-document stream aren't supported yet; edit one document's comments \
+                 at a time",
+            ));
+        }
+    }
     let targets = doc
         .to_commented()
         .ok_or_else(|| EditError::new("this format has no comments"))?
@@ -104,14 +130,18 @@ fn bulk_edit(
     Ok(())
 }
 
-/// `del(comments)`: remove every comment in the document.
+/// `del(comments)`: remove every comment in every document. Deleting a comment
+/// path that a given document lacks is a no-op there, so enumerating the union
+/// of all documents' comment paths and deleting each clears the whole stream.
 fn bulk_delete(doc: &mut dyn Document) -> Result<(), EditError> {
-    let targets = doc
-        .to_commented()
-        .ok_or_else(|| EditError::new("this format has no comments"))?
-        .comment_targets();
-    for (steps, kind, _) in targets {
-        doc.delete_comment(&steps, kind)?;
+    let all = doc.to_commented_all();
+    if all.is_empty() {
+        return Err(EditError::new("this format has no comments"));
+    }
+    for commented in &all {
+        for (steps, kind, _) in commented.comment_targets() {
+            doc.delete_comment(&steps, kind)?;
+        }
     }
     Ok(())
 }

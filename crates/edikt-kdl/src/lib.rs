@@ -93,8 +93,8 @@ impl Document for Kdl {
     fn features(&self) -> &'static [Feature] {
         FEATURES
     }
-    fn apply(&mut self, expr: &Expr) -> Result<(), EditError> {
-        edit::apply(self, expr)
+    fn apply(&mut self, expr: &Expr) -> Result<Vec<String>, EditError> {
+        edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
         // kdl-rs keeps comments in decor strings; a `//` or `/*` anywhere in

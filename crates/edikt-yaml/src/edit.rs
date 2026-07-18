@@ -26,8 +26,9 @@ use crate::scalar::{emit_key, emit_scalar_inline};
 /// whose value satisfies `pred` - so `select(.kind == "Service") | .spec.x = 1`
 /// edits only the Service documents. A single-document stream (the common case)
 /// behaves exactly as before.
-pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
+pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<Vec<String>, EditError> {
     let n = doc.docs.len();
+    let mut warnings = Vec::new();
 
     // `^dN` names one document by position; the edit is strict there (you asked
     // for that specific document).
@@ -38,31 +39,39 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
                 if n == 1 { "" } else { "s" }
             )));
         }
-        return apply_one(doc, *idx, body, Strictness::Strict);
+        apply_one(doc, *idx, body, Strictness::Strict)?;
+        return Ok(warnings);
     }
 
     // A leading `select(pred)` picks documents by content; the rest is the edit.
     if let Some((pred, inner)) = peel_select(expr) {
         for idx in 0..n {
             let val = doc.doc_value(idx);
-            if doc_matches(pred, &val)? {
-                apply_one(doc, idx, &inner, Strictness::Lenient)?;
+            // A predicate that can't be evaluated against a document (e.g. a
+            // scalar document when the predicate indexes a field) means "does
+            // not match" - skip it, with a warning, rather than aborting the
+            // whole edit. `select` picks by content, so a heterogeneous stream
+            // shouldn't fail because one document has the wrong shape.
+            match doc_matches(pred, &val) {
+                Ok(true) => apply_one(doc, idx, &inner, Strictness::Lenient)?,
+                Ok(false) => {}
+                Err(e) => warnings.push(format!("select skipped document {idx}: {e}")),
             }
         }
-        return Ok(());
+        return Ok(warnings);
     }
 
     // No selector: single doc keeps the strict, prior behavior (a missing path
     // errors, a new leaf key is created); across many docs, apply to each with a
     // missing path treated as a per-document no-op.
     if n <= 1 {
-        apply_one(doc, 0, expr, Strictness::Strict)
+        apply_one(doc, 0, expr, Strictness::Strict)?;
     } else {
         for idx in 0..n {
             apply_one(doc, idx, expr, Strictness::Lenient)?;
         }
-        Ok(())
     }
+    Ok(warnings)
 }
 
 /// Whether a path that doesn't resolve is an error (`Strict`, single-doc/named)
