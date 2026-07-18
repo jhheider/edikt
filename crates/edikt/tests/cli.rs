@@ -1162,3 +1162,23 @@ fn review_fix_select_skips_and_warns_on_predicate_error() {
     assert!(out.contains("justascalar"), "scalar doc preserved: {out}");
     assert!(err.contains("skipped document"), "warns on skip: {err}");
 }
+
+#[test]
+fn review_fix_bulk_comment_transform_over_multidoc_is_per_document() {
+    // The carve-out resolved: bulk `comments |= f` over a multi-document stream
+    // transforms each comment from ITS OWN text (per-document scoping), not one
+    // document's text applied to another.
+    let s = "---\nkind: Deployment  # the deployment\n---\nkind: Service  # the service\n";
+    let (out, _e, c) = run(&["-t", "yaml", "comments |= ascii_upcase"], s);
+    assert_eq!(c, 0);
+    assert!(out.contains("# THE DEPLOYMENT"), "got: {out}");
+    assert!(out.contains("# THE SERVICE"), "got: {out}");
+    // Append also scopes per document.
+    let s2 = "---\na: 1  # one\n---\nb: 2  # two\n";
+    let (out2, _e, c2) = run(&["-t", "yaml", r#"comments += " !""#], s2);
+    assert_eq!(c2, 0);
+    assert!(
+        out2.contains("# one !") && out2.contains("# two !"),
+        "got: {out2}"
+    );
+}

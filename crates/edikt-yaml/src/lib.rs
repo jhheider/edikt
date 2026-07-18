@@ -149,6 +149,23 @@ impl Document for Yaml {
         }
         Ok(())
     }
+    fn set_comment_in_doc(
+        &mut self,
+        doc: usize,
+        path: &[edikt_core::Step],
+        kind: edikt_core::CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        // Scope to one document (bulk transforms, where each comment's new text
+        // comes from its own current text).
+        let node = self
+            .docs
+            .get(doc)
+            .ok_or_else(|| EditError::new("document index out of range"))?;
+        let (source, warnings) = comments::set_node_comment(&self.source, node, path, kind, text)?;
+        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        Ok(warnings)
+    }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
         // One document's slices after another, in stream order, so the result
         // aligns 1:1 with a per-document query (`to_values`).
