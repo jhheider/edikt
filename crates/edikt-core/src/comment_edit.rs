@@ -98,26 +98,21 @@ fn bulk_edit(
     append: bool,
     warnings: &mut Vec<String>,
 ) -> Result<(), EditError> {
-    // A bulk transform derives each new comment from that comment's own text, so
-    // it needs per-document scoping the comment API doesn't have yet. Over a
-    // multi-document stream, refuse rather than misapply one document's text to
-    // another. (Single-document is the common case and works.)
-    match doc.to_commented_all().len() {
-        0 => return Err(EditError::new("this format has no comments")),
-        1 => {}
-        _ => {
-            return Err(EditError::new(
-                "bulk comment transforms (`comments |= ...` / `comments += ...`) over a \
-                 multi-document stream aren't supported yet; edit one document's comments \
-                 at a time",
-            ));
+    // Each new comment derives from that comment's own text, so a multi-document
+    // stream needs per-document scoping: snapshot every document's comment
+    // targets first (paths stay valid as writes land, logical not byte-based),
+    // then transform each within its own document.
+    let all = doc.to_commented_all();
+    if all.is_empty() {
+        return Err(EditError::new("this format has no comments"));
+    }
+    let mut targets = Vec::new();
+    for (doc_idx, commented) in all.iter().enumerate() {
+        for (steps, kind, current) in commented.comment_targets() {
+            targets.push((doc_idx, steps, kind, current));
         }
     }
-    let targets = doc
-        .to_commented()
-        .ok_or_else(|| EditError::new("this format has no comments"))?
-        .comment_targets();
-    for (steps, kind, current) in targets {
+    for (doc_idx, steps, kind, current) in targets {
         let text = if append {
             let mut t = current;
             t.push_str(&eval_text(rhs, &doc.to_value())?);
@@ -125,7 +120,7 @@ fn bulk_edit(
         } else {
             eval_text(rhs, &Value::Str(current))?
         };
-        warnings.extend(doc.set_comment(&steps, kind, &text)?);
+        warnings.extend(doc.set_comment_in_doc(doc_idx, &steps, kind, &text)?);
     }
     Ok(())
 }

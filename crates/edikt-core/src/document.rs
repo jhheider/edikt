@@ -110,6 +110,22 @@ pub trait Document {
             "deleting comments (`#`) isn't supported for this format yet",
         ))
     }
+
+    /// Set the `kind` comment at `path`, scoped to a **single document** of a
+    /// multi-document stream (used by bulk `comments |= f`, where each new
+    /// comment derives from that comment's own text and so must not leak across
+    /// documents). Single-document formats have one document, so the default
+    /// ignores `doc` and sets it the ordinary way.
+    fn set_comment_in_doc(
+        &mut self,
+        doc: usize,
+        path: &[Step],
+        kind: CommentKind,
+        text: &str,
+    ) -> Result<Vec<String>, EditError> {
+        let _ = doc;
+        self.set_comment(path, kind, text)
+    }
 }
 
 #[cfg(test)]
