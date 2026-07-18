@@ -7,12 +7,27 @@
 
 **Edit config files without reflowing them.**
 
-*edit, meets edict.* A lossless, format-preserving config editor for
-**JSONC/JSON5**, **INI**, **TOML**, **YAML**, **KDL**, and sectionless
-key-value files (**`.env`**, **`.properties`**). It edits with a jq-flavored expression language
-and a sed-flavored execution model, changing only the bytes you target -
-comments, indentation, quoting, and trailing commas in every untouched region
-survive byte-for-byte.
+You want to change one value in a commented, hand-formatted config. Today every
+option costs you something:
+
+```console
+$ jq '.compilerOptions.target = "ES2022"' tsconfig.json
+# comments gone, trailing commas gone, the whole file reindented,
+# and JSONC-with-comments won't round-trip through jq at all
+```
+
+edikt changes the one value and nothing else:
+
+```console
+$ edikt -i '.compilerOptions.target = "ES2022"' tsconfig.json
+# one line of the diff moves; every comment, blank line, indent, and
+# trailing comma comes back byte for byte
+```
+
+*edit, meets edict.* A lossless, format-preserving editor for **JSONC/JSON5**,
+**TOML**, **YAML**, **INI**, **KDL**, and flat key-value files (**`.env`**,
+**`.properties`**), driven by a jq-flavored expression language and a sed-shaped
+execution model. It touches only the bytes you point at.
 
 ```sh
 # query - reads like jq
@@ -36,26 +51,41 @@ edikt -f release.edk -i config.jsonc
 # convert, where feasible - comments carried across, in the target's syntax
 edikt -T yaml tsconfig.jsonc
 
-# frontmatter - edit the metadata block of a Markdown file, body untouched
-edikt '.status' post.md
-edikt -i '.status = "Shipped"' post.md
+# Markdown frontmatter - edit the metadata block, the prose untouched
+edikt -i '.draft = false' post.md
+
+# multi-document YAML - one edit maps over every ---document in the stream
+edikt -i '.metadata.labels.env = "prod"' k8s.yaml
+
+# ...or target one document by position with ^dN (0-based, strict)
+edikt -i '^d1 | .spec.replicas = 3' k8s.yaml
+
+# PEP 723 / scriptbox blocks - bump the pin, the code below untouched
+edikt -t frontmatter -i '.["requires-python"] = ">=3.12"' app.py
 ```
 
-**What it does:** edits commented, hand-formatted config - `settings.json`,
-`tsconfig.json`, `devcontainer.json`, `compose.yaml`, `Cargo.toml` - and writes
-back a file that is byte-identical except for the one value you changed.
-Comments, trailing commas, indentation, and quoting all survive. Query it like
-jq; convert between formats with `-T`.
+Every one of these writes back a file that is byte-identical except for the
+value you changed, the kind of diff a reviewer reads at a glance.
 
-It also edits **Markdown frontmatter**: for a `.md`/`.markdown`/`.mdx`/`.qmd`
-file (or `-t markdown`), edikt operates on the leading metadata block - YAML
-(`---`), TOML (`+++`), tagged (`---json`), or Hugo bare-brace JSON - and leaves
-the document body byte-for-byte opaque. `edikt '.title' post.md` queries it;
-`edikt -i '.draft = false' post.md` rewrites one key with everything else, prose
-included, intact. It also reads **commented host-language blocks** - PEP 723
-`# /// script` ... `# ///` in a Python file (uv) or shell script (scriptbox):
-`edikt -t frontmatter -i '.["requires-python"] = ">=3.12"' app.py` bumps the pin
-and re-applies the `# ` prefix, the code below untouched.
+## Beyond config files: frontmatter and streams
+
+**Markdown frontmatter.** For a `.md`/`.markdown`/`.mdx`/`.qmd` file (or
+`-t markdown`), edikt edits the leading metadata block, YAML (`---`), TOML
+(`+++`), tagged (`---json`), or Hugo bare-brace JSON, and leaves the document
+body byte-for-byte opaque. `edikt '.title' post.md` queries it;
+`edikt -i '.draft = false' post.md` rewrites one key with the prose intact.
+
+**Commented host-language blocks.** edikt reads PEP 723 `# /// script` ... `# ///`
+blocks in a Python file (uv) or a shell script (scriptbox), bumps the pin, and
+re-applies the `# ` prefix with the code below untouched.
+
+**Multi-document YAML.** A `---`-separated stream (Kubernetes manifests, Ansible,
+Helm output) is first-class. An edit maps over every document by default and
+silently skips any that lack the target path; a query returns one result per
+document. `select(pred)` targets documents by content
+(`select(.kind == "Service") | .spec.type = "LoadBalancer"`), and `^dN` selects
+one by position (`^d0` is the first), strict there, so `^d5` on a
+three-document stream is an error, not a no-op.
 
 ## Install
 
@@ -71,26 +101,26 @@ Or grab a prebuilt binary (Linux, macOS, and Windows; x86_64 and arm64) from the
 ## A worked example: bumping a Cargo workspace
 
 edikt is happy editing the config it ships in. Here is the whole version bump
-for a release - a `Cargo.toml` per crate plus the internal dependency pins in
-the workspace root - done losslessly:
+for a release, a `Cargo.toml` per crate plus the internal dependency pins in
+the workspace root, done losslessly:
 
 ```sh
 # each crate's own version
 for c in crates/*/Cargo.toml; do
-  edikt -i '.package.version = "0.2.0"' "$c"
+  edikt -i '.package.version = "1.2.3"' "$c"
 done
 
 # the [workspace.dependencies] pins (inline tables), chained with -e
 edikt -i \
-  -e '.workspace.dependencies."edikt-core".version   = "0.2.0"' \
-  -e '.workspace.dependencies."edikt-syntax".version = "0.2.0"' \
+  -e '.workspace.dependencies."edikt-core".version   = "1.2.3"' \
+  -e '.workspace.dependencies."edikt-syntax".version = "1.2.3"' \
   Cargo.toml
 ```
 
 Each edit moves exactly one `version = "..."`. The `# Internal crates` comment
 above the dependency table, the `path = "crates/edikt-core"` sitting next to
 each version, the brace-and-space style of every inline table, and every other
-byte come back unchanged - the kind of diff a reviewer reads at a glance.
+byte come back unchanged, the kind of diff a reviewer reads at a glance.
 
 One quoting note: a key containing `-` is written `."edikt-core"` (or
 `.["edikt-core"]`), because a bare `.edikt-core` would read the `-` as
@@ -98,32 +128,45 @@ subtraction. edikt says so with a clear error rather than guessing.
 
 ## Why edikt?
 
-Honestly, a weekend project - one that started with a real itch. The problem
+Honestly, a weekend project, one that started with a real itch. The problem
 crystallized while reading [*"Respectful" YAML Patching in
 Rust*](https://verrchu.github.io/blog/2-respectful-yaml-patching-in-rust/),
 which surveys the Rust libraries for patching YAML and lands on the gap in one
 line: **none of them preserve both** the formatting *and* the comments. That's
-the exact thing I kept wanting - surgically change one value (or one comment)
-and leave every other byte, comment, and blank line alone - and not just for
+the exact thing I kept wanting, surgically change one value (or one comment)
+and leave every other byte, comment, and blank line alone, and not just for
 YAML but for the whole pile of config formats a project accumulates.
 
 The good tools each own their corner: `jq` and `yq` for querying, `taplo` and
 `prettier` for formatting, and the excellent `toml_edit` and `kdl-rs` crates for
 lossless edits (edikt is *built on* those last two). edikt isn't trying to
-replace them - it's the piece I couldn't find off the shelf: one jq-flavored
+replace them, it's the piece I couldn't find off the shelf: one jq-flavored
 tool that edits **and** queries **and** converts across JSONC, INI, TOML, YAML,
 KDL, and `.env`, touching only the bytes you point at. If your need is
 single-format, reach for the specialist; if it's "the same surgical edit, across
 all of these," that's the gap this fills.
 
-Status: **v0.2.0** - seven formats with lossless in-place edit, query, and
-conversion (comments carried across), plus a Markdown frontmatter lens over
-those formats, on crates.io, Homebrew, and pkgx. See
+## What edikt won't do
+
+It edits values and comments; it does not reformat, lint, or validate schemas,
+reach for `taplo`/`prettier` for that. The expression language is a curated
+subset of jq (navigation, mutation, arithmetic, `//` defaults, regex,
+`split`/`join`); `if/then`, `reduce`, variables (`as $x`), and user-defined
+functions are not in v1. And `.env` is flat and string-valued, always. Stating
+the boundaries plainly is the point: inside them, the surgical-edit promise
+holds byte for byte.
+
+## Status
+
+Seven config formats with lossless in-place edit, query, and comment-preserving
+conversion, plus a frontmatter lens (Markdown and PEP 723 host-language blocks)
+and multi-document YAML streams with `select`/`^dN` targeting. On crates.io,
+Homebrew, and pkgx, the badge above tracks the current version. See
 [`CLAUDE.md`](./CLAUDE.md) for the build contract.
 
 ## Scripting notes
 
-- **Exit codes are sed-shaped:** `0` = success - a query that matches nothing
+- **Exit codes are sed-shaped:** `0` = success, a query that matches nothing
   is a *silent no-op* (safe under `set -e`); `2` = parse or evaluation error.
   For presence tests, `--exit-status` opts into jq's `1` on zero matches; for
   defaults, use `//`: `edikt '.maybe.key // "fallback"' f.yaml`.
@@ -135,7 +178,7 @@ those formats, on crates.io, Homebrew, and pkgx. See
 - **Many files, sed-style:** `edikt -i '.v = 9' a.json b.json` (let the shell
   glob: `edikt -i 'del(.telemetry)' config/*.jsonc`). Queries over several
   files concatenate results in order.
-- **`.env` is flat and string-valued** - no arrays or nesting, ever - but
+- **`.env` is flat and string-valued**, no arrays or nesting, ever, but
   string computation on values works fine:
   `edikt -i '.VERSION |= sub("^v"; "")' .env`.
 
