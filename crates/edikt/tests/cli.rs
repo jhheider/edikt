@@ -925,3 +925,28 @@ fn toml_assignment_ergonomics() {
     assert!(err.contains("contains `-`"), "got: {err}");
     assert!(err.contains(".package.\"rust-version\""), "got: {err}");
 }
+
+#[test]
+fn frontmatter_query_and_edit() {
+    let md = "---\ntitle: Hello\nstatus: Drafted\n---\n# Body\n\nProse.\n";
+
+    // Query a frontmatter key (forced type over stdin).
+    let (out, _e, code) = run(&["-t", "markdown", ".status"], md);
+    assert_eq!(code, 0);
+    assert_eq!(out, "Drafted\n");
+
+    // Convert the block to JSON (extract-and-convert).
+    let (json, _e, c2) = run(&["-t", "markdown", "-T", "json", "."], md);
+    assert_eq!(c2, 0);
+    assert!(json.contains("\"title\": \"Hello\""), "got: {json}");
+
+    // Converting *to* frontmatter is rejected: it is an input lens.
+    let (_o, err, c3) = run(&["-t", "yaml", "-T", "markdown", "."], "a: 1\n");
+    assert_eq!(c3, 2);
+    assert!(err.contains("input lens"), "got: {err}");
+
+    // No frontmatter present is a clear error.
+    let (_o, err2, c4) = run(&["-t", "markdown", ".x"], "# just a heading\n");
+    assert_eq!(c4, 2);
+    assert!(err2.contains("no frontmatter block"), "got: {err2}");
+}

@@ -183,6 +183,9 @@ enum Format {
     Toml,
     Yaml,
     Kdl,
+    /// The frontmatter lens: edit the metadata block of a Markdown file, body
+    /// left opaque. An input-only format - never a conversion target.
+    Frontmatter,
 }
 
 /// Plain JSON's capabilities: everything JSONC has except comments.
@@ -203,6 +206,7 @@ impl Format {
             Format::Toml => edikt_toml::FEATURES,
             Format::Yaml => edikt_yaml::FEATURES,
             Format::Kdl => edikt_kdl::FEATURES,
+            Format::Frontmatter => edikt_frontmatter::FEATURES,
         }
     }
     /// The canonical name, for messages.
@@ -215,6 +219,7 @@ impl Format {
             Format::Toml => "toml",
             Format::Yaml => "yaml",
             Format::Kdl => "kdl",
+            Format::Frontmatter => "frontmatter",
         }
     }
 }
@@ -232,7 +237,7 @@ const ALL_FORMATS: [Format; 7] = [
 
 /// Every format name accepted by `-t`/`-T`, for error messages.
 const FORMAT_NAMES: &str =
-    "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml, kdl";
+    "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml, kdl, markdown";
 
 /// Resolve a `-t`/`-T` format name.
 fn format_from_name(name: &str) -> Result<Format> {
@@ -244,6 +249,7 @@ fn format_from_name(name: &str) -> Result<Format> {
         "toml" => Ok(Format::Toml),
         "yaml" | "yml" => Ok(Format::Yaml),
         "kdl" => Ok(Format::Kdl),
+        "markdown" | "md" | "mdx" | "qmd" | "frontmatter" | "fm" => Ok(Format::Frontmatter),
         other => bail!("unknown format `{other}` (expected one of: {FORMAT_NAMES})"),
     }
 }
@@ -258,6 +264,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
         Format::Toml => Box::new(edikt_toml::parse(src)?),
         Format::Yaml => Box::new(edikt_yaml::parse(src)?),
         Format::Kdl => Box::new(edikt_kdl::parse(src)?),
+        Format::Frontmatter => Box::new(edikt_frontmatter::parse(src)?),
     })
 }
 
@@ -274,6 +281,10 @@ fn emit(format: Format, c: &Commented) -> Result<(String, Vec<String>)> {
         Format::Toml => edikt_toml::emit_commented(c)?,
         Format::Yaml => edikt_yaml::emit_commented(c)?,
         Format::Kdl => edikt_kdl::emit_commented(c)?,
+        Format::Frontmatter => bail!(
+            "cannot convert to `frontmatter`: it is an input lens over a Markdown \
+             block, not an output format; use -T with the block's own format (yaml, toml, json)"
+        ),
     })
 }
 
@@ -681,6 +692,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
         Some("toml") => Ok(Format::Toml),
         Some("yaml" | "yml") => Ok(Format::Yaml),
         Some("kdl") => Ok(Format::Kdl),
+        Some("md" | "markdown" | "mdx" | "qmd" | "rmd") => Ok(Format::Frontmatter),
         Some(ext) => bail!("cannot infer format from `.{ext}`; pass -t (one of: {FORMAT_NAMES})"),
         None => bail!("cannot infer format (no extension); pass -t (one of: {FORMAT_NAMES})"),
     }

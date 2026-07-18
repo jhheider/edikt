@@ -21,6 +21,7 @@ edikt-env = { path = "crates/edikt-env", version = "0.2.1" }
 edikt-toml = { path = "crates/edikt-toml", version = "0.2.1" }
 edikt-yaml = { path = "crates/edikt-yaml", version = "0.2.0" }
 edikt-kdl = { path = "crates/edikt-kdl", version = "0.2.1" }
+edikt-frontmatter = { path = "crates/edikt-frontmatter", version = "0.1.0" }
 # Third-party.
 rowan = "0.16"
 kdl = "6"
