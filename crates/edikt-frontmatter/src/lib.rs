@@ -27,7 +27,9 @@
 //!   host-language file (Python for uv, shell for scriptbox), optionally after a
 //!   shebang. The block is TOML once each line's `# ` prefix is stripped; the
 //!   prefix is re-applied on serialize. v1 requires the canonical `# `/bare-`#`
-//!   prefix and the block at the head of the file.
+//!   prefix and the block at the head of the file. Line endings inside a
+//!   commented block follow the inner TOML engine, which normalizes to `\n`;
+//!   the fenced containers preserve CRLF.
 
 use edikt_core::{CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value};
 
@@ -505,6 +507,30 @@ mod tests {
                 .contains("unsupported frontmatter language tag"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn document_methods_delegate_to_the_block() {
+        let doc = parse(YAML_DOC).unwrap();
+        // features/has_comments/source_slice all delegate to the inner block.
+        assert!(doc.features().contains(&Feature::Comments));
+        let with_comment = "---\ntitle: X  # note\n---\nbody\n";
+        assert!(parse(with_comment).unwrap().has_comments());
+        assert!(!parse(YAML_DOC).unwrap().has_comments());
+        // A structural source slice comes from the block, in its own syntax.
+        let slices = doc.source_slice(&[Step::Field("title".into())]);
+        assert_eq!(slices, vec!["Hello".to_string()]);
+        // to_commented delegates too.
+        assert!(doc.to_commented().is_some());
+    }
+
+    #[test]
+    fn bare_brace_handles_escaped_quote() {
+        // An escaped quote inside a JSON string must not end the string early.
+        let doc = "{\"s\": \"a\\\"}b\", \"n\": 1}\nbody\n";
+        let d = parse(doc).unwrap();
+        assert_eq!(d.to_source(), doc);
+        assert_eq!(query(doc, ".n"), vec![Value::Int(1)]);
     }
 
     #[test]

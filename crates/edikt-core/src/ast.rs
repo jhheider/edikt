@@ -68,6 +68,11 @@ pub enum Expr {
     /// `path += rhs` - add-assign; `path = path + rhs` (numeric add, string/array
     /// concat). `rhs` is evaluated against the whole input.
     AddAssign(Box<Expr>, Box<Expr>),
+    /// `^dN | body` - select document N of a multi-document YAML stream, then
+    /// apply `body` to it. A document-axis construct handled by the CLI/format
+    /// dispatch (not the value evaluator); only meaningful over a multi-document
+    /// stream, where it is the positional sibling of `select(...)`.
+    DocSelect(usize, Box<Expr>),
 }
 
 impl Expr {
@@ -84,6 +89,7 @@ impl Expr {
             Expr::Binary(_, a, b) => a.is_mutation() || b.is_mutation(),
             Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.is_mutation()),
             Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.is_mutation()),
+            Expr::DocSelect(_, body) => body.is_mutation(),
             Expr::Path(_) | Expr::Literal(_) => false,
         }
     }
@@ -115,6 +121,7 @@ impl Expr {
             Expr::Call(name, args) => name == "comments" || args.iter().any(Expr::has_comment),
             Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.has_comment()),
             Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.has_comment()),
+            Expr::DocSelect(_, body) => body.has_comment(),
             Expr::Literal(_) => false,
         }
     }

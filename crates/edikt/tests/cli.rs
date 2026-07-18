@@ -1000,3 +1000,43 @@ fn query_falls_back_to_json_when_source_cant_hold_it() {
     assert_eq!(c3, 2);
     assert!(err.contains("cannot represent"), "got: {err}");
 }
+
+#[test]
+fn yaml_multidoc_query_and_edit() {
+    let stream =
+        "---\nkind: Deployment\nspec:\n  replicas: 2\n---\nkind: Service\nspec:\n  port: 80\n";
+
+    // A query yields one result per document.
+    let (out, _e, c) = run(&["-t", "yaml", ".kind"], stream);
+    assert_eq!(c, 0);
+    assert_eq!(out, "Deployment\nService\n");
+
+    // A bare edit maps over every document (both have `.spec`).
+    let (edited, _e, c2) = run(&["-t", "yaml", ".spec.tier = \"prod\""], stream);
+    assert_eq!(c2, 0);
+    assert_eq!(edited.matches("tier: prod").count(), 2, "got: {edited}");
+
+    // `select(pred)` targets by content: only the Service is edited.
+    let (sel, _e, c3) = run(
+        &[
+            "-t",
+            "yaml",
+            "select(.kind == \"Service\") | .spec.port = 443",
+        ],
+        stream,
+    );
+    assert_eq!(c3, 0);
+    assert!(sel.contains("port: 443"), "got: {sel}");
+    assert!(sel.contains("replicas: 2"), "deployment untouched: {sel}");
+
+    // `^dN` positional select for query and edit.
+    let (k1, _e, c4) = run(&["-t", "yaml", "^d1.kind"], stream);
+    assert_eq!(c4, 0);
+    assert_eq!(k1, "Service\n");
+    let (e1, _e, c5) = run(&["-t", "yaml", "^d0 | .spec.replicas = 9"], stream);
+    assert_eq!(c5, 0);
+    assert!(
+        e1.contains("replicas: 9") && e1.contains("port: 80"),
+        "got: {e1}"
+    );
+}

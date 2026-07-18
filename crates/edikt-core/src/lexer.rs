@@ -63,6 +63,8 @@ pub enum Lx {
     Percent,
     #[token("#")]
     Hash,
+    #[token("^")]
+    Caret,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Ident,
     #[regex(r"[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?")]

@@ -29,6 +29,18 @@ use crate::scalar::{emit_key, emit_scalar_inline};
 pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<(), EditError> {
     let n = doc.docs.len();
 
+    // `^dN` names one document by position; the edit is strict there (you asked
+    // for that specific document).
+    if let Expr::DocSelect(idx, body) = expr {
+        if *idx >= n {
+            return Err(EditError::new(format!(
+                "document `^d{idx}` is out of range ({n} document{})",
+                if n == 1 { "" } else { "s" }
+            )));
+        }
+        return apply_one(doc, *idx, body, Strictness::Strict);
+    }
+
     // A leading `select(pred)` picks documents by content; the rest is the edit.
     if let Some((pred, inner)) = peel_select(expr) {
         for idx in 0..n {
