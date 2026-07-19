@@ -2,7 +2,9 @@
 
 use crate::Toml;
 use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue};
+use toml_edit::{
+    Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue,
+};
 
 pub fn apply(doc: &mut Toml, expr: &Expr) -> Result<(), EditError> {
     match expr {
@@ -124,5 +126,111 @@ fn value_to_item_tables(value: &Value) -> Result<Item, EditError> {
             Ok(Item::Table(t))
         }
         _ => Ok(Item::Value(value_to_toml(value)?)),
+    }
+}
+
+/// An object `Value` as a standalone TOML `Table` (a `[[..]]` array-of-tables
+/// element). Nested objects become sub-tables.
+fn value_to_table(value: &Value) -> Result<Table, EditError> {
+    match value_to_item_tables(value)? {
+        Item::Table(t) => Ok(t),
+        _ => Err(EditError::new("an array-of-tables element must be a table")),
+    }
+}
+
+/// Would the array at `container[key]` be (or become) an array-of-tables? True
+/// when it is already one, is absent (auto-vivify as one), or is an empty inline
+/// array (promote it) - so a table value lands in a `[[key]]` block, not inline.
+fn array_is_aot_shaped(container: &dyn TableLike, key: &str) -> bool {
+    match container.get(key) {
+        None => true,
+        Some(Item::ArrayOfTables(_)) => true,
+        Some(Item::Value(TomlValue::Array(a))) => a.is_empty(),
+        _ => false,
+    }
+}
+
+/// Resolve `idx` (jq-style: negative counts from the end) against `len` for a
+/// set, allowing `idx == len` as an append. Out of range is an error naming the
+/// append index.
+fn resolve_set_index(idx: i64, len: usize) -> Result<usize, EditError> {
+    let resolved = if idx < 0 { len as i64 + idx } else { idx };
+    if resolved < 0 || resolved as usize > len {
+        return Err(EditError::new(format!(
+            "array index {idx} out of range (length {len}); append with index {len}"
+        )));
+    }
+    Ok(resolved as usize)
+}
+
+/// Resolve `idx` against `len` for a delete (no append); out of range yields
+/// `None`, a jq-style no-op.
+fn resolve_del_index(idx: i64, len: usize) -> Option<usize> {
+    let resolved = if idx < 0 { len as i64 + idx } else { idx };
+    (resolved >= 0 && (resolved as usize) < len).then_some(resolved as usize)
+}
+
+/// Set (replace or append) the array element at `container[key][idx]`. A table
+/// value in an array-of-tables (or absent/empty array) yields a `[[key]]` block;
+/// scalars and arrays yield an inline array element. Auto-vivifies the array.
+pub(crate) fn set_array_element(
+    container: &mut dyn TableLike,
+    key: &str,
+    idx: i64,
+    value: &Value,
+) -> Result<(), EditError> {
+    if matches!(value, Value::Object(_)) && array_is_aot_shaped(container, key) {
+        if !matches!(container.get(key), Some(Item::ArrayOfTables(_))) {
+            container.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
+        }
+        let aot = container
+            .get_mut(key)
+            .and_then(Item::as_array_of_tables_mut)
+            .ok_or_else(|| EditError::new(format!("`{key}` is not an array of tables")))?;
+        let at = resolve_set_index(idx, aot.len())?;
+        let table = value_to_table(value)?;
+        if at == aot.len() {
+            aot.push(table);
+        } else if let Some(slot) = aot.get_mut(at) {
+            *slot = table;
+        }
+    } else {
+        match container.get(key) {
+            Some(Item::Value(TomlValue::Array(_))) => {}
+            None => {
+                container.insert(key, Item::Value(TomlValue::Array(Array::new())));
+            }
+            Some(_) => return Err(EditError::new(format!("`{key}` is not an array"))),
+        }
+        let arr = container
+            .get_mut(key)
+            .and_then(Item::as_value_mut)
+            .and_then(TomlValue::as_array_mut)
+            .ok_or_else(|| EditError::new(format!("`{key}` is not an array")))?;
+        let at = resolve_set_index(idx, arr.len())?;
+        let tv = value_to_toml(value)?;
+        if at == arr.len() {
+            arr.push(tv);
+        } else if let Some(slot) = arr.get_mut(at) {
+            *slot = tv;
+        }
+    }
+    Ok(())
+}
+
+/// Delete the array element at `container[key][idx]` (missing key, wrong type, or
+/// out-of-range index is a no-op).
+pub(crate) fn delete_array_element(container: &mut dyn TableLike, key: &str, idx: i64) {
+    let Some(item) = container.get_mut(key) else {
+        return;
+    };
+    if let Some(aot) = item.as_array_of_tables_mut() {
+        if let Some(at) = resolve_del_index(idx, aot.len()) {
+            aot.remove(at);
+        }
+    } else if let Some(arr) = item.as_value_mut().and_then(TomlValue::as_array_mut)
+        && let Some(at) = resolve_del_index(idx, arr.len())
+    {
+        arr.remove(at);
     }
 }

@@ -1,0 +1,14 @@
+# a build with multiple binaries
+[package]
+name = "demo"
+
+[[bin]]
+name = "server"   # the daemon
+path = "src/server.rs"
+
+[[bin]]
+name = "cli"
+path = "src/cli.rs"
+
+# an inline array too
+features = ["a", "b", "c"]

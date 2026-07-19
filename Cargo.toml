@@ -18,7 +18,7 @@ edikt-syntax = { path = "crates/edikt-syntax", version = "0.2.0" }
 edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.2.3" }
 edikt-ini = { path = "crates/edikt-ini", version = "0.2.2" }
 edikt-env = { path = "crates/edikt-env", version = "0.2.2" }
-edikt-toml = { path = "crates/edikt-toml", version = "0.2.2" }
+edikt-toml = { path = "crates/edikt-toml", version = "0.2.3" }
 edikt-yaml = { path = "crates/edikt-yaml", version = "0.2.1" }
 edikt-kdl = { path = "crates/edikt-kdl", version = "0.2.2" }
 edikt-frontmatter = { path = "crates/edikt-frontmatter", version = "0.1.0" }
