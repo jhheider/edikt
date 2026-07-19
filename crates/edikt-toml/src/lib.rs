@@ -43,47 +43,44 @@ pub struct Toml {
 
 impl Toml {
     /// Set the value at `path`, format-preserving. Missing keys are created,
-    /// including intermediate tables (jq's `.a.b = 1` auto-creates `.a`);
-    /// array-index paths are a follow-up.
+    /// including intermediate tables (jq's `.a.b = 1` auto-creates `.a`). A path
+    /// ending in an array index sets, appends (`idx == len`), or auto-vivifies
+    /// an array or array-of-tables element (`.foo[0] = { ... }` -> `[[foo]]`).
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let Some((last, parent)) = path.split_last() else {
             return Err(EditError::new("cannot set the whole document"));
         };
-        let Step::Field(key) = last else {
-            return Err(EditError::new("TOML set targets object keys"));
-        };
-        let mut current: &mut dyn TableLike = self.doc.as_table_mut();
-        for step in parent {
-            let Step::Field(k) = step else {
-                return Err(EditError::new("TOML paths for set are object keys"));
-            };
-            if current.get(k).is_none() {
-                // Auto-vivify the missing parent. Implicit, so a table that
-                // only ever holds sub-tables never emits a bare `[a]` header -
-                // `.a.b.c = 1` yields `[a.b]`, not `[a]` + `[a.b]`.
-                let mut t = Table::new();
-                t.set_implicit(true);
-                current.insert(k, Item::Table(t));
+        match last {
+            Step::Field(key) => {
+                let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
+                let new_item = edit::value_to_item(value)?;
+                if let Some(existing) = current.get_mut(key) {
+                    // Preserve the existing value's decor (spacing + inline comment).
+                    let decor = existing.as_value().map(|v| v.decor().clone());
+                    *existing = new_item;
+                    if let (Some(decor), Some(v)) = (decor, existing.as_value_mut()) {
+                        *v.decor_mut() = decor;
+                    }
+                } else {
+                    current.insert(key, new_item);
+                }
+                Ok(())
             }
-            let item = current
-                .get_mut(k)
-                .expect("key exists: it was just inserted or already present");
-            current = item
-                .as_table_like_mut()
-                .ok_or_else(|| EditError::new(format!("`{k}` is not a table")))?;
-        }
-        let new_item = edit::value_to_item(value)?;
-        if let Some(existing) = current.get_mut(key) {
-            // Preserve the existing value's decor (spacing + inline comment).
-            let decor = existing.as_value().map(|v| v.decor().clone());
-            *existing = new_item;
-            if let (Some(decor), Some(v)) = (decor, existing.as_value_mut()) {
-                *v.decor_mut() = decor;
+            Step::Index(n) => {
+                // The array's key is the step just before the index; walk the
+                // rest as tables, then set/append the element.
+                let Some((Step::Field(arr_key), table_path)) = parent.split_last() else {
+                    return Err(EditError::new(
+                        "an array index needs an array key before it, e.g. `.foo[0]`",
+                    ));
+                };
+                let current = walk_tables_vivify(self.doc.as_table_mut(), table_path)?;
+                edit::set_array_element(current, arr_key, *n, value)
             }
-        } else {
-            current.insert(key, new_item);
+            _ => Err(EditError::new(
+                "TOML set targets object keys or array indices",
+            )),
         }
-        Ok(())
     }
 
     /// The value at `path`, or `None`.
@@ -94,27 +91,75 @@ impl Toml {
             .next()
     }
 
-    /// Delete the key at `path` (a missing key is a no-op).
+    /// Delete the key or array element at `path` (a missing target is a no-op).
     pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         let Some((last, parent)) = path.split_last() else {
             return Ok(());
         };
-        let Step::Field(key) = last else {
-            return Err(EditError::new("TOML del targets object keys"));
-        };
-        let mut current: &mut dyn TableLike = self.doc.as_table_mut();
-        for step in parent {
-            let Step::Field(k) = step else {
-                return Ok(());
-            };
-            match current.get_mut(k).and_then(|i| i.as_table_like_mut()) {
-                Some(next) => current = next,
-                None => return Ok(()),
+        match last {
+            Step::Field(key) => {
+                let Some(current) = walk_tables(self.doc.as_table_mut(), parent) else {
+                    return Ok(());
+                };
+                current.remove(key);
+                Ok(())
             }
+            Step::Index(n) => {
+                let Some((Step::Field(arr_key), table_path)) = parent.split_last() else {
+                    return Ok(());
+                };
+                let Some(current) = walk_tables(self.doc.as_table_mut(), table_path) else {
+                    return Ok(());
+                };
+                edit::delete_array_element(current, arr_key, *n);
+                Ok(())
+            }
+            _ => Err(EditError::new(
+                "TOML del targets object keys or array indices",
+            )),
         }
-        current.remove(key);
-        Ok(())
     }
+}
+
+/// Walk `steps` (all fields) from `root`, **creating** missing intermediate
+/// tables (implicit, so a table that only holds sub-tables emits no bare header).
+fn walk_tables_vivify<'a>(
+    root: &'a mut dyn TableLike,
+    steps: &[Step],
+) -> Result<&'a mut dyn TableLike, EditError> {
+    let mut current = root;
+    for step in steps {
+        let Step::Field(k) = step else {
+            return Err(EditError::new(
+                "TOML paths for set are object keys, with an optional trailing array index",
+            ));
+        };
+        if current.get(k).is_none() {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            current.insert(k, Item::Table(t));
+        }
+        let item = current
+            .get_mut(k)
+            .expect("key exists: it was just inserted or already present");
+        current = item
+            .as_table_like_mut()
+            .ok_or_else(|| EditError::new(format!("`{k}` is not a table")))?;
+    }
+    Ok(current)
+}
+
+/// Walk `steps` (all fields) from `root` **without** creating anything; returns
+/// `None` if the path doesn't resolve to a table (a delete no-op).
+fn walk_tables<'a>(root: &'a mut dyn TableLike, steps: &[Step]) -> Option<&'a mut dyn TableLike> {
+    let mut current = root;
+    for step in steps {
+        let Step::Field(k) = step else {
+            return None;
+        };
+        current = current.get_mut(k)?.as_table_like_mut()?;
+    }
+    Some(current)
 }
 
 /// Parse TOML source into a [`Toml`] document.
@@ -561,25 +606,16 @@ mod tests {
 
     #[test]
     fn set_and_del_path_guards() {
-        // set: last step must be a field.
-        assert_eq!(
-            edit_err("xs = [1]\n", ".xs[0] = 5"),
-            "TOML set targets object keys"
-        );
-        // set: a parent index step is rejected.
+        // set: a field *inside* an array element (an index in the parent) is a
+        // follow-up; only a trailing index is supported.
         assert_eq!(
             edit_err("[a]\nx = 1\n", ".a[0].y = 5"),
-            "TOML paths for set are object keys"
+            "TOML paths for set are object keys, with an optional trailing array index"
         );
         // set: the whole document cannot be replaced.
         assert_eq!(
             edit_err("a = 1\n", ". = 5"),
             "cannot set the whole document"
-        );
-        // del: last step must be a field.
-        assert_eq!(
-            edit_err("xs = [1]\n", "del(.xs[0])"),
-            "TOML del targets object keys"
         );
         // del: a non-field parent step is a silent no-op (path can't match).
         assert_eq!(edit_src("[a]\nx = 1\n", "del(.a[0].y)"), "[a]\nx = 1\n");
@@ -587,6 +623,59 @@ mod tests {
         assert_eq!(edit_src("a = 1\n", "del(.nope.k)"), "a = 1\n");
         // del: the whole document (empty path) is a silent no-op.
         assert_eq!(edit_src("a = 1\n", "del(.)"), "a = 1\n");
+    }
+
+    #[test]
+    fn array_index_set_and_delete() {
+        // Issue #59: array-index paths in set/delete, including array-of-tables.
+        // Append a new [[bin]] block; the existing block is preserved.
+        assert_eq!(
+            edit_src("[[bin]]\nname = \"a\"\n", r#".bin[1] = {name: "b"}"#),
+            "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n"
+        );
+        // Append onto a doc with no such array auto-vivifies the array-of-tables.
+        assert_eq!(
+            edit_src("x = 1\n", r#".bin[0] = {name: "first"}"#),
+            "x = 1\n\n[[bin]]\nname = \"first\"\n"
+        );
+        // Replace an element in place; the sibling block is untouched.
+        assert_eq!(
+            edit_src(
+                "[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\n",
+                r#".bin[0] = {name: "z"}"#
+            ),
+            "[[bin]]\nname = \"z\"\n[[bin]]\nname = \"b\"\n"
+        );
+        // Inline arrays: append, replace, auto-vivify.
+        assert_eq!(edit_src("xs = [1, 2]\n", ".xs[2] = 3"), "xs = [1, 2, 3]\n");
+        assert_eq!(edit_src("xs = [1, 2]\n", ".xs[0] = 9"), "xs = [9, 2]\n");
+        assert_eq!(
+            edit_src("a = 1\n", r#".ys[0] = "v""#),
+            "a = 1\nys = [\"v\"]\n"
+        );
+        // Negative index counts from the end (replace, delete).
+        assert_eq!(
+            edit_src("xs = [1, 2, 3]\n", ".xs[-1] = 9"),
+            "xs = [1, 2, 9]\n"
+        );
+        assert_eq!(
+            edit_src("xs = [1, 2, 3]\n", "del(.xs[-1])"),
+            "xs = [1, 2]\n"
+        );
+        // Delete an array-of-tables element and an inline-array element.
+        assert_eq!(
+            edit_src(
+                "[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\n",
+                "del(.bin[0])"
+            ),
+            "[[bin]]\nname = \"b\"\n"
+        );
+        assert_eq!(edit_src("xs = [1, 2, 3]\n", "del(.xs[1])"), "xs = [1, 3]\n");
+        // Out-of-range append errors; out-of-range delete is a jq-style no-op.
+        assert!(edit_err("xs = [1]\n", ".xs[5] = 9").contains("out of range"));
+        assert_eq!(edit_src("xs = [1]\n", "del(.xs[9])"), "xs = [1]\n");
+        // A scalar can't be set at an array-of-tables index.
+        assert!(edit_err("[[bin]]\nname = \"a\"\n", ".bin[1] = 5").contains("not an array"));
     }
 
     #[test]
