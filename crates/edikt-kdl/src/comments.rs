@@ -1,8 +1,8 @@
 //! KDL ↔ the uniform comment model, over `kdl-rs`'s per-node decor.
 //!
 //! A node's `leading` decor holds the whitespace and `//`/`/* */` comments
-//! before it - its head; the segment of `before_terminator` after the node's
-//! content holds a trailing `//` comment - its inline. The document's
+//! before it, its head; the segment of `before_terminator` after the node's
+//! content holds a trailing `//` comment, its inline. The document's
 //! `trailing` decor is the foot. Extraction and emission share the projection
 //! convention (grouping, the `"-"` args key) with [`crate::project`].
 
@@ -210,8 +210,8 @@ fn node_commented(node: &KdlNode) -> Commented {
 }
 
 /// A node's value projection, carrying its **child nodes'** comments. Mirrors
-/// [`project::node_to_value`] - args and properties are comment-free scalars, so
-/// they come straight from the value - but recurses through [`doc_commented`]
+/// [`project::node_to_value`]: args and properties are comment-free scalars, so
+/// they come straight from the value, but recurses through [`doc_commented`]
 /// for a children block, so a comment on a nested node survives extraction (and
 /// thus conversion) instead of being flattened away.
 fn node_body_commented(node: &KdlNode) -> Commented {

@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn set_deep_vivify_keeps_intermediates_implicit() {
-        // `.a.b.c = 1` emits only `[a.b]` - no empty `[a]` header.
+        // `.a.b.c = 1` emits only `[a.b]`, no empty `[a]` header.
         assert_eq!(edit_src("x = 1\n", ".a.b.c = 1"), "x = 1\n\n[a.b]\nc = 1\n");
     }
 
@@ -437,7 +437,7 @@ mod tests {
         let edikt_core::CommentedNode::Object(pkg) = &top[0].1.node else {
             panic!("expected table object");
         };
-        // `version = "0.1.0"   # semver` - the entry's inline comment.
+        // `version = "0.1.0"   # semver`: the entry's inline comment.
         assert_eq!(pkg[1].0, "version");
         assert_eq!(pkg[1].1.comments.inline.as_deref(), Some("semver"));
     }

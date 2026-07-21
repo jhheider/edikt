@@ -114,7 +114,7 @@ fn set_inline(
         .map(|i| end + i)
         .unwrap_or(source.len());
     // A container close (`}`/`]`) after the value on this line means it is
-    // compact - an inline comment would comment it out; that reflow is later.
+    // compact: an inline comment would comment it out; that reflow is later.
     if source[end..nl].contains(['}', ']', '{', '[']) {
         return Err(EditError::new(
             "adding an inline comment here needs layout expansion (a follow-up)",

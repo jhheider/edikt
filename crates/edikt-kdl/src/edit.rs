@@ -3,7 +3,7 @@
 //! Edits are surgical: set an argument or property in place (only its value
 //! text changes), create a leaf node, delete a node/prop/argument, extend a
 //! run of repeated nodes. Replacing a whole node body wholesale is refused
-//! rather than reflowed - same policy as YAML.
+//! rather than reflowed; same policy as YAML.
 
 use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
@@ -428,7 +428,7 @@ fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: us
 
 // --- emit -------------------------------------------------------------------
 
-/// Emit a value as a fresh KDL document (autoformatted - there is no layout to
+/// Emit a value as a fresh KDL document (autoformatted; there is no layout to
 /// preserve on this path). Returns text and warnings (none: KDL holds every
 /// feature).
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {

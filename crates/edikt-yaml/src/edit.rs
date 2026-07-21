@@ -1,7 +1,7 @@
 //! Format-preserving edits by byte splice over the span tree.
 //!
 //! An edit resolves the target node's byte range (from the marks composed in
-//! [`crate::compose`]) and replaces exactly those bytes - every other byte of the
+//! [`crate::compose`]) and replaces exactly those bytes; every other byte of the
 //! source is left verbatim, so comments, indentation, and layout survive
 //! untouched. After each splice we recompose from the new source, so a later step
 //! in the same program sees the updated document.
@@ -49,7 +49,7 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<Vec<String>, EditError> {
             let val = doc.doc_value(idx);
             // A predicate that can't be evaluated against a document (e.g. a
             // scalar document when the predicate indexes a field) means "does
-            // not match" - skip it, with a warning, rather than aborting the
+            // not match": skip it, with a warning, rather than aborting the
             // whole edit. `select` picks by content, so a heterogeneous stream
             // shouldn't fail because one document has the wrong shape.
             match doc_matches(pred, &val) {
@@ -192,7 +192,7 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
 enum Resolved<'a> {
     /// The path landed on an existing node.
     Found(&'a Node),
-    /// The path's final field is absent on this (existing) mapping - an insert point.
+    /// The path's final field is absent on this (existing) mapping: an insert point.
     MissingField { parent: &'a Node, key: String },
     /// The path does not resolve (bad step, missing intermediate, out of range).
     NotFound,
@@ -271,7 +271,7 @@ impl Yaml {
                 NodeKind::Scalar(_) => {
                     // A multi-line scalar (block `|`/`>`, or a wrapped quoted
                     // scalar) can't be replaced with a single inline token without
-                    // reflowing surrounding lines - refuse cleanly rather than
+                    // reflowing surrounding lines; refuse cleanly rather than
                     // emit something that fails to re-parse.
                     if self.source[node.span.clone()].contains('\n') {
                         return Err(EditError::new(
@@ -409,7 +409,7 @@ fn append_items(
     }
     // A block sequence's start-mark sits on the first item's `-`. Derive the dash
     // column + indentation from there, so this is robust even when the *last* item
-    // is a block scalar (whose span starts at its content, not the dash) - the case
+    // is a block scalar (whose span starts at its content, not the dash); the case
     // that used to misreport as a flow sequence.
     let dash = seq_node.span.start;
     if source.as_bytes().get(dash) != Some(&b'-') {
@@ -474,7 +474,7 @@ fn line_after(source: &str, end: usize) -> usize {
 
 /// The byte offset just after the last physical line of `node`.
 ///
-/// A collection's own end-mark is unreliable for line math - libyaml lands it on
+/// A collection's own end-mark is unreliable for line math; libyaml lands it on
 /// the *next sibling's* text (past that sibling's indent), which would overshoot.
 /// So we drill to the node's deepest last scalar and take the line after *it*.
 fn block_end(source: &str, node: &Node) -> usize {
@@ -519,7 +519,7 @@ pub(crate) fn source_slices(source: &str, root: &Node, path: &[Step]) -> Vec<Str
                     NodeKind::Mapping(entries) => next.extend(entries.iter().map(|e| &e.value)),
                     _ => {}
                 },
-                // A comment addresses no value node - source slices never
+                // A comment addresses no value node; source slices never
                 // resolve one (the CLI reads comments via `to_commented`).
                 Step::Comment(_) => {}
             }

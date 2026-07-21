@@ -15,7 +15,7 @@ doing because it deepens the moat rather than diluting it: *losslessly querying
 and bulk-editing the comments themselves, addressably,* is something no config
 tool does (yq preserves some comments; none treat them as searchable, editable
 content). It stays inside the "lossless, surgical, never reflow what you didn't
-touch" philosophy - a comment edit changes only that comment's bytes, or inserts
+touch" philosophy: a comment edit changes only that comment's bytes, or inserts
 exactly one comment line.
 
 ## Motivating use cases
@@ -74,7 +74,7 @@ is sugar for its `head` field.
 
 - `head`, `inline`, and `foot` are each a **single string** (the comment text,
   delimiter-free). A multi-line head/foot comment is *one* string with the
-  emitter's wrapping applied - **not** an array of lines (decided: rational
+  emitter's wrapping applied, **not** an array of lines (decided: rational
   wrapping over arrays; see [Wrapping](#wrapping-long-comments)). Reading a
   multi-line head comment returns the unwrapped text (lines joined to a space);
   writing wraps it back.
@@ -98,7 +98,7 @@ comments | select(.text | test("TODO"))          # case 4 (partial): find them..
 comments | select(.text | test("TODO")) | .path  # ...return their keys
 ```
 
-`.path` is a rendered path string (`.a.b.#.inline`) - this is the one place the
+`.path` is a rendered path string (`.a.b.#.inline`): this is the one place the
 language must **carry keys through iteration**, which it deliberately does not do
 today (`.[]` discards keys). That dependency is called out under Cost.
 
@@ -115,14 +115,14 @@ del(.foo.#.inline)                        # remove just the inline comment
 
 Every write is **format-preserving**: setting an existing comment changes only
 its bytes; attaching a new one inserts exactly one comment line (or trailing
-segment, for inline), touching nothing else - the same surgical guarantee as
+segment, for inline), touching nothing else: the same surgical guarantee as
 value edits. The one exception is when the *layout can't hold* an own-line
 comment; see [Layout reflow](#layout-reflow-when-a-comment-forces-expansion).
 
 ## The `Feature` model: comment kinds are the feature (the load-bearing part)
 
 Comment *kinds are not uniform across formats*, so which kinds a format supports
-is the capability - exactly the "features section matters again" point. Per the
+is the capability, exactly the "features section matters again" point. Per the
 decision, **the comment feature *is* an array**: a format declares
 
 ```rust
@@ -155,7 +155,7 @@ Comment-kind support by format (`COMMENT_KINDS` contents):
 | INI | ● | ● | ● |
 | `.env` / `.properties` | ● | - | ● |
 
-Inline is the only kind with a real per-format gap (`.env` - a `#` inside a
+Inline is the only kind with a real per-format gap (`.env`: a `#` inside a
 value is data, not a comment). JSON supports none.
 
 ## Layout reflow: when a comment forces expansion
@@ -179,18 +179,18 @@ promotes to an error). The cases:
 
 These are the only comment edits that touch more than their own line; every
 other attach/edit/delete stays surgical. A warning here matters because the
-whole promise is byte-minimal diffs - a silent whole-object reflow would betray
+whole promise is byte-minimal diffs: a silent whole-object reflow would betray
 it.
 
 ## Wrapping long comments
 
 Comment text is stored **unwrapped** (one logical string); the emitter wraps on
-write. Decided: **rational wrapping (and re-wrapping), not line arrays** - and
+write. Decided: **rational wrapping (and re-wrapping), not line arrays**, and
 the width is *the file's own envelope*, so comments never make the document
 wider than it already is.
 
 - **Wrap column (absolute)** `= clamp(longest line in the source, 80, 100)`.
-  Between the bounds it tracks the file's own width - a comment that fits inside
+  Between the bounds it tracks the file's own width: a comment that fits inside
   the existing envelope adds no horizontal extent (the moat, applied to
   columns). The `100` ceiling stops a pathologically wide file from yielding
   200-char comment lines. The `80` floor keeps *narrow* files sane: a flat
@@ -204,9 +204,9 @@ wider than it already is.
   ends *at or before* `wrap_col`. Continuation lines repeat `D` at column `I`.
 - **The floor may widen a narrow file, by design.** Below 80 columns the
   envelope is too narrow to be a sensible comment width, so a head comment on a
-  9-column `.env` may reach column 80 - accepted for readability. (This is *not*
+  9-column `.env` may reach column 80, accepted for readability. (This is *not*
   the same as the [layout reflow](#layout-reflow-when-a-comment-forces-expansion)
-  warning, which is about forcing structural expansion - flow->block,
+  warning, which is about forcing structural expansion (flow->block,
   compact->pretty. A comment simply being 80 wide in a narrow file is expected and
   silent.)
 - **Unbreakable tokens overflow** rather than hard-break (a URL or path longer
@@ -223,13 +223,13 @@ wider than it already is.
 
 ## The write interface (not a new representation)
 
-We are **not** missing a unified AST/CST - the heterogeneity (rowan for
+We are **not** missing a unified AST/CST: the heterogeneity (rowan for
 JSONC/INI/env, `toml_edit`, `kdl-rs`, span-tree for YAML) is deliberate: each
 format reuses the best-in-class lossless library, and forcing them onto one tree
 would throw away `toml_edit`'s correctness and require building a `yaml_edit`
 that does not exist. `Commented` is already the unified *read/convert* model.
 
-What's missing is a unified **write** interface - new methods on the `Document`
+What's missing is a unified **write** interface: new methods on the `Document`
 trait, each format implementing over its own substrate:
 
 ```rust
@@ -244,11 +244,11 @@ own tree. Unify the interface, not the representation.
 ### On a `yaml_edit` layer - deliberately not building it
 
 Attaching a head comment to YAML is "insert `<indent># text\n` before the
-node's line," and the span tree already carries the node's byte offset - so it
+node's line," and the span tree already carries the node's byte offset, so it
 reuses the *same byte-splice* the existing new-key/append edits use (days on
 existing machinery). A full `yaml_edit` decor-CST (mirroring `toml_edit`) would
 mean modeling decor slots for every YAML construct by reconstructing inter-token
-trivia from libyaml's events - weeks, high risk, duplicating libyaml. The
+trivia from libyaml's events: weeks, high risk, duplicating libyaml. The
 span-tree splice suffices; don't build the layer.
 
 ## Cost, in tiers (honest)
@@ -259,7 +259,7 @@ span-tree splice suffices; don't build the layer.
    comment token in the rowan tree (they already carry comment tokens; the splice
    utilities exist for values).
 3. **Moderate - write-back for YAML.** A byte-splice at a computed offset over
-   the span tree - the same mechanism as value edits, *not* a new `yaml_edit`
+   the span tree, the same mechanism as value edits, *not* a new `yaml_edit`
    layer (see above). The layout-reflow cases (flow -> block) are the fiddly part.
 4. **Deep - the evaluator must see comments.** `eval` runs over `Value`, which is
    comment-free. Addressing comments needs eval (or a parallel resolve path) to
@@ -287,25 +287,25 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
     document-level (`.#`) editing are follow-ups; comment targets are nodes, not
     properties/args.
   - ✅ **2b - JSONC / INI / `.env`** (source splice guided by the rowan tree,
-    then re-parse - untouched bytes preserved). **Shipped.** Line-oriented
+    then re-parse; untouched bytes preserved). **Shipped.** Line-oriented
     formats (INI, `.env`) share `edikt_core::place_line_comment`; JSONC splices
     by member/element span. `.env` has head/foot only (inline refused); INI adds
     inline + section-header comments; JSONC does head/inline for members and
     array elements. A **compact / single-line JSONC** target (no line to hang an
     own-line comment, or a container-close that an inline would swallow) errors
-    with a clear "needs layout expansion" - that reflow is 2c.
+    with a clear "needs layout expansion"; that reflow is 2c.
   - ✅ **2c - YAML** (span-tree byte-splice). **Shipped.** Head/foot/inline on
     block mappings and sequences (dashes handled: a sequence item's head sits at
     the dash's indent); re-parses to a fresh span tree. Flow collections
     (`[...]`/`{...}`) get the same clean "needs block-style expansion" error as
     compact JSONC.
 
-  **Layout reflow - reconsidered.** The original design said a compact-JSON /
+  **Layout reflow, reconsidered.** The original design said a compact-JSON /
   YAML-flow target should **warn and auto-expand** (`--strict` promotes). Having
   built it, that call is **reversed**: edikt now **errors cleanly** instead.
   Auto-reflowing a user's compact/minified structure to insert one comment
-  rewrites many bytes they never targeted - a *larger* moat violation than
-  refusing - and the demand (comment a minified file, expecting prettification)
+  rewrites many bytes they never targeted: a *larger* moat violation than
+  refusing, and the demand (comment a minified file, expecting prettification)
   is near-zero. So the reflow-and-expand path is **deferred, revisit-reactively**
   (like per-format feature flags): the error names the situation, and a user who
   wants it can prettify first. Reopen if a real consumer asks.
@@ -317,7 +317,7 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
   comment (targets are snapshotted, then written by logical path so each edit
   stays valid across re-parses). The stream composes with pipe / `select` /
   `[...]`. A comment query never triggers the "comments were dropped" conversion
-  warning - it *surfaces* comments, it doesn't lose them.
+  warning: it *surfaces* comments, it doesn't lose them.
 
 ## Decided (was "open")
 

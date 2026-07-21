@@ -1,7 +1,7 @@
 //! Line scanner + rowan tree builder for `.env` / `.properties`.
 //!
 //! Flat and honest: `key=value` / `key:value` entries, `#`/`!` comment lines,
-//! blanks. No sections. **No inline comments and no interpolation** - a value is
+//! blanks. No sections. **No inline comments and no interpolation**: a value is
 //! the raw text after the separator (trimmed for the projected value, preserved
 //! verbatim for round-trip). Each `Entry` spans its whole line including the
 //! terminator, so deletion is a single `detach`.
@@ -59,7 +59,7 @@ fn process_line(b: &mut GreenNodeBuilder<'static>, content: &str, term: &str) {
 
 fn build_entry(b: &mut GreenNodeBuilder<'static>, rest: &str) {
     let Some(sep_idx) = rest.find(['=', ':']) else {
-        // No separator - keep the bytes losslessly, but flag it as malformed.
+        // No separator: keep the bytes losslessly, but flag it as malformed.
         b.token(sk(Sk::Error), rest);
         return;
     };
@@ -73,7 +73,7 @@ fn build_entry(b: &mut GreenNodeBuilder<'static>, rest: &str) {
 
     b.token(sk(Sk::Sep), &rest[sep_idx..sep_idx + 1]);
 
-    // Everything after the separator is the value - no inline-comment parsing.
+    // Everything after the separator is the value; no inline-comment parsing.
     let val_region = &rest[sep_idx + 1..];
     let core = val_region.trim();
     let lead_len = val_region.len() - val_region.trim_start().len();

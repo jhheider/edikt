@@ -1,7 +1,7 @@
 //! edikt KDL format module.
 //!
 //! Backed by [`kdl`](https://crates.io/crates/kdl) (kdl-rs), whose document is
-//! format-preserving by construction - the `toml_edit` of KDL - so edikt gets
+//! format-preserving by construction (the `toml_edit` of KDL), so edikt gets
 //! lossless KDL (comments, spacing, node layout) without a hand-rolled CST.
 //!
 //! KDL nodes carry positional **arguments**, `key=value` **properties**, and a
@@ -816,7 +816,7 @@ mod tests {
         );
 
         // A head comment on a nested child recurses into the children block.
-        // (Built directly here; extraction produces the same shape - see
+        // (Built directly here; extraction produces the same shape; see
         // `nested_child_comments_survive_extraction`.)
         let head = |text: &str, v: Value| edikt_core::Commented {
             comments: edikt_core::Comments {

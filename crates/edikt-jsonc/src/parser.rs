@@ -121,7 +121,7 @@ impl Parser<'_> {
                         self.bump();
                     }
                     self.value();
-                    // Absorb the trailing comma into the member - but only if one
+                    // Absorb the trailing comma into the member, but only if one
                     // actually follows, so a last member does not swallow the
                     // whitespace before `}` (which would break clean deletion).
                     if self.next_significant() == Some(Sk::Comma) {

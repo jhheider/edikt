@@ -1,7 +1,7 @@
 //! Project a KDL document onto the [`Value`] model, per the convention in
 //! CLAUDE.md: nodes group by name (repeats -> arrays); a node is its children
-//! object, its lone argument, its argument array, or - when arguments mix with
-//! props/children - an object with the arguments under the reserved key `"-"`.
+//! object, its lone argument, its argument array, or, when arguments mix with
+//! props/children, an object with the arguments under the reserved key `"-"`.
 
 use edikt_core::Value;
 use kdl::{KdlDocument, KdlNode, KdlValue};

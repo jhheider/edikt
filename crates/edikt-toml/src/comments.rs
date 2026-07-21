@@ -4,7 +4,7 @@
 //! its head lines, a value's (or table header's) suffix holds its inline
 //! comment, and the document trailing holds the foot. Inside arrays,
 //! `toml_edit` stores a comment written after `elem,` in the *next* element's
-//! prefix - the segment before that prefix's first newline is really the
+//! prefix: the segment before that prefix's first newline is really the
 //! previous element's inline comment, and extraction reassigns it.
 //!
 //! Emission builds the same `DocumentMut` the plain emitter would (identical

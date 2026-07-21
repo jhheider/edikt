@@ -16,7 +16,7 @@ fn run(args: &[&str], stdin: &str) -> (String, String, i32) {
     {
         // The child may exit before reading stdin (e.g. a bad expression or -i
         // error, which are detected first). A broken pipe on the write is then
-        // expected - ignore it. Dropping the handle closes stdin (EOF).
+        // expected; ignore it. Dropping the handle closes stdin (EOF).
         let mut sin = child.stdin.take().unwrap();
         let _ = sin.write_all(stdin.as_bytes());
     }
@@ -79,7 +79,7 @@ fn computed_value() {
 
 #[test]
 fn miss_is_a_silent_noop() {
-    // sed-shaped: no match, no output, no error - exit 0.
+    // sed-shaped: no match, no output, no error; exit 0.
     let (out, err, code) = run(&["-t", "jsonc", ".nope"], TSCONFIG);
     assert_eq!(out, "");
     assert_eq!(err, "");
@@ -296,7 +296,7 @@ fn creates_new_key_jsonc() {
 
 #[test]
 fn creates_new_key_env() {
-    // The exact case the demo hit - now works.
+    // The exact case the demo hit; now works.
     let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");
     assert_eq!(out, "K=v\nK2=x\n");
     assert_eq!(code, 0);
@@ -737,7 +737,7 @@ fn unknown_extension_errors() {
 #[test]
 fn structural_query_returns_source_slice() {
     // A pure-path structural query stays in-format: exact source bytes,
-    // comments included - not re-serialized JSON.
+    // comments included, not re-serialized JSON.
     let src = "{\n  \"lib\": [\"ES2020\", \"DOM\"], // pinned\n  \"opts\": { \"strict\": true }\n}";
     let (out, _e, code) = run(&["-t", "jsonc", ".lib"], src);
     assert_eq!(out, "[\"ES2020\", \"DOM\"]\n");
@@ -753,7 +753,7 @@ fn structural_query_returns_source_slice() {
 #[test]
 fn synthesized_query_stays_in_format() {
     // A computed result has no source slice; it renders via the input format's
-    // emitter - YAML in, YAML out.
+    // emitter: YAML in, YAML out.
     let y = "web:\n  image: nginx\n  ports:\n    - 80\n";
     let (out, _e, code) = run(&["-t", "yaml", ".web | keys"], y);
     assert_eq!(out, "- image\n- ports\n");
@@ -764,7 +764,7 @@ fn synthesized_query_stays_in_format() {
 fn infeasible_output_names_candidates() {
     // An array result cannot be a top-level env document; the error suggests
     // formats that can hold a top-level array (json/jsonc/yaml) and NOT the
-    // ones that can't (toml/kdl require a table at the root) - and never the
+    // ones that can't (toml/kdl require a table at the root), and never the
     // target that just failed (edikt-049 review fix F).
     let (_o, err, code) = run(&["-t", "yaml", "-T", "env", ".xs"], "xs:\n  - 1\n  - 2\n");
     assert_eq!(code, 2);
@@ -866,7 +866,7 @@ fn output_file_untouched_on_miss() {
 #[test]
 fn identity_expression_is_never_a_directory() {
     // `.` names a directory that always exists, but as an operand it is the
-    // identity *expression* - with -T it must convert stdin, not try to read
+    // identity *expression*; with -T it must convert stdin, not try to read
     // the current directory.
     let (out, _e, code) = run(&["-t", "jsonc", "-T", "json", "."], "{ \"a\": 1 }");
     assert_eq!(out, "{\n  \"a\": 1\n}\n");
@@ -895,7 +895,7 @@ fn helpful_error_messages() {
     assert!(err.contains("jsonc") && err.contains("yaml"), "got: {err}");
 
     // A failed edit path is named in the error. (Deleting a *missing* key is a
-    // no-op, jq-style - so use a create-through-scalar, which genuinely fails.)
+    // no-op, jq-style, so use a create-through-scalar, which genuinely fails.)
     let (_o, err2, c2) = run(&["-t", "yaml", ".a.b = 1"], "a: 1\n");
     assert_eq!(c2, 2);
     assert!(err2.contains(".a.b"), "got: {err2}");
@@ -1012,7 +1012,7 @@ fn query_falls_back_to_json_when_source_cant_hold_it() {
     assert_eq!(c2, 0);
     assert!(obj.contains("port = 8080"), "toml object out: {obj}");
 
-    // An *explicit* -T that can't hold the value still errors - the fallback is
+    // An *explicit* -T that can't hold the value still errors; the fallback is
     // only for the defaulted output of a read.
     let (_o, err, c3) = run(&["-t", "yaml", "-T", "toml", ".xs"], "xs:\n  - 1\n");
     assert_eq!(c3, 2);

@@ -3,7 +3,7 @@
 //! jq-style generator semantics: every expression maps one input value to a
 //! *stream* of output values (0, 1, or many), collected here into a `Vec`.
 //! A miss (missing key, out-of-range index) yields an **empty stream**, not
-//! `null` - the CLI renders it as a silent no-op (sed-shaped), and `//`
+//! `null`: the CLI renders it as a silent no-op (sed-shaped), and `//`
 //! supplies defaults. An explicit `null` in the document still yields `null`.
 //!
 //! Mutation `=`, `|=`, and `del` are handled here at the value level - this
@@ -136,7 +136,7 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
         }
         Expr::Alternative(l, r) => {
             // jq's `//`: the left side's truthy outputs; if there are none -
-            // a miss, `null`, or `false` - the right side's. A type *error*
+            // a miss, `null`, or `false`: the right side's. A type *error*
             // on the left still propagates: a miss falls back, a mistake
             // doesn't hide.
             let truthy: Vec<Value> = eval(l, input)?
@@ -398,7 +398,7 @@ fn apply_step(step: &Step, v: &Value) -> Result<Vec<Value>, EvalError> {
             ))),
         },
         // A comment step is resolved against the document's commented
-        // projection, not the value stream - see `eval_with_comments`. Reaching
+        // projection, not the value stream; see `eval_with_comments`. Reaching
         // it here means it was used in a spot the value evaluator can't serve.
         Step::Comment(_) => Err(EvalError::new(
             "comment access (`#`) resolves only as a whole path like `.foo.#`, \
@@ -791,7 +791,7 @@ fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
 
 /// The message for a comment edit, which lands in v0.2 Phase 2.
 fn comment_mutation_unsupported() -> &'static str {
-    "editing comments (`#`) is not supported yet (planned for v0.2); reading works - e.g. `edikt '.foo.#' file`"
+    "editing comments (`#`) is not supported yet (planned for v0.2); reading works, e.g. `edikt '.foo.#' file`"
 }
 
 fn length(v: &Value) -> Result<Value, EvalError> {
@@ -1232,7 +1232,7 @@ mod tests {
             Value::Array(vec![Value::Bool(false), Value::Int(7), Value::Null]),
         )]);
         assert_eq!(run(r#".xs[] // "d""#, &items), vec![Value::Int(7)]);
-        // A type error on the left still propagates - a miss falls back, a
+        // A type error on the left still propagates: a miss falls back, a
         // mistake doesn't hide.
         assert!(eval(&parse(r#".a.b // "d""#).unwrap(), &doc).is_err());
     }
@@ -1437,7 +1437,7 @@ mod tests {
 
     #[test]
     fn assign_lhs_must_be_path() {
-        // `1 = 2` - the left side is a literal, not a path.
+        // `1 = 2`: the left side is a literal, not a path.
         assert!(eval(&parse("1 = 2").unwrap(), &Value::Null).is_err());
     }
 

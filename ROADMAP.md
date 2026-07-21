@@ -10,7 +10,7 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
   (Value, Feature, expression language, evaluator), `edikt-syntax` + `edikt-jsonc`
   (lossless CST, `Document` seam), and the `edikt` CLI.
 - ✅ **M2 - Mutation.** `set` (`=`, `|=`), `del()`, `+=`/append - all
-  format-preserving via the rowan splice - plus `-i` and a format-agnostic CLI.
+  format-preserving via the rowan splice, plus `-i` and a format-agnostic CLI.
 - ✅ **M4 - INI.** Line-oriented lossless CST, `.section.key` paths, inline
   comments, set/del, `FEATURES = [Comments, Sections]`.
 - ✅ **M5 - `.env` / `.properties`.** Flat, string-valued, line-level editing,
@@ -21,7 +21,7 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 
 ## Milestones (upcoming, in order)
 
-Release infra is intentionally **last** - build the capability, then ship it.
+Release infra is intentionally **last**: build the capability, then ship it.
 
 - ⬜ **Small fixes.** New-key creation for INI (section-aware), object literals
   `{...}` and `.["key"]` bracket keys in the language, `-i.bak` backups,
@@ -32,7 +32,7 @@ Release infra is intentionally **last** - build the capability, then ship it.
   parser, zero transitive deps). One parse pass -> a span tree that is both the
   data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
   preserve comments and layout; merge keys (`<<`) resolve in queries. Replaced
-  the serde floor - the greenfield-CST / `yqlib-sys` paths are moot.
+  the serde floor; the greenfield-CST / `yqlib-sys` paths are moot.
 - ✅ **Output follows the format.** A structural query result is returned in the
   document's format: a **pure-path** result (`.services`) as the original
   **source slice** (exact bytes, comments, layout; YAML blocks dedented); a
@@ -44,11 +44,11 @@ Release infra is intentionally **last** - build the capability, then ship it.
   inferring the output format from its extension (`-T` wins; mutations treat it
   as a sink; nothing is written on a query miss).
 - ✅ **Comment-preserving conversion.** Comments carry across `-T` via a **uniform
-  comment model** - `Commented` in `edikt-core` (a `Value` enriched with per-node
+  comment model**: `Commented` in `edikt-core` (a `Value` enriched with per-node
   head / inline / foot comments), `Document::to_commented` extraction in all six
   formats, and per-format commented emitters that place each kind natively
   (`//`, `;`, `#`), remap a kind the grammar can't hold (env inline -> own line,
-  warned), or drop for a `Comments`-less target (JSON, warned) - the same
+  warned), or drop for a `Comments`-less target (JSON, warned): the same
   Feature-subtraction path as other degradations. N-in + N-out against one
   model, not N×N per pair. Comments ride pure-path selections (aligned 1:1 with
   the evaluator); synthesized results have none, and converting a commented
@@ -57,14 +57,14 @@ Release infra is intentionally **last** - build the capability, then ship it.
   byte-identical.
 - ✅ **Language polish.** The regex family - `test`, `match` (jq match objects,
   codepoint offsets, `g` streams every match), `capture` (named groups), `sub`/
-  `gsub` (`$name` capture references - sed-flavored, since the language has no
-  string interpolation) - plus `split` (literal 1-arg, regex 2-arg, jq's shape),
+  `gsub` (`$name` capture references, sed-flavored, since the language has no
+  string interpolation), plus `split` (literal 1-arg, regex 2-arg, jq's shape),
   `join`, `startswith`, `endswith`. Flags `g i x s m`; a bad regex or flag is a
   clean exit-2 error; a no-match `match`/`capture` is an empty stream (a miss).
   Driven by the `regex` crate. The registry still grows deliberately, never
   speculatively.
 - ✅ **v0.2.0 - comments as first-class content** (query + edit + the bulk
-  `comments` stream all **done** - see
+  `comments` stream all **done**; see
   [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
   Comments are **addressable and editable**, not just preserved/carried:
   query them (`.foo.#` -> head comment, `.foo.#.inline`, a document-wide
@@ -72,19 +72,19 @@ Release infra is intentionally **last** - build the capability, then ship it.
   (`.foo.# = "TODO"`, `.foo.# |= gsub(...)`), and search a comment back to the
   key it annotates. `#` is the terse 90% surface (collision-free; head by
   default). Reuses the `Commented` model; the real cost is (a) teaching the
-  evaluator to see comments - it runs over the comment-free `Value` today -
+  evaluator to see comments (it runs over the comment-free `Value` today,
   (b) per-format comment *write-back* via new `Document` methods (none exists
-  yet; `to_commented` is read-only) - reusing each format's own substrate, **not**
-  a unified CST (YAML stays a span-tree byte-splice, no `yaml_edit` layer) - and
+  yet; `to_commented` is read-only), reusing each format's own substrate, **not**
+  a unified CST (YAML stays a span-tree byte-splice, no `yaml_edit` layer), and
   (c) key-carrying iteration for comment->path. Comment *kinds are the feature*: a
   format declares `COMMENT_KINDS: &[CommentKind]` (empty = none), subsuming the
   boolean, so `.env` inline and JSON comments error/remap through the same
   derived check conversion already uses. Multi-line comments are **wrapped
   strings** (not line arrays), wrapped to the file's own envelope -
-  `clamp(longest source line, 80, 100)` - so a comment tracks the document's
+  `clamp(longest source line, 80, 100)`, so a comment tracks the document's
   width without going tiny on a flat `.env` or huge on a wide file. A comment
   that a compact JSON object or a YAML flow list can't hold **errors cleanly**
-  ("needs layout expansion") rather than reflowing untouched bytes - the
+  ("needs layout expansion") rather than reflowing untouched bytes: the
   auto-expand path was reconsidered and deferred. Sequenced query -> mutate ->
   bulk. An identity shift: "edit values, preserve comments" -> "edit the
   document, comments included."
@@ -93,7 +93,7 @@ Release infra is intentionally **last** - build the capability, then ship it.
   feature matrix + CI combinatorics. Revisit reactively (e.g. an `edikt-lite`
   build) if a concrete consumer needs a thinner binary.
 - ✅ **Release infra.** Coverage job (cargo-llvm-cov -> Coveralls) on the test
-  workflow; `release.yml` on a published GitHub Release - five-target binary
+  workflow; `release.yml` on a published GitHub Release: five-target binary
   matrix (linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64) with the
   man page + bash/zsh/fish completions inside each unix archive, then
   `katyo/publish-crates` in dependency order, then a `bump-formula` job that
@@ -155,7 +155,7 @@ Capture each quirk as a fixture under `fixtures/ini/` as it comes up:
 - **Query coverage.** Prove the query surface handles the common jq/yq-style
   navigations users reach for.
 - **Lossless-edit proof.** Prove we can edit a commented `tsconfig`/
-  `settings.json` and change only the targeted bytes - comments, layout, and
+  `settings.json` and change only the targeted bytes: comments, layout, and
   trailing commas untouched.
 - **Library crates get first-class coverage**, fixture-driven where it fits.
 
@@ -167,7 +167,7 @@ Capture each quirk as a fixture under `fixtures/ini/` as it comes up:
 - CI is warnings-as-errors (`check`/`clippy`), `fmt --check`, and a cross-OS test
   matrix. Every change lands via branch -> PR -> green CI -> squash-merge.
 - **Apply formatting before committing** (`cargo fmt --all`, not just
-  `--check`), and never gate on a *piped* check - `cargo fmt --check | tail &&
+  `--check`), and never gate on a *piped* check: `cargo fmt --check | tail &&
   echo ok` reports the pipe's exit status (0), not fmt's, which once masked
   unformatted code into CI. (`let`-chains format fine on rustfmt 1.9; the earlier
   "avoid them" note was a misdiagnosis of that masked check.)

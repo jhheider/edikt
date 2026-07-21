@@ -1,4 +1,4 @@
-//! edikt YAML format module - **lossless in-place edit, query, and conversion**,
+//! edikt YAML format module: **lossless in-place edit, query, and conversion**,
 //! pure Rust.
 //!
 //! YAML is driven by [`libyaml-safer`](https://crates.io/crates/libyaml-safer), a
@@ -95,7 +95,7 @@ impl Document for Yaml {
     fn has_comments(&self) -> bool {
         // A `#` at line start or after whitespace opens a comment. This can
         // false-positive on a `#` inside a quoted scalar, which only ever
-        // over-warns on conversion - acceptable, and never wrong the other way.
+        // over-warns on conversion; acceptable, and never wrong the other way.
         self.source
             .lines()
             .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn anchors_do_not_cross_document_boundaries() {
         // `*x` in doc 2 references an anchor defined only in doc 1. Anchor scope
-        // is per-document, so it does not resolve to 1 - it composes to null
+        // is per-document, so it does not resolve to 1; it composes to null
         // (each document gets a fresh anchor scope). If scopes leaked, `.b`
         // would be 1.
         assert_eq!(qall("---\na: &x 1\n---\nb: *x\n", ".b"), vec![Value::Null]);
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn single_document_behavior_is_unchanged() {
-        // No `---`: strict single-doc semantics - a missing path still errors.
+        // No `---`: strict single-doc semantics; a missing path still errors.
         let mut doc = parse("a: 1\n").unwrap();
         assert!(
             doc.apply(&parse_expr(".missing.deep = 2").unwrap())
@@ -456,8 +456,8 @@ mod tests {
 
     #[test]
     fn set_scalar_touches_only_that_value() {
-        // Change one scalar; every other byte - comments, indent, the pinned
-        // comment on the same line - stays put.
+        // Change one scalar; every other byte (comments, indent, the pinned
+        // comment on the same line) stays put.
         let out = edit(SAMPLE, ".web.replicas = 5");
         assert_eq!(
             out,
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn append_after_block_scalar_item() {
-        // The last item is a block literal - its span starts at the content, not
+        // The last item is a block literal; its span starts at the content, not
         // the dash. Appending must still work (derive the dash from the seq mark).
         let src = "items:\n  - |\n    literal\n  - plain\n";
         let out = edit(src, ".items += [\"x\"]");
@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn unrelated_edit_preserves_scalar_spelling() {
         // `True` is core-schema bool, but editing a *different* key must not
-        // re-spell it - to_source returns spliced bytes, not a re-emit.
+        // re-spell it; to_source returns spliced bytes, not a re-emit.
         let src = "e: True\no: 1\n";
         let out = edit(src, ".o = 2");
         assert_eq!(out, "e: True\no: 2\n");
@@ -780,7 +780,7 @@ mod tests {
         let c = parse(SAMPLE).unwrap().to_commented().unwrap();
         let (out, warnings) = emit_commented(&c).unwrap();
         assert!(warnings.is_empty());
-        // (Sequence items sit at their key's indent - libyaml's block style,
+        // (Sequence items sit at their key's indent; libyaml's block style,
         // same as the plain emitter.)
         assert_eq!(
             out,
@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn append_to_aliased_sequence_is_refused() {
         // An alias resolves to a `Value::Array` held in a *scalar* node, so `+=`
-        // can't splice into it as a block sequence - refuse rather than reflow.
+        // can't splice into it as a block sequence; refuse rather than reflow.
         let src = "base: &b\n  - 1\n  - 2\nprod: *b\n";
         let mut d = parse(src).unwrap();
         let err = d
@@ -943,7 +943,7 @@ mod tests {
         assert_eq!(slice(".web.ports[0]"), vec!["80"]);
         assert_eq!(slice(".web.ports[-1]"), vec!["443"]);
         // Iterating a mapping yields one slice per value (a scalar is its exact
-        // bytes - the inline comment is trivia outside the scalar's span).
+        // bytes (the inline comment is trivia outside the scalar's span)).
         assert_eq!(slice(".web[]"), vec!["nginx:1.25", "- 80\n- 443", "3"]);
         // Iterating a scalar, or a trailing comment step, resolves nothing.
         assert_eq!(slice(".web.image[]"), Vec::<String>::new());

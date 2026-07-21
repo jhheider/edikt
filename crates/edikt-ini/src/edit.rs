@@ -5,7 +5,7 @@
 //! line including the terminator, so `del` is a single `detach`.
 //!
 //! INI values are scalars: setting an array or object errors (the format has no
-//! nesting or arrays - its `Feature` set says so).
+//! nesting or arrays; its `Feature` set says so).
 
 use crate::syntax::{Sk, SyntaxNode, sk};
 use crate::{Ini, project};
@@ -133,7 +133,7 @@ pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &
                 (hi + 1, end)
             }
             None => {
-                // Section absent - append `[section]\nkey = value\n` at EOF.
+                // Section absent: append `[section]\nkey = value\n` at EOF.
                 let mut out = String::from(src);
                 if !out.is_empty() && !out.ends_with('\n') {
                     out.push('\n');

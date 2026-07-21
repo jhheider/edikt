@@ -350,7 +350,7 @@ mod tests {
         // `; app config` precedes the preamble key `global`.
         assert_eq!(top[0].0, "global");
         assert_eq!(top[0].1.comments.head, vec!["app config"]);
-        // `port=8080        ; inline text` - the entry's inline comment.
+        // `port=8080        ; inline text`: the entry's inline comment.
         let edikt_core::CommentedNode::Object(server) = &top[1].1.node else {
             panic!("expected section object");
         };
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn inline_comment_on_section_header() {
-        // Set an inline on a `[section]` header - it has no Value node, so the
+        // Set an inline on a `[section]` header: it has no Value node, so the
         // comment hangs off the `]`.
         assert_eq!(
             cedit("[server]\nhost = x\n", r#".server.#.inline = "svc""#),

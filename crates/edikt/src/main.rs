@@ -5,7 +5,7 @@
 //! seven formats (JSONC/JSON5, INI, `.env`/`.properties`, TOML, YAML, KDL) over the
 //! format-agnostic `Document` seam.
 //!
-//! Exit codes are sed-shaped: 0 = success - including a query that matched
+//! Exit codes are sed-shaped: 0 = success, including a query that matched
 //! nothing (a silent no-op, like sed with no matching address); 2 = parse /
 //! evaluation / I/O error. `--exit-status` opts into jq's 1-on-no-results for
 //! presence tests.
@@ -52,7 +52,7 @@ struct Args {
     exprs: Vec<String>,
 
     /// Read an expression/script from a file (repeatable). A script may open
-    /// with header directives - `toFormat: FMT` / `type: FMT` - which CLI flags
+    /// with header directives (`toFormat: FMT` / `type: FMT`) which CLI flags
     /// override; `#` header lines (comments, shebangs) are skipped.
     #[arg(short = 'f', long = "file", value_name = "PATH")]
     script_files: Vec<PathBuf>,
@@ -199,7 +199,7 @@ enum Format {
     Yaml,
     Kdl,
     /// The frontmatter lens: edit the metadata block of a Markdown file, body
-    /// left opaque. An input-only format - never a conversion target.
+    /// left opaque. An input-only format; never a conversion target.
     Frontmatter,
 }
 
@@ -312,7 +312,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
 /// Emit a commented value in the target format, returning the text and any
 /// lossy-conversion warnings. Comments place natively per format; a kind the
 /// format can't hold remaps or drops with a warning from its emitter. (JSON
-/// shares JSONC's emitter - the caller strips comments first, since JSON lacks
+/// shares JSONC's emitter; the caller strips comments first, since JSON lacks
 /// the `Comments` feature entirely.)
 fn emit(format: Format, c: &Commented) -> Result<(String, Vec<String>)> {
     Ok(match format {
@@ -399,7 +399,7 @@ fn run(args: Args) -> Result<ExitCode> {
     // Output format precedence: CLI (-T / --json/--jsonc/--ini/--toml/--yaml)
     // -> `-o` FILE's extension -> a script's `toFormat:` -> input preserved.
     // Flag- and directive-requested formats are "hard" (a mutation cleanly
-    // errors on them); an `-o`-derived format is advisory - the file is a sink,
+    // errors on them); an `-o`-derived format is advisory; the file is a sink,
     // and an unrecognized extension just means "keep the input format".
     let out_from_directive = directives.to.as_deref().map(format_from_name).transpose()?;
     let hard_out = args.output_format()?.or(out_from_directive);
@@ -417,9 +417,9 @@ fn run(args: Args) -> Result<ExitCode> {
     // Operands -> program + files (sed-shaped: first operand is the expression
     // when no -e/-f). With an output format set, a whole-document conversion is
     // the common intent, so a first operand that names a readable path (or `-`)
-    // is taken as a file with program `.` - while `-T json '.a' f.yaml` still
+    // is taken as a file with program `.`, while `-T json '.a' f.yaml` still
     // reads `.a` as the expression. Directories are excluded (`.` - a directory
-    // that always exists - is the identity expression, never an input), but not
+    // that always exists) is the identity expression, never an input), but not
     // narrowed to regular files: process substitution hands us fifos.
     let (program, files): (String, Vec<String>) = if !sources.is_empty() {
         (join_pipe(&sources), args.operands.clone())
@@ -590,8 +590,8 @@ fn run(args: Args) -> Result<ExitCode> {
 
         // A synthesized result carries no comments; converting a commented
         // source through one still loses them, and that stays honest. But a
-        // comment query (`.foo.#`, `comments`) *surfaces* comments - its result
-        // is the comment text, nothing is dropped - so it never warns.
+        // comment query (`.foo.#`, `comments`) *surfaces* comments; its result
+        // is the comment text, nothing is dropped, so it never warns.
         if target != in_fmt
             && annotated.is_none()
             && !expr.has_comment()
@@ -649,7 +649,7 @@ fn run(args: Args) -> Result<ExitCode> {
         }
     }
 
-    // Write the -o sink once, after all inputs - and only if something matched.
+    // Write the -o sink once, after all inputs, and only if something matched.
     if let Some(p) = &args.output
         && emitted
     {
@@ -700,7 +700,7 @@ fn render_value(
         }
     };
     // Feature-derived degradation: a target with no Comments capability (JSON)
-    // drops them - warn (or error under --strict), then emit comment-free.
+    // drops them: warn (or error under --strict), then emit comment-free.
     let stripped;
     if commented.has_comments() && !target.features().contains(&edikt_core::Feature::Comments) {
         let w = "comments were dropped";
@@ -714,7 +714,7 @@ fn render_value(
     let (text, warnings) = match emit(target, commented) {
         Ok(ok) => ok,
         // A **top-level array** has no representation in a table-only format
-        // (TOML/KDL) - but the read still wants the value. When the output
+        // (TOML/KDL); but the read still wants the value. When the output
         // wasn't explicitly requested, render it as JSON (jq-shaped). This is
         // deliberately narrow: an object that fails to emit for a value-fidelity
         // reason (e.g. a null in TOML) is a real error and falls through below,
@@ -796,7 +796,7 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
     if let Some(t) = forced {
         return format_from_name(t);
     }
-    // `.env` (and `.env.local`, ...) are dotfiles with no extension - match by name.
+    // `.env` (and `.env.local`, ...) are dotfiles with no extension; match by name.
     if let Some(name) = path.and_then(|p| p.file_name()).and_then(|n| n.to_str())
         && (name == ".env" || name.starts_with(".env."))
     {

@@ -101,7 +101,7 @@ pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
 }
 
 /// Emit a value as TOML: top-level objects become `[table]`s (nested-in-value
-/// objects stay inline). Returns text and warnings (none - TOML holds nesting,
+/// objects stay inline). Returns text and warnings (none; TOML holds nesting,
 /// arrays, and typed scalars).
 pub fn emit(value: &Value) -> Result<(String, Vec<String>), EditError> {
     let Value::Object(m) = value else {
@@ -140,7 +140,7 @@ fn value_to_table(value: &Value) -> Result<Table, EditError> {
 
 /// Would the array at `container[key]` be (or become) an array-of-tables? True
 /// when it is already one, is absent (auto-vivify as one), or is an empty inline
-/// array (promote it) - so a table value lands in a `[[key]]` block, not inline.
+/// array (promote it), so a table value lands in a `[[key]]` block, not inline.
 fn array_is_aot_shaped(container: &dyn TableLike, key: &str) -> bool {
     match container.get(key) {
         None => true,

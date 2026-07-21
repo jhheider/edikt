@@ -1,6 +1,6 @@
 //! Project a JSONC CST onto the [`Value`] model (the data-model view).
 //!
-//! Trivia is dropped here by design - this is what querying and conversion see,
+//! Trivia is dropped here by design: this is what querying and conversion see,
 //! not the format-preserving source view.
 
 use crate::syntax::{Sk, SyntaxNode};
