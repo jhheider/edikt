@@ -1,6 +1,6 @@
 //! `.env` / `.properties` ↔ the uniform comment model. Extraction is line-flat:
 //! own-line `#`/`!` comments attach to the next entry (head), trailing ones to
-//! the last entry (foot); there are no inline comments in this format - ever
+//! the last entry (foot); there are no inline comments in this format, ever
 //! (the `#` in `K=a#b` is value bytes). Emission therefore *remaps* an inline
 //! comment from another format onto its own line, with a warning.
 

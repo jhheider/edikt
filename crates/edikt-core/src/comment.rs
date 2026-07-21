@@ -1,9 +1,9 @@
 //! The uniform comment model for comment-preserving conversion.
 //!
-//! Comments cross formats through a shared vocabulary of three kinds - **head**
+//! Comments cross formats through a shared vocabulary of three kinds: **head**
 //! (own-line comments before a node), **inline** (a trailing comment on the
 //! node's line), and **foot** (own-line comments after a node that no following
-//! sibling claims - in practice, trailing comments at the end of a container or
+//! sibling claims; in practice, trailing comments at the end of a container or
 //! document). Each format parses its comments *out* to this model
 //! ([`crate::Document::to_commented`]), and each format's emitter decides per
 //! kind: place it, remap it to a kind it supports (warn), or drop it (warn) -
@@ -16,12 +16,12 @@
 use crate::{Step, Value};
 
 /// One of the three comment kinds in the uniform model. Which kinds a format
-/// supports is its comment capability - each format declares a
+/// supports is its comment capability: each format declares a
 /// `COMMENT_KINDS: &[CommentKind]` (empty => no comments, subsuming the boolean
 /// `Feature::Comments`). The `#` accessor addresses a node's comment by kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommentKind {
-    /// Own-line comment(s) before the node - what `#` alone selects.
+    /// Own-line comment(s) before the node: what `#` alone selects.
     Head,
     /// A trailing comment on the node's line.
     Inline,
@@ -56,7 +56,7 @@ impl Comments {
     }
 
     /// The text of one kind as a single string, or `None` if that kind is
-    /// absent - head/foot lines join with a space (they read back unwrapped,
+    /// absent: head/foot lines join with a space (they read back unwrapped,
     /// per the wrapping design; the emitter re-wraps on write).
     pub fn get(&self, kind: CommentKind) -> Option<String> {
         match kind {
@@ -68,7 +68,7 @@ impl Comments {
     }
 }
 
-/// A [`Value`] enriched with per-node comments - what conversion carries so a
+/// A [`Value`] enriched with per-node comments: what conversion carries so a
 /// commented source survives `-T` into a commented target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Commented {
@@ -79,7 +79,7 @@ pub struct Commented {
 /// The shape of a [`Commented`] node, mirroring [`Value`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommentedNode {
-    /// A scalar (never `Value::Array`/`Value::Object` - those are the variants
+    /// A scalar (never `Value::Array`/`Value::Object`; those are the variants
     /// below, so comments can attach to every element/entry).
     Scalar(Value),
     Array(Vec<Commented>),
@@ -157,7 +157,7 @@ impl Commented {
         }
     }
 
-    /// The nodes a pure path selects, in document order - mirroring the
+    /// The nodes a pure path selects, in document order, mirroring the
     /// evaluator's path semantics (a missing field/index yields nothing;
     /// `[]` iterates elements/values), so the results align 1:1 with
     /// [`crate::eval`] on the same path. A step that cannot apply (e.g. a field
@@ -193,7 +193,7 @@ impl Commented {
     /// Resolve a comment-addressing path (a value prefix ending in a terminal
     /// [`Step::Comment`]) to the comment text of each selected node, as a
     /// stream of `Value::Str`. A node without that comment kind contributes
-    /// nothing - a miss, matching the rest of the language. The `Comment` step
+    /// nothing: a miss, matching the rest of the language. The `Comment` step
     /// is terminal by construction (the parser forbids steps after it).
     pub fn resolve_comment(&self, path: &[Step]) -> Vec<Value> {
         let Some((Step::Comment(kind), prefix)) = path.split_last() else {
@@ -206,7 +206,7 @@ impl Commented {
     }
 
     /// Every comment in the tree as `(path steps, kind, text)`, in document
-    /// order - the backbone of the document-wide `comments` stream (query) and
+    /// order: the backbone of the document-wide `comments` stream (query) and
     /// bulk comment edits (`comments |= ...`). The steps address the *node*; the
     /// kind and text are the comment. Paths stay valid across edits (they are
     /// logical, not byte offsets), so a caller may snapshot then apply.
@@ -247,7 +247,7 @@ fn collect_targets(
     }
 }
 
-/// One flattened `key = value` line with the comments it carries - the shape
+/// One flattened `key = value` line with the comments it carries: the shape
 /// the flat emitters (INI sections, `.env`) place comments through.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FlatEntry {
@@ -260,7 +260,7 @@ pub struct FlatEntry {
 /// [`crate::convert::flatten`]). A container's own comments ride along: its
 /// `head` (and `inline`, which has no line of its own once flattened) prepend
 /// to its first entry's `head`; its `foot` appends to its last entry's `foot`.
-/// An empty container vanishes, its comments carried to... nowhere - the caller
+/// An empty container vanishes, its comments carried to... nowhere: the caller
 /// sees them dropped via [`Commented::has_comments`] on the re-projected result;
 /// in practice empty containers with comments are vanishingly rare.
 pub fn flatten_commented(node: &Commented) -> Vec<FlatEntry> {
@@ -364,7 +364,7 @@ mod tests {
             tree.resolve_comment(&[Step::Field("a".into()), inline]),
             vec![Value::Str("why".into())]
         );
-        // `.#` - the document banner.
+        // `.#`: the document banner.
         assert_eq!(
             tree.resolve_comment(std::slice::from_ref(&head)),
             vec![Value::Str("banner".into())]

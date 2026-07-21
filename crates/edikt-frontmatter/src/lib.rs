@@ -1,9 +1,9 @@
-//! edikt frontmatter lens - **losslessly edit the metadata block at the top of
+//! edikt frontmatter lens: **losslessly edit the metadata block at the top of
 //! a Markdown file, body byte-for-byte untouched.**
 //!
 //! Frontmatter is structured config embedded in prose: a YAML/TOML/JSON block
 //! fenced off at the very start of a document. This crate is a thin *lens*, not
-//! a new parser - it splits the file into three parts,
+//! a new parser; it splits the file into three parts,
 //!
 //! ```text
 //!   prefix   the opening fence line (opaque)
@@ -81,7 +81,7 @@ pub struct Frontmatter {
     prefix: String,
     inner: Box<dyn Document>,
     suffix: String,
-    /// The block's own format - what a query renders in, since "frontmatter" is
+    /// The block's own format: what a query renders in, since "frontmatter" is
     /// a lens, not an emittable format.
     inner_fmt: &'static str,
     /// A commented host-language block (PEP 723 `# ///`): the inner engine sees
@@ -263,7 +263,7 @@ fn split(src: &str) -> Result<Split<'_>, ParseError> {
 /// A de-commented host-language block plus the opaque bytes around it.
 struct CommentedBlock<'a> {
     prefix: &'a str,
-    /// The block with each line's `# ` / `#` prefix removed - clean TOML.
+    /// The block with each line's `# ` / `#` prefix removed: clean TOML.
     block: String,
     suffix: &'a str,
 }
@@ -327,7 +327,7 @@ fn detect_commented(src: &str) -> Result<Option<CommentedBlock<'_>>, ParseError>
         }
         // De-comment the body line: bare `#` is a blank line, `# x` yields `x`.
         if content == "#" {
-            // blank line - contributes only its terminator
+            // blank line, contributes only its terminator
         } else if let Some(payload) = content.strip_prefix("# ") {
             block.push_str(payload);
         } else {

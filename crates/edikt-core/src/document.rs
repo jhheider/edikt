@@ -17,7 +17,7 @@ pub trait Document {
     fn to_source(&self) -> String;
 
     /// Project to the value model for querying and conversion. Trivia (comments,
-    /// layout) is dropped - this is the data-model view, not the source view.
+    /// layout) is dropped; this is the data-model view, not the source view.
     fn to_value(&self) -> Value;
 
     /// Project to one value **per top-level document**. Only YAML has a
@@ -40,7 +40,7 @@ pub trait Document {
     /// skipped) for the CLI to surface; an empty vec on a clean edit.
     fn apply(&mut self, expr: &Expr) -> Result<Vec<String>, EditError>;
 
-    /// Whether the source contains any comments - used to warn on conversion,
+    /// Whether the source contains any comments; used to warn on conversion,
     /// which drops them.
     fn has_comments(&self) -> bool;
 
@@ -79,7 +79,7 @@ pub trait Document {
     /// document's own format isn't itself emittable. A lens (frontmatter) is not
     /// an output format, so a query over it renders in the underlying block's
     /// format (`"yaml"`/`"toml"`/`"json"`) instead. `None` (the default) means
-    /// "my own format is the natural output" - the ordinary case.
+    /// "my own format is the natural output": the ordinary case.
     fn inner_format(&self) -> Option<&'static str> {
         None
     }
@@ -89,7 +89,7 @@ pub trait Document {
     /// is inserted. Multi-line head/foot text is wrapped to the document's
     /// envelope by the implementation. Returns any warnings (a layout that had
     /// to expand to hold the comment, or a kind remapped to one the format
-    /// supports). The default rejects - comment editing is added per format.
+    /// supports). The default rejects; comment editing is added per format.
     fn set_comment(
         &mut self,
         path: &[Step],
@@ -103,7 +103,7 @@ pub trait Document {
     }
 
     /// Delete the `kind` comment on the node at `path` (a miss is a no-op).
-    /// The default rejects - added per format alongside [`Document::set_comment`].
+    /// The default rejects; added per format alongside [`Document::set_comment`].
     fn delete_comment(&mut self, path: &[Step], kind: CommentKind) -> Result<(), EditError> {
         let _ = (path, kind);
         Err(EditError::new(

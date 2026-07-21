@@ -1,9 +1,9 @@
-//! Comment wrapping - the shared "use the space as it exists" rule.
+//! Comment wrapping: the shared "use the space as it exists" rule.
 //!
 //! Head/foot comment text wraps to the document's own width envelope so a
 //! comment never makes the file wider than it already is; the caller supplies
 //! the node's indent and the delimiter width (`"# "` = 2, `"// "` = 3). Inline
-//! comments never wrap - the caller skips this. See the wrapping section of
+//! comments never wrap; the caller skips this. See the wrapping section of
 //! `docs/design/comments-as-first-class.md`.
 
 /// The absolute wrap column for `source`: `clamp(longest line, 80, 100)`. The

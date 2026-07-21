@@ -2,7 +2,7 @@
 //!
 //! A lossless `rowan` + `logos` CST (the day-zero spike, productionized): parse
 //! JSONC into a tree that round-trips byte-for-byte, project it to
-//! [`edikt_core::Value`] for querying, and - with M2 - edit it in place touching
+//! [`edikt_core::Value`] for querying, and, with M2, edit it in place touching
 //! only the targeted nodes. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
 
@@ -160,7 +160,7 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
     let green = parser::build(src);
     let root = SyntaxNode::new_root(green);
 
-    // An unrecognized byte is lexed as an error token - reject rather than
+    // An unrecognized byte is lexed as an error token; reject rather than
     // silently editing garbage.
     let has_error = root
         .descendants_with_tokens()
@@ -279,7 +279,7 @@ mod tests {
     fn source_slice_returns_exact_bytes() {
         let doc = parse(TSCONFIG).unwrap();
         let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
-        // A structural result is its exact source - comment and all.
+        // A structural result is its exact source, comment and all.
         assert_eq!(slice(".compilerOptions.lib"), vec!["[\"ES2020\", \"DOM\"]"]);
         // Iterate yields one slice per element, in order.
         assert_eq!(slice(".exclude[]"), vec!["\"node_modules\""]);
@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n  \"c\": 3\n}\n");
         assert_eq!(edit_src(src, "del(.a)"), "{\n  \"b\": 2,\n  \"c\": 3\n}\n");
         // Deleting the last member must NOT leave the previous member's separator
-        // comma dangling before `}` - that is invalid strict JSON. This source is
+        // comma dangling before `}`; that is invalid strict JSON. This source is
         // strict (no trailing comma), so the result stays strict.
         assert_eq!(edit_src(src, "del(.c)"), "{\n  \"a\": 1,\n  \"b\": 2\n}\n");
     }
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn del_last_member_preserves_trailing_comma_style() {
         // When the object is already trailing-comma style (JSON5/JSONC), deleting
-        // the last member leaves the previous member's trailing comma - that is
+        // the last member leaves the previous member's trailing comma; that is
         // the file's own style, preserved, and still valid JSON5/JSONC.
         let src = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
         assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n}\n");
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn projects_absent_member_value_as_null() {
-        // A malformed member with no value must project to null, not panic - and
+        // A malformed member with no value must project to null, not panic; and
         // still round-trip byte-for-byte (the moat holds even on garbage input).
         let doc = parse("{\"a\":}").unwrap();
         assert_eq!(doc.to_source(), "{\"a\":}");

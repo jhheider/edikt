@@ -134,7 +134,7 @@ impl Docs {
         self.docs
     }
     /// The first document (single-doc callers), or a null node for an empty
-    /// stream - preserving the old single-root contract.
+    /// stream, preserving the old single-root contract.
     fn pop_first_or_null(mut self) -> Node {
         if self.docs.is_empty() {
             null_node()
@@ -274,7 +274,7 @@ fn key_string(node: &Node) -> String {
     node_to_value(node).to_raw_string()
 }
 
-/// Fold the span tree to the data-model [`Value`] (drops trivia - that is the
+/// Fold the span tree to the data-model [`Value`] (drops trivia; that is the
 /// query/convert view; the source view lives in the spans).
 ///
 /// Merge keys (`<<: *anchor`) are resolved here, so query/convert see the
@@ -307,7 +307,7 @@ pub(crate) fn node_to_value(node: &Node) -> Value {
     }
 }
 
-/// Flatten a merge target - a mapping, or a sequence of mappings - into `out`,
+/// Flatten a merge target (a mapping, or a sequence of mappings) into `out`,
 /// keeping first-seen precedence.
 pub(crate) fn collect_merge(value: &Value, out: &mut Vec<(String, Value)>) {
     match value {

@@ -2,7 +2,7 @@
 //!
 //! Flat: paths are a single `.key`. `set` replaces just the entry's value node
 //! (key/separator/spacing kept); `del` detaches the whole line. Values are
-//! strings - an array or object errors (the format is flat and string-only).
+//! strings; an array or object errors (the format is flat and string-only).
 
 use crate::syntax::{Sk, SyntaxNode, sk};
 use crate::{Env, project};
