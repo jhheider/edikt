@@ -122,12 +122,14 @@ above the dependency table, the `path = "crates/edikt-core"` sitting next to
 each version, the brace-and-space style of every inline table, and every other
 byte come back unchanged, the kind of diff a reviewer reads at a glance.
 
-One quoting note, and it only bites queries. On the **left of an assignment**
-a hyphenated key needs no quoting, because an assignment target must be a path
-and subtraction cannot occur there: `edikt -i '.dev-dependencies.serde.version =
-"1"'` just works. In a **query** the same text is genuinely ambiguous (`.total-length`
-is a real subtraction of the `length` builtin), so write `."dev-dependencies"`
-or `.["dev-dependencies"]`. edikt says which and why rather than guessing.
+One quoting note, and it only bites queries. A hyphenated key needs no quoting
+wherever it cannot be arithmetic: on the **left of an assignment** (a target must
+be a path) and as an **object key** (a literal name, never an expression). So
+`edikt -i '.dev-dependencies.serde = {version: "1", default-features: false}'`
+just works. In a **query** the same text is genuinely ambiguous, since
+`.total-length` is a real subtraction of the `length` builtin, so write
+`."dev-dependencies"` or `.["dev-dependencies"]`. edikt says which and why rather
+than guessing.
 
 ## Why edikt?
 
