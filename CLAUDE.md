@@ -73,6 +73,11 @@ an *edit* language, not a general-purpose one.
 **Navigation**
 - identity `.`
 - field `.foo`, `.foo.bar`, `."quoted key"`, `.["key"]`
+- **hyphenated bare keys on an assignment target**: `.dev-dependencies.serde = "1"`.
+  Legal there and nowhere else, because an assignment LHS must be a path, so `-`
+  cannot be subtraction. In a query it still is (`.total-length` subtracts the
+  `length` builtin), so a query quotes the key and gets a diagnostic saying so.
+  Joining requires the tokens to abut: `.a - b` is always an operator.
 - index `.arr[0]`, `.arr[-1]`
 - iterate `.arr[]`, `.obj[]`
 - pipe `EXPR | EXPR`
