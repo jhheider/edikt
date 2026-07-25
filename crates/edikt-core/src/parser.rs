@@ -28,15 +28,89 @@ struct Tok {
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     let toks = lex(src)?;
     let mut p = Parser { toks, pos: 0 };
-    let e = p.parse_program()?;
+    let e = match p.parse_program() {
+        Ok(e) => e,
+        Err(e) => return Err(with_hyphen_hint(e, src)),
+    };
     if p.pos != p.toks.len() {
         let t = &p.toks[p.pos];
-        return Err(ParseError {
-            msg: format!("unexpected trailing token `{}`", t.text),
-            pos: t.start,
-        });
+        return Err(with_hyphen_hint(
+            ParseError {
+                msg: format!("unexpected trailing token `{}`", t.text),
+                pos: t.start,
+            },
+            src,
+        ));
     }
     Ok(e)
+}
+
+/// Replace a parse failure with the hyphenated-key explanation when the source
+/// contains one.
+///
+/// Assignment targets no longer need this: [`Parser::try_assign_target`] parses
+/// hyphenated keys outright, because subtraction cannot appear on the left of
+/// `=`. Everywhere else the ambiguity is real, since `.total-length` is a
+/// legitimate subtraction of the `length` builtin, so a **query** like
+/// `.dev-dependencies.serde_json` still cannot be guessed at. It dies at the `.`
+/// after `dependencies` with "unexpected trailing token `.`", which names
+/// neither the hyphen nor the fix.
+///
+/// Only ever applied to an already failing parse, so it cannot change how a
+/// working expression behaves.
+fn with_hyphen_hint(err: ParseError, src: &str) -> ParseError {
+    // The LHS check got there first and knows more than this does.
+    if err.msg.contains("contains `-`") {
+        return err;
+    }
+    match hyphenated_key(src) {
+        // Same wording as the LHS check, so one mistake has one message.
+        Some((key, pos)) => ParseError {
+            msg: format!(
+                "key `{key}` contains `-` (parsed as subtraction); quote it: {}\"{key}\"",
+                &src[..pos]
+            ),
+            pos,
+        },
+        None => err,
+    }
+}
+
+/// The first `.some-key` in the source, with the offset of its first character.
+///
+/// A hyphen only counts when it sits between two identifier characters, so
+/// `.a-1` and `.a - b` are left alone: the first is arithmetic on a literal and
+/// the second is spaced, and neither is the mistake being diagnosed.
+fn hyphenated_key(src: &str) -> Option<(String, usize)> {
+    let b = src.as_bytes();
+    let ident_start = |c: u8| c.is_ascii_alphabetic() || c == b'_';
+    let ident_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'.' || i + 1 >= b.len() || !ident_start(b[i + 1]) {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        let mut hyphenated = false;
+        while j < b.len() {
+            if ident_char(b[j]) {
+                j += 1;
+            } else if b[j] == b'-' && j + 1 < b.len() && ident_start(b[j + 1]) {
+                hyphenated = true;
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if hyphenated {
+            return Some((src[start..j].to_string(), start));
+        }
+        i = j;
+    }
+    None
 }
 
 fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
@@ -161,7 +235,10 @@ impl Parser {
     }
 
     fn parse_assign(&mut self) -> Result<Expr, ParseError> {
-        let lhs = self.parse_alt()?;
+        let lhs = match self.try_assign_target() {
+            Some(path) => path,
+            None => self.parse_alt()?,
+        };
         match self.peek() {
             Some(Lx::Assign) => {
                 self.reject_hyphen_key_lhs(&lhs)?;
@@ -185,12 +262,126 @@ impl Parser {
         }
     }
 
-    /// A hyphenated bare key on the left of an assignment (`.package.rust-version
-    /// = ...`) parses as subtraction (`Path(.package.rust) - version()`) and
-    /// would only fail later with "left side of an assignment must be a path",
-    /// which points nowhere near the cause. When the doomed LHS has exactly that
-    /// subtraction shape, fail now and name the fix. Anything that doesn't match
-    /// is left alone for the eval-time check.
+    /// Parse an assignment target: a path whose bare keys may contain `-`.
+    ///
+    /// **The left side of an assignment must be a path, so subtraction cannot
+    /// occur there.** That removes the ambiguity that forces `."dev-dependencies"`
+    /// everywhere else: in this one position a hyphen between two identifier
+    /// characters is unambiguously part of the key, and edikt can simply parse
+    /// it instead of making people quote the most common key in a Cargo.toml.
+    ///
+    /// Speculative, and it rewinds on any miss, so nothing here can change how
+    /// a non-assignment expression parses. Returns `Some` only when a complete
+    /// path is followed by an assignment operator; otherwise the position is
+    /// restored and the ordinary precedence chain runs unchanged.
+    ///
+    /// Purely additive: every expression this accepts previously failed, since
+    /// a subtraction on the left of `=` was never legal.
+    fn try_assign_target(&mut self) -> Option<Expr> {
+        let save = self.pos;
+        let parsed = self.parse_hyphenated_path();
+        let is_target = parsed.is_some()
+            && matches!(
+                self.peek(),
+                Some(Lx::Assign | Lx::PipeAssign | Lx::PlusAssign)
+            );
+        if is_target {
+            return parsed;
+        }
+        self.pos = save;
+        None
+    }
+
+    /// A `.a.b-c[0]` path, joining `Ident - Ident` runs that are adjacent in the
+    /// source into one key. Only called speculatively from
+    /// [`Parser::try_assign_target`].
+    ///
+    /// Adjacency is what keeps this honest: `- ` with a space around it is never
+    /// joined, so a spaced expression cannot be silently reinterpreted.
+    fn parse_hyphenated_path(&mut self) -> Option<Expr> {
+        if self.peek() != Some(Lx::Dot) {
+            return None;
+        }
+        self.pos += 1;
+        let mut steps = Vec::new();
+        loop {
+            match self.peek() {
+                Some(Lx::Ident) => steps.push(Step::Field(self.take_hyphenated_ident())),
+                Some(Lx::Str) => {
+                    steps.push(Step::Field(unescape(self.text())));
+                    self.pos += 1;
+                }
+                Some(Lx::LBrack) => {
+                    self.pos += 1;
+                    if self.peek() == Some(Lx::Str) {
+                        let key = unescape(self.text());
+                        self.pos += 1;
+                        if self.peek() != Some(Lx::RBrack) {
+                            return None;
+                        }
+                        self.pos += 1;
+                        steps.push(Step::Field(key));
+                    } else {
+                        let neg = self.peek() == Some(Lx::Minus);
+                        if neg {
+                            self.pos += 1;
+                        }
+                        if self.peek() != Some(Lx::Num) {
+                            return None;
+                        }
+                        let n = parse_i64(self.text()).ok()?;
+                        self.pos += 1;
+                        if self.peek() != Some(Lx::RBrack) {
+                            return None;
+                        }
+                        self.pos += 1;
+                        steps.push(Step::Index(if neg { -n } else { n }));
+                    }
+                }
+                _ => return None,
+            }
+            match self.peek() {
+                Some(Lx::Dot) => self.pos += 1,
+                Some(Lx::LBrack) => {}
+                _ => break,
+            }
+        }
+        Some(Expr::Path(steps))
+    }
+
+    /// Consume `Ident (- Ident)*` where every token abuts the last, and return
+    /// the joined key.
+    fn take_hyphenated_ident(&mut self) -> String {
+        let mut name = self.text().to_string();
+        self.pos += 1;
+        while self.peek() == Some(Lx::Minus)
+            && self.abuts_previous(self.pos)
+            && self
+                .toks
+                .get(self.pos + 1)
+                .is_some_and(|t| t.kind == Lx::Ident)
+            && self.abuts_previous(self.pos + 1)
+        {
+            name.push('-');
+            name.push_str(&self.toks[self.pos + 1].text);
+            self.pos += 2;
+        }
+        name
+    }
+
+    /// Does token `i` start exactly where token `i - 1` ended? Whitespace
+    /// between them means the user wrote an operator, not a key.
+    fn abuts_previous(&self, i: usize) -> bool {
+        match (self.toks.get(i.wrapping_sub(1)), self.toks.get(i)) {
+            (Some(prev), Some(cur)) => prev.start + prev.text.len() == cur.start,
+            _ => false,
+        }
+    }
+
+    /// A hyphenated bare key that reached an assignment despite
+    /// [`Parser::try_assign_target`], which means it was not a plain path (a
+    /// pipe, a parenthesized expression). Name the fix rather than failing later
+    /// with "left side of an assignment must be a path".
     fn reject_hyphen_key_lhs(&self, lhs: &Expr) -> Result<(), ParseError> {
         let Some((path, key)) = hyphen_key(lhs) else {
             return Ok(());
@@ -735,25 +926,6 @@ mod tests {
     }
 
     #[test]
-    fn hyphenated_assign_lhs_hints_the_quoted_form() {
-        let e = parse(r#".package.rust-version = "1.85""#).unwrap_err();
-        assert_eq!(
-            e.to_string(),
-            "key `rust-version` contains `-` (parsed as subtraction); \
-             quote it: .package.\"rust-version\" (at offset 22)"
-        );
-        // Multi-hyphen keys reassemble fully, and `|=` / `+=` hint too.
-        let e = parse(".lib.crate-type-x |= 1").unwrap_err();
-        assert!(e.to_string().contains("`crate-type-x`"), "got: {e}");
-        assert!(e.to_string().contains(".lib.\"crate-type-x\""), "got: {e}");
-        let e = parse(".a.b-c += 1").unwrap_err();
-        assert!(e.to_string().contains("`b-c`"), "got: {e}");
-        // A top-level hyphenated key hints the bare quoted form.
-        let e = parse(".rust-version = 1").unwrap_err();
-        assert!(e.to_string().contains(".\"rust-version\""), "got: {e}");
-    }
-
-    #[test]
     fn hyphen_hint_leaves_real_subtraction_alone() {
         // Query-position subtraction still parses as arithmetic.
         assert_eq!(
@@ -770,5 +942,111 @@ mod tests {
         assert!(parse(".a - 1 = 2").is_ok());
         // RHS containing subtraction is untouched.
         p(".x = .a - .b");
+    }
+
+    /// The left of an assignment must be a path, so subtraction cannot occur
+    /// there and a hyphen is unambiguously part of the key. No quoting needed.
+    #[test]
+    fn a_hyphenated_key_assigns_without_quoting() {
+        let e = p(r#".dev-dependencies.serde_json = "1.0""#);
+        let Expr::Assign(lhs, _) = e else {
+            panic!("expected an assignment")
+        };
+        assert_eq!(
+            *lhs,
+            Expr::Path(vec![
+                Step::Field("dev-dependencies".into()),
+                Step::Field("serde_json".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn hyphenated_keys_work_for_every_assignment_operator() {
+        for src in [
+            r#".package.rust-version = "1.85""#,
+            ".lib.crate-type |= 1",
+            ".a.b-c += 1",
+            ".rust-version = 1",
+        ] {
+            p(src);
+        }
+    }
+
+    #[test]
+    fn a_multi_hyphen_key_is_one_field() {
+        let Expr::Assign(lhs, _) = p(".lib.crate-type-x = 1") else {
+            panic!("expected an assignment")
+        };
+        assert_eq!(
+            *lhs,
+            Expr::Path(vec![
+                Step::Field("lib".into()),
+                Step::Field("crate-type-x".into()),
+            ])
+        );
+    }
+
+    /// Indices and quoted keys still work alongside hyphenated ones.
+    #[test]
+    fn a_hyphenated_path_still_takes_indices_and_quoted_keys() {
+        p(r#".bin[0].required-features = ["x"]"#);
+        p(r#".target."cfg(unix)".dev-dependencies.libc = "0.2""#);
+        p(r#".a.b-c[-1] = 1"#);
+    }
+
+    /// Adjacency is the guard. A spaced `-` is an operator, so this is still a
+    /// subtraction and still an invalid assignment target.
+    #[test]
+    fn a_spaced_hyphen_is_not_absorbed_into_a_key() {
+        assert!(parse(".a - b = 1").is_err());
+    }
+
+    /// Nothing outside assignment position changed: subtraction still parses.
+    #[test]
+    fn queries_are_untouched_by_the_assignment_rule() {
+        p(".total - length");
+        p(".a - .b");
+        p(".count-1");
+        p(".a.b.c");
+    }
+
+    /// A query with a hyphenated key remains ambiguous (subtraction is legal
+    /// there), so it still gets the explanatory error rather than a guess.
+    #[test]
+    fn a_hyphenated_key_in_a_query_still_explains_itself() {
+        let e = parse(".dev-dependencies.serde_json").unwrap_err();
+        assert!(e.to_string().contains("contains `-`"), "{e}");
+        assert!(e.to_string().contains(r#"."dev-dependencies""#), "{e}");
+    }
+
+    #[test]
+    fn the_scanner_ignores_what_is_not_a_hyphenated_key() {
+        assert!(hyphenated_key(".total - length").is_none());
+        assert!(hyphenated_key(".count-1").is_none());
+        assert!(hyphenated_key(".a.b.c").is_none());
+        assert!(hyphenated_key("-").is_none());
+        assert!(hyphenated_key("").is_none());
+    }
+
+    #[test]
+    fn the_scanner_finds_the_key_and_its_offset() {
+        assert_eq!(
+            hyphenated_key(".dev-dependencies.x"),
+            Some(("dev-dependencies".to_string(), 1))
+        );
+        assert_eq!(
+            hyphenated_key(".a-b-c"),
+            Some(("a-b-c".to_string(), 1)),
+            "multiple hyphens are one key"
+        );
+    }
+
+    /// An unrelated syntax error must keep its own message rather than being
+    /// blamed on a hyphen elsewhere in the expression.
+    #[test]
+    fn an_unrelated_error_keeps_its_own_message() {
+        let e = parse(".a | ").unwrap_err();
+        assert!(!e.msg.contains("contains `-`"), "{}", e.msg);
     }
 }

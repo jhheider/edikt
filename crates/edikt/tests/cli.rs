@@ -931,11 +931,26 @@ fn toml_assignment_ergonomics() {
         "got: {out2}"
     );
 
-    // A hyphenated bare key on an assignment LHS names the cause and the fix.
-    let (_o, err, c3) = run(&["-t", "toml", r#".package.rust-version = "1.85""#], cargo);
-    assert_eq!(c3, 2);
-    assert!(err.contains("contains `-`"), "got: {err}");
-    assert!(err.contains(".package.\"rust-version\""), "got: {err}");
+    // A hyphenated bare key needs no quoting on an assignment LHS: a target must
+    // be a path, so `-` cannot be subtraction there.
+    let (out3, err3, c3) = run(&["-t", "toml", r#".package.rust-version = "1.85""#], cargo);
+    assert_eq!(c3, 0, "stderr: {err3}");
+    assert!(out3.contains("rust-version = \"1.85\""), "got: {out3}");
+
+    // Including when a path follows it, which used to die at the next `.`.
+    let (out4, err4, c4) = run(
+        &["-t", "toml", r#".dev-dependencies.serde_json = "9.9""#],
+        cargo,
+    );
+    assert_eq!(c4, 0, "stderr: {err4}");
+    assert!(out4.contains("serde_json = \"9.9\""), "got: {out4}");
+
+    // A query is still genuinely ambiguous (`.total-length` is a real
+    // subtraction), so it explains rather than guesses.
+    let (_o, err5, c5) = run(&["-t", "toml", ".dev-dependencies.serde_json"], cargo);
+    assert_eq!(c5, 2);
+    assert!(err5.contains("contains `-`"), "got: {err5}");
+    assert!(err5.contains(r#"."dev-dependencies""#), "got: {err5}");
 }
 
 #[test]
