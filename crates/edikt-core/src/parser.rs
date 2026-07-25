@@ -501,12 +501,20 @@ impl Parser {
             return Ok(Expr::ObjectConstruct(pairs));
         }
         loop {
+            // An object key is a literal name, never an expression: the pair is
+            // `(String, Expr)` and nothing here is ever evaluated. So a hyphen
+            // in a key cannot be subtraction, and `{default-features: false}`
+            // needs no quoting, for the same reason an assignment target does
+            // not. `take_hyphenated_ident` consumes the whole name.
             let key = match self.peek() {
-                Some(Lx::Ident) => self.text().to_string(),
-                Some(Lx::Str) => unescape(self.text()),
+                Some(Lx::Ident) => self.take_hyphenated_ident(),
+                Some(Lx::Str) => {
+                    let key = unescape(self.text());
+                    self.pos += 1;
+                    key
+                }
                 _ => return Err(self.err_here("expected an object key")),
             };
-            self.pos += 1;
             // jq spells object entries `key: value`; TOML/KDL hands reach for
             // `key = value` when the target file is TOML. Accept both; the
             // expression parses before any file is read, so the grammar cannot
@@ -1009,6 +1017,62 @@ mod tests {
         p(".a - .b");
         p(".count-1");
         p(".a.b.c");
+    }
+
+    /// An object key is a literal name, never an expression, so a hyphen there
+    /// cannot be subtraction. `{default-features: false}` is every other line
+    /// of a Cargo.toml dependency table.
+    #[test]
+    fn a_hyphenated_object_key_needs_no_quoting() {
+        let e = p(r#"{version: "0.13", default-features: false}"#);
+        let Expr::ObjectConstruct(pairs) = e else {
+            panic!("expected an object")
+        };
+        let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, vec!["version", "default-features"]);
+    }
+
+    /// The TOML-flavored `=` spelling too, which is what a Cargo.toml hand
+    /// reaches for.
+    #[test]
+    fn hyphenated_object_keys_work_with_the_equals_spelling() {
+        let Expr::ObjectConstruct(pairs) = p(r#"{default-features = false}"#) else {
+            panic!("expected an object")
+        };
+        assert_eq!(pairs[0].0, "default-features");
+    }
+
+    #[test]
+    fn a_multi_hyphen_object_key_is_one_name() {
+        let Expr::ObjectConstruct(pairs) = p("{a-b-c: 1}") else {
+            panic!("expected an object")
+        };
+        assert_eq!(pairs[0].0, "a-b-c");
+    }
+
+    #[test]
+    fn quoted_object_keys_still_work() {
+        let Expr::ObjectConstruct(pairs) = p(r#"{"default-features": false, plain: 1}"#) else {
+            panic!("expected an object")
+        };
+        assert_eq!(pairs[0].0, "default-features");
+        assert_eq!(pairs[1].0, "plain");
+    }
+
+    /// Values are expressions, so subtraction inside one is untouched.
+    #[test]
+    fn an_object_value_can_still_subtract() {
+        p("{n: .total - length}");
+        p("{n: .count-1}");
+    }
+
+    /// The whole line that started this, as it would be typed against a
+    /// Cargo.toml.
+    #[test]
+    fn a_real_cargo_dependency_table_parses() {
+        p(
+            r#".dependencies.pulldown-cmark = {version: "0.13", default-features: false, features: ["html"]}"#,
+        );
     }
 
     /// A query with a hyphenated key remains ambiguous (subtraction is legal
