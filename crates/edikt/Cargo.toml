@@ -1,6 +1,6 @@
 [package]
 name = "edikt"
-version = "0.2.6"
+version = "0.2.7"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -21,3 +21,17 @@ clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
 anyhow = { workspace = true }
+
+# rust-ci's release.yml ships assets as `edikt-{os}-{arch}.{ext}` (no version,
+# no full target triple), which matches none of cargo-binstall's default
+# guess templates, so `cargo binstall edikt` silently fell back to compiling
+# from source. archive-suffix resolves against every extension binstall
+# knows for the given pkg-fmt (both .tgz and .tar.gz for Tgz), so this
+# matches the actual .tar.gz assets without hardcoding it.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ bin }-{ os-name }-{ target-arch }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
