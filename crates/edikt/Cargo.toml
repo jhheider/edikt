@@ -1,6 +1,6 @@
 [package]
 name = "edikt"
-version = "0.2.7"
+version = "0.2.8"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -28,8 +28,16 @@ anyhow = { workspace = true }
 # from source. archive-suffix resolves against every extension binstall
 # knows for the given pkg-fmt (both .tgz and .tar.gz for Tgz), so this
 # matches the actual .tar.gz assets without hardcoding it.
+#
+# { name } (crate name), not { bin }: binstall only resolves { bin } later,
+# in bin-dir, after a specific binary is known - it isn't in the context
+# pkg-url renders against, and using it there fails to render on every
+# platform (verified: silently falls through to source compile, same as
+# the original bug, just from a different cause). { name } happens to
+# equal the binary name here; a crate whose crate name and binary name
+# differ needs the literal binary name hardcoded instead.
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ bin }-{ os-name }-{ target-arch }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ os-name }-{ target-arch }{ archive-suffix }"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
