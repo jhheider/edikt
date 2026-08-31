@@ -113,6 +113,51 @@ pub fn has_array(value: &Value) -> bool {
     }
 }
 
+/// The first duplicated key in `value`, searched depth-first, or `None`.
+///
+/// Duplicate keys are legal and meaningful in the flat key-value family (a
+/// second `Port 22` line is an ordinary thing in a daemon config), and the
+/// `Value` model keeps them because key order and repetition are user-visible.
+/// Every other format's grammar treats an object as a map, so a conversion has
+/// to collapse them and say so.
+pub fn duplicate_key(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(m) => {
+            let mut seen = std::collections::HashSet::new();
+            for (k, _) in m {
+                if !seen.insert(k.as_str()) {
+                    return Some(k.clone());
+                }
+            }
+            m.iter().find_map(|(_, v)| duplicate_key(v))
+        }
+        Value::Array(a) => a.iter().find_map(duplicate_key),
+        _ => None,
+    }
+}
+
+/// Collapse duplicate object keys, keeping the **first** occurrence.
+///
+/// First rather than last, because that is already how edikt reads such a
+/// document: `.PORT` on a file with two `PORT` lines returns the first, and an
+/// edit rewrites the first. Emitting the last would mean a conversion disagreed
+/// with a query over the same file.
+pub fn dedupe_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(m) => {
+            let mut seen = std::collections::HashSet::new();
+            Value::Object(
+                m.iter()
+                    .filter(|(k, _)| seen.insert(k.clone()))
+                    .map(|(k, v)| (k.clone(), dedupe_keys(v)))
+                    .collect(),
+            )
+        }
+        Value::Array(a) => Value::Array(a.iter().map(dedupe_keys).collect()),
+        other => other.clone(),
+    }
+}
+
 fn is_container(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
 }
