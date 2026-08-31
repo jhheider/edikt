@@ -289,8 +289,77 @@ pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
 
 /// Insert `"key": value` as a new member of an object's source text.
 pub(crate) fn insert_into_object(orig: &str, key: &str, value: &Value) -> String {
-    let member = format!("{}: {}", json_string(key), value.to_json());
+    // A composite value inserted into a multi-line object is laid out in the
+    // file's own style rather than emitted compact. `to_json()` produced
+    // `{"path":1}` against a 2-space file, which is valid but reads as foreign
+    // and is the one part of an insertion that ignored the surrounding layout
+    // (edikt-087 BUG-5). Single-line objects still take the compact form,
+    // because there it IS the file's style.
+    let rendered = match indent_style(orig) {
+        Some((base, unit)) => pretty_value(value, &base, &unit),
+        None => value.to_json(),
+    };
+    let member = format!("{}: {rendered}", json_string(key));
     insert_elements(orig, &[member])
+}
+
+/// The `(base, unit)` indentation of a multi-line container's text, or `None`
+/// when it is single-line.
+///
+/// `base` is the indent of the line the closing bracket sits on; `unit` is one
+/// level, taken as the member indent minus that base. Deriving the unit by
+/// subtraction rather than assuming the member indent keeps a nested container
+/// from over-indenting its new content: for `{\n    "a": 1\n  }` the members
+/// sit at four spaces but one level is still two.
+fn indent_style(orig: &str) -> Option<(String, String)> {
+    let inner = &orig[1..orig.len() - 1];
+    if !inner.contains('\n') {
+        return None;
+    }
+    let member = detect_indent(inner);
+    let close_ws = &inner[inner.trim_end().len()..];
+    let base = close_ws.rsplit('\n').next().unwrap_or("").to_string();
+    let unit = member.strip_prefix(&base).unwrap_or(&member).to_string();
+    // A container whose members are not indented past the closing brace gives
+    // nothing to imitate; fall back to the conventional two spaces.
+    let unit = if unit.is_empty() {
+        "  ".to_string()
+    } else {
+        unit
+    };
+    Some((member, unit))
+}
+
+/// Render `value` as JSON laid out at `base`, one level being `unit`.
+///
+/// Scalars and empty containers are unchanged from `to_json()`; only composites
+/// gain the line breaks, so a scalar assignment is byte-for-byte what it was.
+fn pretty_value(value: &Value, base: &str, unit: &str) -> String {
+    match value {
+        Value::Object(m) if !m.is_empty() => {
+            let inner = format!("{base}{unit}");
+            let body: Vec<String> = m
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{inner}{}: {}",
+                        json_string(k),
+                        pretty_value(v, &inner, unit)
+                    )
+                })
+                .collect();
+            format!("{{\n{}\n{base}}}", body.join(",\n"))
+        }
+        Value::Array(a) if !a.is_empty() => {
+            let inner = format!("{base}{unit}");
+            let body: Vec<String> = a
+                .iter()
+                .map(|v| format!("{inner}{}", pretty_value(v, &inner, unit)))
+                .collect();
+            format!("[\n{}\n{base}]", body.join(",\n"))
+        }
+        scalar => scalar.to_json(),
+    }
 }
 
 /// Insert `new_elems` before the closing bracket of a `[...]`/`{...}` text,

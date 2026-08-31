@@ -721,6 +721,29 @@ fn render_value(
             &plain
         }
     };
+    // Duplicate keys are legal in the flat key-value family (a second `Port 22`
+    // line is ordinary in a daemon config) and are a map collision everywhere
+    // else, so any target but that family collapses them and says which key.
+    // Keyed on the target rather than on "is this a conversion", because
+    // `-T env` on a duplicated document should keep both lines. Same shape as
+    // the Comments degradation below.
+    //
+    // It rewrites `commented`, not the plain value: a comment-carrying
+    // selection is emitted from the annotated tree, so deduping the `Value`
+    // alone warned and changed nothing in the output.
+    let deduped;
+    if !matches!(target, Format::Env | Format::EnvSpaced)
+        && let Some(key) = edikt_core::convert::duplicate_key(value)
+    {
+        let w = format!("duplicate key `{key}` collapsed (kept the first)");
+        if args.strict {
+            bail!("{loc}: {w} (--strict)");
+        }
+        eprintln!("edikt: warning: {loc}: {w}");
+        deduped = commented.dedupe_keys();
+        commented = &deduped;
+    }
+
     // Feature-derived degradation: a target with no Comments capability (JSON)
     // drops them: warn (or error under --strict), then emit comment-free.
     let stripped;
