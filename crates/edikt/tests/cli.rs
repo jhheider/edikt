@@ -1197,3 +1197,101 @@ fn review_fix_bulk_comment_transform_over_multidoc_is_per_document() {
         "got: {out2}"
     );
 }
+
+// ---- hyphenated-key diagnostics (jhheider/edikt#63) ----
+
+const HYPHEN_TOML: &str =
+    "[dev-dependencies]\nserde_json = \"1\"\n\n[dependencies]\ntotal = 5\nlength = 2\n";
+
+#[test]
+fn bare_hyphenated_key_query_gets_the_quoting_hint() {
+    // The form people type first parses fine as `.dev - dependencies()` and
+    // failed at eval with a bare "unknown function `dependencies`", which named
+    // neither the hyphen nor the fix.
+    let (_o, err, code) = run(&["-t", "toml", ".dev-dependencies"], HYPHEN_TOML);
+    assert_eq!(code, 2);
+    assert!(
+        err.contains("unknown function `dependencies`"),
+        "got: {err}"
+    );
+    assert!(err.contains("contains `-`"), "got: {err}");
+    assert!(err.contains(r#"."dev-dependencies""#), "got: {err}");
+}
+
+#[test]
+fn the_hint_does_not_fire_on_an_unrelated_eval_failure() {
+    // A legitimate hyphen subtraction plus an unrelated unknown function: the
+    // hint must stay quiet, which is the objection the issue raised against
+    // enriching eval errors at all.
+    let (_o, err, code) = run(
+        &["-t", "toml", ".dependencies | (.total-length) | nosuchfn"],
+        HYPHEN_TOML,
+    );
+    assert_eq!(code, 2);
+    assert!(err.contains("unknown function `nosuchfn`"), "got: {err}");
+    assert!(!err.contains("contains `-`"), "got: {err}");
+}
+
+#[test]
+fn a_real_hyphen_subtraction_still_evaluates() {
+    // `length` is a builtin, so `.total-length` is arithmetic and never reaches
+    // the diagnostic at all.
+    let (out, _e, code) = run(
+        &["-t", "toml", ".dependencies | .total-length"],
+        HYPHEN_TOML,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "3");
+}
+
+// ---- documented .env quoting behaviour (edikt-087 BUG-3, a non-bug) ----
+
+#[test]
+fn env_quotes_are_value_bytes_not_syntax() {
+    // There is no single .env grammar, so edikt interprets nothing: the quotes
+    // are part of the value. Pinned because it reads like a bug in a report.
+    let (out, _e, code) = run(&["-t", "env", ".APP_NAME"], "APP_NAME=\"my app\"\n");
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "\"my app\"");
+}
+
+#[test]
+fn env_assignment_replaces_the_whole_byte_run_after_the_separator() {
+    let (out, _e, code) = run(
+        &["-t", "env", ".APP_NAME = \"my app\""],
+        "APP_NAME=\"my app\"\n",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "APP_NAME=my app");
+
+    // Including the quotes in the new value keeps them.
+    let (out, _e, code) = run(
+        &["-t", "env", ".APP_NAME = \"\\\"my app\\\"\""],
+        "APP_NAME=\"my app\"\n",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "APP_NAME=\"my app\"");
+}
+
+#[test]
+fn env_setting_a_value_to_its_current_text_is_a_no_op() {
+    // The losslessness property that actually matters for a quoted value.
+    let src = "APP_NAME=\"my app\"\nBARE=plain\n";
+    let (out, _e, code) = run(&["-t", "env", ".APP_NAME = \"\\\"my app\\\"\""], src);
+    assert_eq!(code, 0);
+    assert_eq!(out, src);
+}
+
+// ---- documented presence test (edikt-087 BUG-4, a non-bug) ----
+
+#[test]
+fn a_query_miss_is_a_silent_no_op_until_exit_status_is_asked_for() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".missing"], "{\"a\": 1}");
+    assert_eq!((out.trim(), code), ("", 0), "sed-shaped by default");
+
+    let (_o, _e, code) = run(&["-t", "jsonc", "--exit-status", ".missing"], "{\"a\": 1}");
+    assert_eq!(code, 1, "--exit-status opts into jq's 1-on-no-results");
+
+    let (_o, _e, code) = run(&["-t", "jsonc", "--exit-status", ".a"], "{\"a\": 1}");
+    assert_eq!(code, 0, "and stays 0 when the key is present");
+}

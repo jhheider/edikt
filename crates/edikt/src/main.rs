@@ -561,7 +561,20 @@ fn run(args: Args) -> Result<ExitCode> {
             };
             let mut out = Vec::new();
             for value in selected {
-                out.extend(edikt_core::eval(body, &value).with_context(|| loc.clone())?);
+                let evaluated = edikt_core::eval(body, &value).map_err(|e| {
+                    // The CLI is the only layer holding both the expression
+                    // source and the evaluation error, so the hyphenated-key
+                    // hint for a bare `.dev-dependencies` is composed here
+                    // (jhheider/edikt#63). The helper self-limits to the case
+                    // where the unknown function is the key's own tail.
+                    match unknown_function_name(&e.to_string()).and_then(|name| {
+                        edikt_core::hyphen_hint_for_unknown_function(&program, name)
+                    }) {
+                        Some(hint) => anyhow::anyhow!("{e}; {hint}"),
+                        None => anyhow::Error::new(e),
+                    }
+                });
+                out.extend(evaluated.with_context(|| loc.clone())?);
             }
             out
         };
@@ -751,6 +764,15 @@ fn render_value(
         eprintln!("edikt: warning: {loc}: {w}");
     }
     Ok(text)
+}
+
+/// The function name out of an `unknown function `X`` evaluation error.
+///
+/// Reading it back out of the rendered message keeps `EvalError` a plain string
+/// error; a typed variant would be the cleaner seam if more callers ever need
+/// this, but one caller does not earn the churn.
+fn unknown_function_name(msg: &str) -> Option<&str> {
+    msg.strip_prefix("unknown function `")?.strip_suffix('`')
 }
 
 /// Join outputs, newline-terminating each (for `-i` writes).
