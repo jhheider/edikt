@@ -1,0 +1,23 @@
+// Every JSON5 spelling edikt accepts, in one file, so the round-trip corpus
+// pins byte-identity for the whole grammar rather than a sampled corner.
+{
+	unquoted: 'and you can quote me on that',
+	$dollar_sign: 1, _underscore: 2, digits9: 3,
+	// Reserved words are legal JSON5 keys (IdentifierName, not Identifier).
+	null: 'not the null value', true: 'nor the boolean',
+	singleQuotes: 'I can use "double quotes" here',
+	doubleQuotes: "and 'single quotes' here",
+	escapes: 'a \'quote\', a \\ backslash, a \n newline',
+	lineContinuation: "Look, Mom! \
+No newline!",
+	hexadecimal: 0xdecaf, upperHex: 0XBEEF, negHex: -0x10,
+	leadingDecimalPoint: .8675309,
+	andTrailing: 8675309.,
+	positiveSign: +1, negative: -2.5, exponent: 1e3,
+	nonFinite: [Infinity, -Infinity, NaN],
+	"backwardsCompatible": "with JSON",  /* block comment, inline */
+	nested: {
+		deep: { deeper: [1, 2, 3,], },
+	},
+	trailingComma: 'in objects', andIn: ['arrays',],
+}

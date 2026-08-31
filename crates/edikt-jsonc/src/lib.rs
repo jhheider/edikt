@@ -345,7 +345,7 @@ mod tests {
             .filter(|p| {
                 matches!(
                     p.extension().and_then(|x| x.to_str()),
-                    Some("jsonc") | Some("json")
+                    Some("jsonc") | Some("json") | Some("json5")
                 )
             })
             .collect();
@@ -1086,5 +1086,127 @@ mod tests {
         // emit(): the pretty-JSON conversion target.
         let json = emit(&doc.to_value());
         assert!(json.contains("\"compilerOptions\""));
+    }
+
+    // ---- JSON5 input (edikt-087 BUG-1) ----
+
+    const JSON5_DOC: &str = "{\n  unquoted: 'single',\n  \"quoted\": 0xff,\n}\n";
+
+    #[test]
+    fn json5_unquoted_keys_and_single_quotes_parse_and_project() {
+        let v = parse(JSON5_DOC).unwrap().to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        // The bare key is addressable by its plain name...
+        assert_eq!(q(".unquoted"), vec![Value::Str("single".into())]);
+        // ...and a single-quoted string decodes like a double-quoted one.
+        assert_eq!(q(".quoted"), vec![Value::Int(255)]);
+    }
+
+    #[test]
+    fn json5_roundtrips_byte_identically() {
+        // The moat: parsing a JSON5 document and serializing it back changes
+        // nothing, which is what makes an in-place edit safe.
+        assert_eq!(parse(JSON5_DOC).unwrap().to_source(), JSON5_DOC);
+    }
+
+    #[test]
+    fn json5_edit_touches_only_the_target_and_keeps_key_spelling() {
+        let mut doc = parse(JSON5_DOC).unwrap();
+        apply(&mut doc, &parse_expr(".unquoted = \"changed\"").unwrap()).unwrap();
+        // The bare key stays bare (its bytes were never targeted); only the
+        // value is rewritten, and the hex sibling and trailing comma survive.
+        assert_eq!(
+            doc.to_source(),
+            "{\n  unquoted: \"changed\",\n  \"quoted\": 0xff,\n}\n"
+        );
+    }
+
+    #[test]
+    fn json5_reserved_words_are_legal_keys() {
+        // IdentifierName, not Identifier: `null`/`true` name keys here and must
+        // not be read as the scalar values they spell.
+        let src = "{ null: 1, true: 2, $x: 3, _y: 4 }";
+        let v = parse(src).unwrap().to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        assert_eq!(q(".null"), vec![Value::Int(1)]);
+        assert_eq!(q(".true"), vec![Value::Int(2)]);
+        // `$` is not a bare-key character in edikt's own path grammar, so the
+        // query quotes it; the document side accepts it either way.
+        assert_eq!(q(".\"$x\""), vec![Value::Int(3)]);
+        assert_eq!(q("._y"), vec![Value::Int(4)]);
+    }
+
+    #[test]
+    fn json5_number_forms_project() {
+        let src = "{ hex: 0xdecaf, upper: 0XBEEF, neg: -0x10, lead: .5, trail: 5.,                    plus: +7, exp: 1e3 }";
+        let v = parse(src).unwrap().to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        // Hex stays an integer rather than degrading through f64.
+        assert_eq!(q(".hex"), vec![Value::Int(912_559)]);
+        assert_eq!(q(".upper"), vec![Value::Int(48_879)]);
+        assert_eq!(q(".neg"), vec![Value::Int(-16)]);
+        assert_eq!(q(".lead"), vec![Value::Float(0.5)]);
+        assert_eq!(q(".trail"), vec![Value::Float(5.0)]);
+        // A leading `+` is JSON5-only; Rust's parser rejects it, so the sign is
+        // stripped and reapplied.
+        assert_eq!(q(".plus"), vec![Value::Int(7)]);
+        assert_eq!(q(".exp"), vec![Value::Float(1000.0)]);
+    }
+
+    #[test]
+    fn ident_does_not_swallow_infinity_or_nan() {
+        // Pins the logos priority the lexer comment relies on: `Infinity` and
+        // `NaN` must lex as numbers, not as bare identifiers. A logos upgrade
+        // that reordered priority would otherwise silently turn these into keys.
+        let v = parse("{ a: Infinity, b: -Infinity, c: NaN }")
+            .unwrap()
+            .to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        assert_eq!(q(".a | type"), vec![Value::Str("number".into())]);
+        match q(".a").as_slice() {
+            [Value::Float(f)] => assert!(f.is_infinite() && *f > 0.0),
+            other => panic!("expected +inf, got {other:?}"),
+        }
+        match q(".b").as_slice() {
+            [Value::Float(f)] => assert!(f.is_infinite() && *f < 0.0),
+            other => panic!("expected -inf, got {other:?}"),
+        }
+        match q(".c").as_slice() {
+            [Value::Float(f)] => assert!(f.is_nan()),
+            other => panic!("expected NaN, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json5_line_continuation_and_escaped_quotes_decode() {
+        let src = "{ a: \"one \\\ntwo\", b: 'it\\'s', c: \"say \\\"hi\\\"\" }";
+        let v = parse(src).unwrap().to_value();
+        let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+        // A backslash-newline continuation contributes nothing to the value.
+        assert_eq!(q(".a"), vec![Value::Str("one two".into())]);
+        assert_eq!(q(".b"), vec![Value::Str("it's".into())]);
+        assert_eq!(q(".c"), vec![Value::Str("say \"hi\"".into())]);
+    }
+
+    #[test]
+    fn a_bare_word_is_still_not_a_document() {
+        // `Ident` is a key spelling, never a value: garbage must keep failing
+        // rather than parsing as a one-word document now that words lex.
+        assert!(parse("foo").is_err());
+        assert!(parse("  bar  ").is_err());
+    }
+
+    #[test]
+    fn json5_comments_are_still_addressable() {
+        // The comment model keys off members, so JSON5 key spellings must not
+        // break comment reads.
+        let src = "{\n  // head\n  bare: 1,\n}\n";
+        let doc = parse(src).unwrap();
+        let v = doc.to_commented().expect("commented projection");
+        let flat = edikt_core::flatten_commented(&v);
+        assert!(
+            flat.iter().any(|e| e.key == "bare"),
+            "expected the bare key in the comment projection: {flat:?}"
+        );
     }
 }

@@ -283,11 +283,8 @@ fn container_commented(container: &SyntaxNode, is_object: bool) -> Commented {
 /// One object member: its key, and its value with any member-internal comments
 /// attached (before the value -> head; after it, e.g. `"a": 1 /* x */,` -> inline).
 fn member_commented(member: &SyntaxNode) -> (String, Commented) {
-    let key = member
-        .children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .find(|t| t.kind() == Sk::Str)
-        .map(|t| project::unescape(t.text()))
+    let key = project::key_token(member)
+        .map(|t| project::key_text(t.kind(), t.text()))
         .unwrap_or_default();
     let mut c = member
         .children()
