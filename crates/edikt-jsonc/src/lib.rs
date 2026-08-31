@@ -31,6 +31,9 @@ pub const FEATURES: &[Feature] = &[
     Feature::Nesting,
     Feature::Arrays,
     Feature::TypedScalars,
+    // JSON5 spells `Infinity`/`NaN`; plain JSON does not, which is why
+    // `JSON_FEATURES` in the CLI omits this one.
+    Feature::NonFinite,
 ];
 
 /// A parse failure.

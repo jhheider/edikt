@@ -1197,3 +1197,71 @@ fn review_fix_bulk_comment_transform_over_multidoc_is_per_document() {
         "got: {out2}"
     );
 }
+
+// ---- JSON5 input (edikt-087 BUG-1) ----
+
+const JSON5: &str = "{\n  target: 'ES2020',\n  strict: true,\n}\n";
+
+#[test]
+fn json5_input_parses_under_explicit_type() {
+    let (out, _e, code) = run(&["-t", "json5", ".target"], JSON5);
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "ES2020");
+}
+
+#[test]
+fn json5_input_parses_under_the_jsonc_alias_too() {
+    // The family shares one grammar, so the JSON5 spelling is not gated behind
+    // picking the right name for it.
+    let (out, _e, code) = run(&["-t", "jsonc", ".target"], JSON5);
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "ES2020");
+}
+
+#[test]
+fn a_bare_word_is_still_not_a_document() {
+    // Widening the lexer to accept identifiers must not make garbage parse.
+    let (_o, err, code) = run(&["-t", "json5", "."], "foo\n");
+    assert_eq!(code, 2, "stderr: {err}");
+}
+
+#[test]
+fn non_finite_warns_once_per_document_and_degrades_to_null() {
+    // Document-level and Feature-derived, like the comments degradation: one
+    // warning for the document, not one per offending value.
+    let (out, err, code) = run(
+        &["-t", "json5", "-T", "json", "."],
+        "{a: Infinity, b: NaN, c: 1}",
+    );
+    assert_eq!(code, 0, "stderr: {err}");
+    assert_eq!(err.matches("non-finite").count(), 1, "stderr: {err}");
+    // What is emitted matches what the warning claims, and parses as JSON.
+    assert!(out.contains("\"a\": null"), "got: {out}");
+    assert!(out.contains("\"b\": null"), "got: {out}");
+    assert!(out.contains("\"c\": 1"), "got: {out}");
+}
+
+#[test]
+fn non_finite_is_silent_when_the_target_can_spell_it() {
+    let (_o, err, code) = run(&["-t", "json5", "-T", "json5", "."], "{a: Infinity}");
+    assert_eq!(code, 0);
+    assert!(!err.contains("non-finite"), "stderr: {err}");
+}
+
+#[test]
+fn non_finite_warning_is_per_used_feature_not_blanket() {
+    // A JSON5 document with no non-finite value converts silently.
+    let (_o, err, code) = run(&["-t", "json5", "-T", "json", "."], "{a: 1}");
+    assert_eq!(code, 0);
+    assert!(!err.contains("non-finite"), "stderr: {err}");
+}
+
+#[test]
+fn strict_promotes_the_non_finite_warning_to_an_error() {
+    let (_o, err, code) = run(
+        &["--strict", "-t", "json5", "-T", "json", "."],
+        "{a: Infinity}",
+    );
+    assert_eq!(code, 2);
+    assert!(err.contains("non-finite"), "stderr: {err}");
+}

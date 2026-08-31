@@ -186,12 +186,14 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   (an error token) rather than half-supported. A bare word is a key spelling
   only, never a value, so `foo` alone is still not a document.
   Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
-  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output uses
-  the JSON5 spelling, and JSON encoding emits `null` (`JSON.stringify` parity),
-  since JSON's grammar has no such literal. That degradation is currently
-  silent, which is the one place this family does not yet honour the
-  "never silently drop data" rule; promoting it to a conversion warning is
-  open.
+  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5, and are a
+  `Feature` like any other (`Feature::NonFinite`), declared by the JSONC/JSON5
+  family alone. Raw output uses the JSON5 spelling; a target that cannot spell
+  them takes `null` with a document-level warning, `--strict` promoting it as
+  usual. The degradation is applied centrally rather than per emitter, so the
+  bytes emitted always match what the warning claims. YAML and TOML do spell
+  non-finites natively (`.inf`, `nan`) but their emitters do not yet, so they
+  warn-and-degrade rather than claiming a capability they would not honour.
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
   error (exit 2). Iteration over a section's keys is allowed.
@@ -227,19 +229,19 @@ Each format module declares a **static capability set** so behavior is
 *derived*, not special-cased per format pair:
 
 ```rust
-enum Feature { Comments, Nesting, Arrays, TypedScalars, Sections }
+enum Feature { Comments, Nesting, Arrays, TypedScalars, Sections, NonFinite }
 // each format module: const FEATURES: &[Feature];
 ```
 
-| format | Comments | Nesting | Arrays | TypedScalars | Sections |
-|---|:-:|:-:|:-:|:-:|:-:|
-| JSONC / JSON5 | ● | ● | ● | ● | - |
-| JSON | - | ● | ● | ● | - |
-| TOML | ● | ● | ● | ● | - |
-| YAML | ● | ● | ● | ● | - |
-| KDL | ● | ● | ● | ● | - |
-| INI | ● | - | - | - | ● |
-| `.env` / `.properties` | ● | - | - | - | - |
+| format | Comments | Nesting | Arrays | TypedScalars | Sections | NonFinite |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| JSONC / JSON5 | ● | ● | ● | ● | - | ● |
+| JSON | - | ● | ● | ● | - | - |
+| TOML | ● | ● | ● | ● | - | - |
+| YAML | ● | ● | ● | ● | - | - |
+| KDL | ● | ● | ● | ● | - | - |
+| INI | ● | - | - | - | ● | - |
+| `.env` / `.properties` | ● | - | - | - | - | - |
 
 The set is consulted in two places:
 
@@ -278,6 +280,7 @@ does the best-effort conversion:
 | Nesting | flattened to dotted keys (`a.b.c = v`, the `java.util.Properties` convention; inverse un-flattens on the way in) |
 | Arrays | indexed dotted keys (`a.0`, `a.1`) |
 | TypedScalars | scalars stringified |
+| NonFinite | `Infinity`/`NaN` -> `null` (`JSON.stringify` parity) |
 
 Warnings are **per-used-feature and document-level**: a JSONC file that happens
 to have no comments and no nesting converts to INI silently, because nothing was

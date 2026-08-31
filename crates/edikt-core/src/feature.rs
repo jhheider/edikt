@@ -17,6 +17,10 @@ pub enum Feature {
     TypedScalars,
     /// A single level of named grouping (INI `[section]`).
     Sections,
+    /// Non-finite numbers: `Infinity`, `-Infinity`, `NaN`. JSON5, YAML and TOML
+    /// spell these; plain JSON has no grammar for them, so a conversion into it
+    /// degrades them to `null` and must say so.
+    NonFinite,
 }
 
 impl Feature {
@@ -28,6 +32,7 @@ impl Feature {
             Feature::Arrays => "arrays",
             Feature::TypedScalars => "typed scalars",
             Feature::Sections => "sections",
+            Feature::NonFinite => "non-finite numbers (degraded to null)",
         }
     }
 }
@@ -43,5 +48,9 @@ mod tests {
         assert_eq!(Feature::Arrays.as_str(), "arrays");
         assert_eq!(Feature::TypedScalars.as_str(), "typed scalars");
         assert_eq!(Feature::Sections.as_str(), "sections");
+        assert_eq!(
+            Feature::NonFinite.as_str(),
+            "non-finite numbers (degraded to null)"
+        );
     }
 }

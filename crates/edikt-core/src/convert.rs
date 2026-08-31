@@ -113,6 +113,32 @@ pub fn has_array(value: &Value) -> bool {
     }
 }
 
+/// Does `value` contain a non-finite number (`Infinity`, `-Infinity`, `NaN`)?
+pub fn has_non_finite(value: &Value) -> bool {
+    match value {
+        Value::Float(f) => !f.is_finite(),
+        Value::Array(a) => a.iter().any(has_non_finite),
+        Value::Object(m) => m.iter().any(|(_, v)| has_non_finite(v)),
+        _ => false,
+    }
+}
+
+/// Replace every non-finite number with `Null`, the degradation a target that
+/// cannot spell them receives. Paired with a [`Feature::NonFinite`] warning at
+/// the call site, so the emitted bytes always match what the warning claims.
+pub fn strip_non_finite(value: &Value) -> Value {
+    match value {
+        Value::Float(f) if !f.is_finite() => Value::Null,
+        Value::Array(a) => Value::Array(a.iter().map(strip_non_finite).collect()),
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), strip_non_finite(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 fn is_container(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
 }
@@ -131,6 +157,9 @@ pub fn features_used(value: &Value) -> Vec<Feature> {
     }
     if has_typed_scalar(value) {
         used.push(Feature::TypedScalars);
+    }
+    if has_non_finite(value) {
+        used.push(Feature::NonFinite);
     }
     used
 }
