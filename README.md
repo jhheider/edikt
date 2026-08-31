@@ -173,8 +173,19 @@ Homebrew, and pkgx, the badge above tracks the current version. See
 
 - **Exit codes are sed-shaped:** `0` = success, a query that matches nothing
   is a *silent no-op* (safe under `set -e`); `2` = parse or evaluation error.
-  For presence tests, `--exit-status` opts into jq's `1` on zero matches; for
-  defaults, use `//`: `edikt '.maybe.key // "fallback"' f.yaml`.
+  A missing key therefore prints nothing and exits `0`, which is deliberate -
+  it is sed with no matching address, not an error. To tell "absent" from
+  "present but empty", ask for it:
+
+  ```bash
+  # presence test: --exit-status opts into jq's 1-on-no-results
+  if edikt --exit-status '.feature.enabled' config.yaml >/dev/null; then
+    echo "key is present"
+  fi
+
+  # or supply a default in the expression with //
+  edikt '.maybe.key // "fallback"' f.yaml
+  ```
 - **The expression language is deliberately capped in v1.** jq's navigation,
   mutation, arithmetic, `//` defaults, and a curated builtin registry
   (including regex `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are
@@ -186,6 +197,20 @@ Homebrew, and pkgx, the badge above tracks the current version. See
 - **`.env` is flat and string-valued**, no arrays or nesting, ever, but
   string computation on values works fine:
   `edikt -i '.VERSION |= sub("^v"; "")' .env`.
+- **`.env` quotes are part of the value, not syntax.** There is no single `.env`
+  grammar (docker-compose, dotenv libraries and shell `source` disagree), so
+  edikt interprets nothing: for `APP_NAME="my app"` the value is the seven-plus
+  characters `"my app"` *including* the quotes, and assigning replaces the whole
+  run of bytes after the `=`. To keep the quotes, include them in the new value:
+
+  ```bash
+  edikt '.APP_NAME' .env                       # => "my app"   (quotes included)
+  edikt -i '.APP_NAME = "my app"'   .env       # => APP_NAME=my app
+  edikt -i '.APP_NAME = "\"my app\""' .env     # => APP_NAME="my app"
+  ```
+
+  Everything edikt did not target keeps its bytes, so setting a value to exactly
+  its current text is a no-op on the file.
 
 ## License
 

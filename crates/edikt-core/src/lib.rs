@@ -32,5 +32,5 @@ pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval, eval_with_comments};
 pub use feature::Feature;
-pub use parser::{ParseError, parse};
+pub use parser::{ParseError, hyphen_hint_for_unknown_function, parse};
 pub use value::Value;

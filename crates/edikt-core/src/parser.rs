@@ -76,6 +76,31 @@ fn with_hyphen_hint(err: ParseError, src: &str) -> ParseError {
     }
 }
 
+/// The hyphenated-key hint for an `unknown function \`name\`` evaluation error,
+/// when `name` is literally the tail of a hyphenated bare key in `src`.
+///
+/// Closes the diagnostic gap in jhheider/edikt#63. `.dev-dependencies.serde`
+/// dies in the *parser* (at the `.` after the hyphenated key) and
+/// [`with_hyphen_hint`] catches it. Bare `.dev-dependencies` parses fine as
+/// `.dev - dependencies()` and only fails at eval, where the source is no
+/// longer in scope - so the worse message landed on the form people type first.
+///
+/// The tail check is what keeps this from being the blunt instrument the issue
+/// worried about: the hint fires only when the unknown function *is* the key's
+/// last segment, so an unrelated eval failure in an expression that merely
+/// contains a hyphen (`.a-b | nosuchfn`) stays quiet. `.total-length` never
+/// reaches here at all, since `length` is a real builtin and evaluates.
+pub fn hyphen_hint_for_unknown_function(src: &str, name: &str) -> Option<String> {
+    let (key, pos) = hyphenated_key(src)?;
+    if key.rsplit('-').next() != Some(name) {
+        return None;
+    }
+    Some(format!(
+        "key `{key}` contains `-` (parsed as subtraction); quote it: {}\"{key}\"",
+        &src[..pos]
+    ))
+}
+
 /// The first `.some-key` in the source, with the offset of its first character.
 ///
 /// A hyphen only counts when it sits between two identifier characters, so
