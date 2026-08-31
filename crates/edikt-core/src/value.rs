@@ -174,6 +174,18 @@ impl Value {
     }
 }
 
+impl From<&str> for Value {
+    fn from(input: &str) -> Self {
+        Self::Str(input.to_string())
+    }
+}
+
+impl From<String> for Value {
+    fn from(input: String) -> Self {
+        Self::Str(input)
+    }
+}
+
 /// Format an f64 the way jq does: integral values print without a decimal point.
 fn format_f64(f: f64) -> String {
     if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
