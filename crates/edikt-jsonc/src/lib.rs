@@ -164,20 +164,25 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
     let root = SyntaxNode::new_root(green);
 
     // An unrecognized byte is lexed as an error token; reject rather than
-    // silently editing garbage.
-    let has_error = root
+    // silently editing garbage. The message names the whole family and points
+    // at the byte: one parser serves JSONC/JSON5/JSON, so blaming "JSONC" for a
+    // character rejected in a `.json5` file sent the reader looking in the
+    // wrong grammar.
+    let bad = root
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .any(|t| t.kind() == Sk::Error);
-    if has_error {
+        .find(|t| t.kind() == Sk::Error);
+    if let Some(t) = bad {
+        let ch = t.text().chars().next().unwrap_or('\u{fffd}');
+        let offset = usize::from(t.text_range().start());
         return Err(ParseError {
-            msg: "invalid JSONC: unexpected character".to_string(),
+            msg: format!("invalid JSONC/JSON5: unexpected character `{ch}` (at offset {offset})"),
         });
     }
 
     if !top_value_present(&root) {
         return Err(ParseError {
-            msg: "invalid JSONC: no value found".to_string(),
+            msg: "invalid JSONC/JSON5: no value found".to_string(),
         });
     }
 
@@ -1189,6 +1194,19 @@ mod tests {
         assert_eq!(q(".a"), vec![Value::Str("one two".into())]);
         assert_eq!(q(".b"), vec![Value::Str("it's".into())]);
         assert_eq!(q(".c"), vec![Value::Str("say \"hi\"".into())]);
+    }
+
+    #[test]
+    fn parse_error_names_the_family_and_locates_the_byte() {
+        // One parser serves JSONC/JSON5/JSON, so blaming "JSONC" for a byte
+        // rejected in a .json5 file pointed the reader at the wrong grammar.
+        // `Jsonc` has no Debug impl, so unwrap_err() is unavailable here.
+        let Err(e) = parse("{ a: @bad }") else {
+            panic!("expected a parse error");
+        };
+        assert!(e.msg.contains("JSONC/JSON5"), "got: {}", e.msg);
+        assert!(e.msg.contains('@'), "got: {}", e.msg);
+        assert!(e.msg.contains("offset 5"), "got: {}", e.msg);
     }
 
     #[test]
