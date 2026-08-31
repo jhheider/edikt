@@ -174,6 +174,67 @@ impl Value {
     }
 }
 
+impl From<bool> for Value {
+    fn from(input: bool) -> Self {
+        Self::Bool(input)
+    }
+}
+
+macro_rules! from_int {
+    ($($t:ty),+) => {$(
+        impl From<$t> for Value {
+            fn from(input: $t) -> Self {
+                Self::Int(input as i64)
+            }
+        }
+    )+};
+}
+// u64/usize are absent on purpose: they do not fit i64 without a lossy cast,
+// and silently wrapping a large count into a negative Int is worse than making
+// the caller choose.
+from_int!(i8, i16, i32, i64, u8, u16, u32, isize);
+
+macro_rules! from_float {
+    ($($t:ty),+) => {$(
+        impl From<$t> for Value {
+            fn from(input: $t) -> Self {
+                Self::Float(input as f64)
+            }
+        }
+    )+};
+}
+from_float!(f32, f64);
+
+/// `None` is JSON's `null`; `Some(v)` is whatever `v` converts to.
+impl<T: Into<Value>> From<Option<T>> for Value {
+    fn from(input: Option<T>) -> Self {
+        input.map_or(Self::Null, Into::into)
+    }
+}
+
+impl<T: Into<Value>> From<Vec<T>> for Value {
+    fn from(input: Vec<T>) -> Self {
+        Self::Array(input.into_iter().map(Into::into).collect())
+    }
+}
+
+impl<T: Into<Value> + Clone> From<&[T]> for Value {
+    fn from(input: &[T]) -> Self {
+        Self::Array(input.iter().cloned().map(Into::into).collect())
+    }
+}
+
+impl<K: Into<String>, V: Into<Value>> FromIterator<(K, V)> for Value {
+    /// Collect key-value pairs into an object, preserving iteration order.
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        Self::Object(
+            iter.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
 impl From<&str> for Value {
     fn from(input: &str) -> Self {
         Self::Str(input.to_string())

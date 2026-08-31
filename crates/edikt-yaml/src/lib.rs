@@ -20,7 +20,14 @@ mod emit;
 mod scalar;
 
 use compose::{Node, node_to_value};
-use edikt_core::{CommentKind, Document, EditError, Expr, Feature, Value};
+// The edikt-core types that appear in this crate's own public API, re-exported
+// so a dependent can call these methods without also taking a direct
+// edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
+// crate's own `parse` is the document parser.
+pub use edikt_core::{
+    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    parse as parse_expr,
+};
 
 pub use comments::emit_commented;
 pub use emit::emit;

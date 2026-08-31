@@ -31,7 +31,14 @@
 //!   commented block follow the inner TOML engine, which normalizes to `\n`;
 //!   the fenced containers preserve CRLF.
 
-use edikt_core::{CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value};
+// The edikt-core types that appear in this crate's own public API, re-exported
+// so a dependent can call these methods without also taking a direct
+// edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
+// crate's own `parse` is the document parser.
+pub use edikt_core::{
+    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    parse as parse_expr,
+};
 
 /// Capabilities reported statically for the lens. The live per-document set is
 /// delegated to the inner block (see [`Document::features`]); this superset is

@@ -5,6 +5,23 @@
 //! [`edikt_core::Value`] for querying, and, with M2, edit it in place touching
 //! only the targeted nodes. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
+//!
+//! Everything needed to drive a document is reachable from this crate alone -
+//! no direct `edikt-core` dependency required (jhheider/edikt#66):
+//!
+//! ```
+//! use edikt_jsonc::{Document, Step, json, parse};
+//!
+//! let mut doc = parse("{\n  // keep me\n  \"a\": 1,\n}\n").unwrap();
+//! doc.set(&[Step::Field("a".into())], &json!({ "nested": [true, null] }))
+//!     .unwrap();
+//!
+//! // The comment, the indent and the trailing comma all survive.
+//! assert_eq!(
+//!     doc.to_source(),
+//!     "{\n  // keep me\n  \"a\": {\"nested\":[true,null]},\n}\n"
+//! );
+//! ```
 
 mod comments;
 mod edit;
@@ -14,10 +31,16 @@ mod project;
 mod syntax;
 
 pub use comments::emit_commented;
-pub use edikt_core::EditError;
 pub use edit::apply;
 
-use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value};
+// The edikt-core types that appear in this crate's own public API, re-exported
+// so a dependent can call these methods without also taking a direct
+// edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
+// crate's own `parse` is the document parser.
+pub use edikt_core::{
+    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    parse as parse_expr,
+};
 use syntax::{Sk, SyntaxNode};
 
 /// Comment kinds this format supports (empty => none); the comment
