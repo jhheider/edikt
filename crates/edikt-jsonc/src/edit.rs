@@ -143,11 +143,8 @@ fn step_into(value_node: &SyntaxNode, step: &Step) -> Option<SyntaxNode> {
                 .children()
                 .filter(|n| n.kind() == Sk::Member)
                 .find_map(|member| {
-                    let member_key = member
-                        .children_with_tokens()
-                        .filter_map(|e| e.into_token())
-                        .find(|t| t.kind() == Sk::Str)
-                        .map(|t| project::unescape(t.text()));
+                    let member_key =
+                        project::key_token(&member).map(|t| project::key_text(t.kind(), t.text()));
                     if member_key.as_deref() == Some(key) {
                         member.children().find(|n| n.kind() == Sk::Value)
                     } else {
@@ -177,11 +174,8 @@ pub(crate) fn find_member(object: &SyntaxNode, key: &str) -> Option<SyntaxNode> 
         .children()
         .filter(|n| n.kind() == Sk::Member)
         .find(|member| {
-            member
-                .children_with_tokens()
-                .filter_map(|e| e.into_token())
-                .find(|t| t.kind() == Sk::Str)
-                .map(|t| project::unescape(t.text()))
+            project::key_token(member)
+                .map(|t| project::key_text(t.kind(), t.text()))
                 .as_deref()
                 == Some(key)
         })

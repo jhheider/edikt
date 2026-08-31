@@ -18,7 +18,9 @@ pub enum Sk {
     False,
     Null,
     Str,
+    SingleStr,
     Num,
+    Ident,
     LineComment,
     BlockComment,
     Ws,
@@ -38,7 +40,7 @@ impl Language for JsoncLang {
     type Kind = Sk;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Sk {
-        const KINDS: [Sk; 20] = [
+        const KINDS: [Sk; 22] = [
             Sk::LBrace,
             Sk::RBrace,
             Sk::LBracket,
@@ -49,7 +51,9 @@ impl Language for JsoncLang {
             Sk::False,
             Sk::Null,
             Sk::Str,
+            Sk::SingleStr,
             Sk::Num,
+            Sk::Ident,
             Sk::LineComment,
             Sk::BlockComment,
             Sk::Ws,
@@ -80,4 +84,17 @@ pub(crate) fn sk(kind: Sk) -> rowan::SyntaxKind {
 /// Is this kind trivia (whitespace or a comment)?
 pub(crate) fn is_trivia(kind: Sk) -> bool {
     matches!(kind, Sk::Ws | Sk::LineComment | Sk::BlockComment)
+}
+
+/// Can this kind stand in an object's key position?
+///
+/// JSON has only the double-quoted string. JSON5 adds the bare identifier and
+/// the single-quoted string, and since its keys are `IdentifierName` rather than
+/// `Identifier`, the reserved words are legal keys too (`{ null: 1 }`) - those
+/// lex as their keyword kinds, so they are listed explicitly.
+pub(crate) fn is_key(kind: Sk) -> bool {
+    matches!(
+        kind,
+        Sk::Str | Sk::SingleStr | Sk::Ident | Sk::True | Sk::False | Sk::Null
+    )
 }

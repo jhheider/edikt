@@ -146,6 +146,11 @@ impl Value {
             Value::Null => out.push_str("null"),
             Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Value::Int(i) => out.push_str(&i.to_string()),
+            // JSON's grammar has no non-finite literal, so encoding one emits
+            // `null`, matching `JSON.stringify`. Only a JSON5 source can supply
+            // one, and only a conversion away from the JSON5 family reaches
+            // this; an in-place JSON5 edit never re-encodes untouched bytes.
+            Value::Float(f) if !f.is_finite() => out.push_str("null"),
             Value::Float(f) => out.push_str(&format_f64(*f)),
             Value::Str(s) => write_json_string(s, out),
             Value::Array(a) => {
@@ -187,8 +192,19 @@ impl From<String> for Value {
 }
 
 /// Format an f64 the way jq does: integral values print without a decimal point.
+///
+/// Non-finite values use the JavaScript/JSON5 spelling (`Infinity`, `-Infinity`,
+/// `NaN`) rather than Rust's `inf`/`NaN`, so a JSON5 document's own literals
+/// round-trip through raw output. They are only reachable from a JSON5 source;
+/// arithmetic cannot produce one (division by zero is a hard error).
 fn format_f64(f: f64) -> String {
-    if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return if f > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{}", f as i64)
     } else {
         format!("{f}")
@@ -292,6 +308,24 @@ mod tests {
             obj(&[("a", Value::Int(1)), ("b", Value::Int(2))])
                 .value_eq(&obj(&[("b", Value::Int(2)), ("a", Value::Int(1))]))
         );
+    }
+
+    #[test]
+    fn non_finite_floats_use_the_json5_spelling_but_encode_as_json_null() {
+        // Raw output round-trips a JSON5 literal...
+        assert_eq!(Value::Float(f64::INFINITY).to_raw_string(), "Infinity");
+        assert_eq!(Value::Float(f64::NEG_INFINITY).to_raw_string(), "-Infinity");
+        assert_eq!(Value::Float(f64::NAN).to_raw_string(), "NaN");
+        // ...while JSON encoding degrades to null, because `Infinity` is not
+        // JSON and emitting it would produce a document nothing can parse.
+        assert_eq!(Value::Float(f64::INFINITY).to_json(), "null");
+        assert_eq!(Value::Float(f64::NAN).to_json(), "null");
+        assert_eq!(
+            obj(&[("a", Value::Float(f64::NEG_INFINITY))]).to_json(),
+            "{\"a\":null}"
+        );
+        // Finite formatting is unchanged.
+        assert_eq!(Value::Float(1e14).to_json(), "100000000000000");
     }
 
     #[test]

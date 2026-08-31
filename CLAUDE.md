@@ -174,9 +174,24 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
 
 ## Per-format semantics
 
-- **JSONC / JSON5 / JSON** - full typed model. `.json` is read by the JSONC
-  parser (superset); it just has no comments to preserve. Highest-value target
-  (`tsconfig.json`, `settings.json`, `devcontainer.json`).
+- **JSONC / JSON5 / JSON** - full typed model, one lexer/parser for the family.
+  `.json` is read by the JSONC parser (superset); it just has no comments to
+  preserve. **JSON5** adds unquoted object keys (ASCII `IdentifierName`,
+  reserved words included), single-quoted strings, backslash-newline line
+  continuations, and hex / leading-dot / trailing-dot / `+`-signed /
+  `Infinity` / `NaN` numbers. Since the family shares a grammar, leniency is
+  input-only and uniform: a `.jsonc` file using a JSON5 spelling parses rather
+  than erroring, and nothing is ever *emitted* in a spelling the file did not
+  already use. Unicode and `\u`-escaped identifiers are deliberately not lexed
+  (an error token) rather than half-supported. A bare word is a key spelling
+  only, never a value, so `foo` alone is still not a document.
+  Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
+  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output uses
+  the JSON5 spelling, and JSON encoding emits `null` (`JSON.stringify` parity),
+  since JSON's grammar has no such literal. That degradation is currently
+  silent, which is the one place this family does not yet honour the
+  "never silently drop data" rule; promoting it to a conversion warning is
+  open.
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
   error (exit 2). Iteration over a section's keys is allowed.

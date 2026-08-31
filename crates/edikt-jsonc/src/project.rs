@@ -3,7 +3,7 @@
 //! Trivia is dropped here by design: this is what querying and conversion see,
 //! not the format-preserving source view.
 
-use crate::syntax::{Sk, SyntaxNode};
+use crate::syntax::{Sk, SyntaxNode, is_key};
 use edikt_core::Value;
 use rowan::NodeOrToken;
 
@@ -17,7 +17,13 @@ pub(crate) fn to_value(root: &SyntaxNode) -> Value {
 
 /// Is `kind` a scalar value token (used to detect an empty/absent value)?
 pub(crate) fn is_value_token(kind: Sk) -> bool {
-    matches!(kind, Sk::Str | Sk::Num | Sk::True | Sk::False | Sk::Null)
+    // `Ident` is deliberately absent: a bare word is a JSON5 *key*, never a
+    // value, so a lone `foo` must still fail the top-level-value check rather
+    // than parse as a document.
+    matches!(
+        kind,
+        Sk::Str | Sk::SingleStr | Sk::Num | Sk::True | Sk::False | Sk::Null
+    )
 }
 
 pub(crate) fn value_node(node: &SyntaxNode) -> Value {
@@ -30,7 +36,7 @@ pub(crate) fn value_node(node: &SyntaxNode) -> Value {
     for elem in node.children_with_tokens() {
         if let NodeOrToken::Token(t) = elem {
             match t.kind() {
-                Sk::Str => return Value::Str(unescape(t.text())),
+                Sk::Str | Sk::SingleStr => return Value::Str(unescape(t.text())),
                 Sk::Num => return number(t.text()),
                 Sk::True => return Value::Bool(true),
                 Sk::False => return Value::Bool(false),
@@ -45,11 +51,8 @@ pub(crate) fn value_node(node: &SyntaxNode) -> Value {
 fn object(node: &SyntaxNode) -> Value {
     let mut pairs = Vec::new();
     for member in node.children().filter(|n| n.kind() == Sk::Member) {
-        let key = member
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == Sk::Str)
-            .map(|t| unescape(t.text()))
+        let key = key_token(&member)
+            .map(|t| key_text(t.kind(), t.text()))
             .unwrap_or_default();
         let val = member
             .children()
@@ -70,22 +73,75 @@ fn array(node: &SyntaxNode) -> Value {
     Value::Array(items)
 }
 
-fn number(text: &str) -> Value {
-    if text.contains(['.', 'e', 'E']) {
-        Value::Float(text.parse().unwrap_or(0.0))
-    } else {
-        match text.parse::<i64>() {
-            Ok(i) => Value::Int(i),
-            Err(_) => Value::Float(text.parse().unwrap_or(0.0)),
-        }
+/// The key token of a member: the first key-position token *before* the colon.
+///
+/// Bounded by the colon because a member's value may itself be a string, and
+/// with JSON5 key spellings a plain "first key-ish token" search would happily
+/// return the value of a keyless member.
+pub(crate) fn key_token(member: &SyntaxNode) -> Option<crate::syntax::SyntaxToken> {
+    member
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .take_while(|t| t.kind() != Sk::Colon)
+        .find(|t| is_key(t.kind()))
+}
+
+/// The decoded name of a key token, per its spelling.
+pub(crate) fn key_text(kind: Sk, text: &str) -> String {
+    match kind {
+        // A bare identifier, or a reserved word used as a JSON5 key, is its own
+        // text; only the quoted spellings carry escapes.
+        Sk::Ident | Sk::True | Sk::False | Sk::Null => text.to_string(),
+        _ => unescape(text),
     }
 }
 
-/// Unescape a JSON double-quoted string token (quotes included).
+fn number(text: &str) -> Value {
+    // JSON5 non-finite literals, which no radix parse would accept.
+    match text {
+        "Infinity" | "+Infinity" => return Value::Float(f64::INFINITY),
+        "-Infinity" => return Value::Float(f64::NEG_INFINITY),
+        "NaN" => return Value::Float(f64::NAN),
+        _ => {}
+    }
+    // JSON5 hex, with an optional sign ahead of the `0x`. Parsed as i64 so hex
+    // stays an integer rather than degrading through f64.
+    let (sign, digits) = match text.strip_prefix('-') {
+        Some(rest) => (-1i64, rest),
+        None => (1i64, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        return match i64::from_str_radix(hex, 16) {
+            Ok(i) => Value::Int(sign * i),
+            // Wider than i64: fall back to f64 rather than silently zeroing.
+            Err(_) => {
+                Value::Float(u128::from_str_radix(hex, 16).map_or(0.0, |u| sign as f64 * u as f64))
+            }
+        };
+    }
+    // `1.` and `.5` are JSON5 spellings that Rust's f64 parser accepts as-is;
+    // a leading `+` it does not, hence parsing `digits` with the sign reapplied.
+    if text.contains(['.', 'e', 'E']) {
+        return Value::Float(digits.parse::<f64>().map_or(0.0, |f| sign as f64 * f));
+    }
+    match digits.parse::<i64>() {
+        Ok(i) => Value::Int(sign * i),
+        Err(_) => Value::Float(digits.parse::<f64>().map_or(0.0, |f| sign as f64 * f)),
+    }
+}
+
+/// Unescape a quoted string token (quotes included).
+///
+/// Handles JSON's double quotes and JSON5's single quotes; the escape grammar is
+/// otherwise shared, plus JSON5's backslash-newline line continuation.
 pub(crate) fn unescape(tok: &str) -> String {
     let inner = tok
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| tok.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(tok);
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
@@ -96,6 +152,15 @@ pub(crate) fn unescape(tok: &str) -> String {
         }
         match chars.next() {
             Some('"') => out.push('"'),
+            // JSON5: an escaped single quote, and a line continuation, which
+            // contributes nothing to the value.
+            Some('\'') => out.push('\''),
+            Some('\n') => {}
+            Some('\r') => {
+                if chars.clone().next() == Some('\n') {
+                    chars.next();
+                }
+            }
             Some('\\') => out.push('\\'),
             Some('/') => out.push('/'),
             Some('n') => out.push('\n'),

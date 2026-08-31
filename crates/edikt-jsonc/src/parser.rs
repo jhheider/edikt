@@ -1,12 +1,14 @@
 //! Recursive-descent parser building a lossless rowan green tree.
 //!
+//! Grammar covers the JSONC/JSON5 family; see `lexer` for what JSON5 adds.
+//!
 //! Every token (including trivia) is added to the tree in lexical order, so the
 //! green tree round-trips byte-for-byte. The grammar is deliberately lenient -
 //! trailing commas are accepted, and the tree is always well-formed enough to
 //! serialize; structural validity is checked separately in `lib::parse`.
 
 use crate::lexer::Tok;
-use crate::syntax::{Sk, is_trivia, sk};
+use crate::syntax::{Sk, is_key, is_trivia, sk};
 use logos::Logos;
 use rowan::{GreenNode, GreenNodeBuilder};
 
@@ -42,7 +44,9 @@ fn lex(src: &str) -> Vec<(Sk, &str)> {
             Ok(Tok::False) => Sk::False,
             Ok(Tok::Null) => Sk::Null,
             Ok(Tok::Str) => Sk::Str,
+            Ok(Tok::SingleStr) => Sk::SingleStr,
             Ok(Tok::Num) => Sk::Num,
+            Ok(Tok::Ident) => Sk::Ident,
             Ok(Tok::LineComment) => Sk::LineComment,
             Ok(Tok::BlockComment) => Sk::BlockComment,
             Ok(Tok::Ws) => Sk::Ws,
@@ -113,7 +117,8 @@ impl Parser<'_> {
                 None => break,
                 _ => {
                     self.builder.start_node(sk(Sk::Member));
-                    if self.cur() == Some(Sk::Str) {
+                    // JSON's quoted key, or any of JSON5's key spellings.
+                    if self.cur().is_some_and(is_key) {
                         self.bump(); // key
                     }
                     self.skip_trivia();
