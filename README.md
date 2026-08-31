@@ -194,6 +194,16 @@ Homebrew, and pkgx, the badge above tracks the current version. See
 - **Many files, sed-style:** `edikt -i '.v = 9' a.json b.json` (let the shell
   glob: `edikt -i 'del(.telemetry)' config/*.jsonc`). Queries over several
   files concatenate results in order.
+- **`envspaced` is the same model with a space separator**, for
+  `sshd_config`-shaped daemon configs: `edikt -t envspaced -i '.Port = 2222'
+  sshd_config`. The first run of spaces or tabs ends the key and everything
+  after it is the value, so `Subsystem sftp /usr/lib/sftp-server` reads as one
+  value, and a tab-separated line stays tab-separated. It is never auto-detected
+  - `sshd_config` has no extension, `.conf` already means INI, and a `key value`
+  line is indistinguishable from a malformed `.env` line - so it is `-t
+  envspaced` or nothing. It is deliberately *not* an `ssh_config` parser:
+  `Match` / `Host` blocks scope the keys beneath them and this model is flat, so
+  a file using them is out of scope rather than half-supported.
 - **`.env` is flat and string-valued**, no arrays or nesting, ever, but
   string computation on values works fine:
   `edikt -i '.VERSION |= sub("^v"; "")' .env`.

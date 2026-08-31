@@ -1295,3 +1295,38 @@ fn a_query_miss_is_a_silent_no_op_until_exit_status_is_asked_for() {
     let (_o, _e, code) = run(&["-t", "jsonc", "--exit-status", ".a"], "{\"a\": 1}");
     assert_eq!(code, 0, "and stays 0 when the key is present");
 }
+
+// ---- the envspaced dialect (edikt-087 BUG-2) ----
+
+const SSHD: &str = "# managed\nPort 22\nPermitRootLogin\tyes\nHostKey    /etc/ssh/k\n";
+
+#[test]
+fn envspaced_queries_and_edits_from_the_cli() {
+    let (out, _e, code) = run(&["-t", "envspaced", ".Port"], SSHD);
+    assert_eq!((out.trim(), code), ("22", 0));
+
+    // `spaced` is accepted as a shorthand.
+    let (out, _e, code) = run(&["-t", "spaced", ".HostKey"], SSHD);
+    assert_eq!((out.trim(), code), ("/etc/ssh/k", 0));
+}
+
+#[test]
+fn envspaced_is_never_auto_detected() {
+    // `sshd_config` has no extension, `.conf` already means INI, and a
+    // `key value` line is indistinguishable from a malformed `.env` line, so
+    // guessing would silently edit the wrong bytes.
+    let (_o, err, code) = run(&["-t", "conf", ".Port"], SSHD);
+    assert_eq!(code, 2, "a .conf/INI read of a spaced file must fail");
+    assert!(err.contains("INI"), "got: {err}");
+}
+
+#[test]
+fn envspaced_converts_in_both_directions() {
+    let (out, _e, code) = run(&["-t", "json", "-T", "envspaced", "."], r#"{"Port": 22}"#);
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "Port 22", "a spaced target must not emit `=`");
+
+    let (out, _e, code) = run(&["-t", "envspaced", "-T", "json", "."], "Port 22\n");
+    assert_eq!(code, 0);
+    assert!(out.contains("\"Port\": \"22\""), "got: {out}");
+}

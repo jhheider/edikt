@@ -4,6 +4,7 @@
 //! (the `#` in `K=a#b` is value bytes). Emission therefore *remaps* an inline
 //! comment from another format onto its own line, with a warning.
 
+use crate::parser::Dialect;
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
 use edikt_core::wrap::{wrap_comment, wrap_width};
@@ -152,6 +153,17 @@ fn strip_marker(text: &str) -> String {
 /// An inline comment can't exist here, so it moves to a head line of its own -
 /// with a warning, since that is a remap, not a placement.
 pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError> {
+    emit_commented_with(c, Dialect::Punctuated)
+}
+
+/// As [`emit_commented`], writing the separator `dialect` spells.
+///
+/// An envspaced target must emit `key value`; emitting `key=value` would
+/// produce a document that no longer parses as the format it was asked for.
+pub fn emit_commented_with(
+    c: &Commented,
+    dialect: Dialect,
+) -> Result<(String, Vec<String>), EditError> {
     if !matches!(c.node, CommentedNode::Object(_)) {
         return Err(EditError::new("env output requires a top-level object"));
     }
@@ -167,7 +179,11 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
             remapped_inline = true;
             push_comment(&mut out, inline);
         }
-        out.push_str(&format!("{}={}\n", e.key, e.value));
+        let sep = match dialect {
+            Dialect::Punctuated => "=",
+            Dialect::Spaced => " ",
+        };
+        out.push_str(&format!("{}{sep}{}\n", e.key, e.value));
         for l in &e.comments.foot {
             push_comment(&mut out, l);
         }

@@ -11,8 +11,9 @@ mod parser;
 mod project;
 mod syntax;
 
-pub use comments::emit_commented;
+pub use comments::{emit_commented, emit_commented_with};
 pub use edit::apply;
+pub use parser::Dialect;
 
 // The edikt-core types that appear in this crate's own public API, re-exported
 // so a dependent can call these methods without also taking a direct
@@ -43,6 +44,10 @@ pub struct ParseError {
 /// A parsed `.env` / `.properties` document, backed by a lossless CST.
 pub struct Env {
     root: SyntaxNode,
+    /// Remembered so an appended key is spelled the way the file spells its
+    /// existing ones; a `key=value` line inside an envspaced file would not
+    /// parse back as the same document.
+    dialect: Dialect,
 }
 
 impl Env {
@@ -69,8 +74,14 @@ impl Env {
                 if !src.is_empty() && !src.ends_with('\n') {
                     src.push('\n');
                 }
-                src.push_str(&format!("{key}={text}\n"));
-                self.root = SyntaxNode::new_root(parser::build(&src));
+                // An appended key must be spelled the way the rest of the
+                // file is, or the document stops parsing as itself.
+                let sep = match self.dialect {
+                    parser::Dialect::Punctuated => "=",
+                    parser::Dialect::Spaced => " ",
+                };
+                src.push_str(&format!("{key}{sep}{text}\n"));
+                self.root = SyntaxNode::new_root(parser::build(&src, self.dialect));
             }
         }
         Ok(())
@@ -94,7 +105,23 @@ impl Env {
 
 /// Parse `.env` / `.properties` source into an [`Env`] document.
 pub fn parse(src: &str) -> Result<Env, ParseError> {
-    let root = SyntaxNode::new_root(parser::build(src));
+    parse_with(src, Dialect::Punctuated)
+}
+
+/// Parse space-separated `key value` source (`sshd_config`-shaped) into an
+/// [`Env`] document.
+///
+/// Same flat, string-valued model as `.env`; only the separator differs. Not an
+/// `ssh_config` parser: `Match` / `Host` blocks scope the keys beneath them and
+/// this model is flat, so a file using them is out of scope rather than
+/// half-supported.
+pub fn parse_spaced(src: &str) -> Result<Env, ParseError> {
+    parse_with(src, Dialect::Spaced)
+}
+
+/// Parse with an explicit [`Dialect`].
+pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
+    let root = SyntaxNode::new_root(parser::build(src, dialect));
     let malformed = root
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
@@ -104,7 +131,7 @@ pub fn parse(src: &str) -> Result<Env, ParseError> {
             msg: "invalid: a line is neither a comment nor key=value".to_string(),
         });
     }
-    Ok(Env { root })
+    Ok(Env { root, dialect })
 }
 
 impl Document for Env {
@@ -137,7 +164,7 @@ impl Document for Env {
     ) -> Result<Vec<String>, EditError> {
         let key = comments::single_key(path)?;
         let (source, warnings) = comments::set_key_comment(&self.root, key, kind, text)?;
-        self.root = SyntaxNode::new_root(parser::build(&source));
+        self.root = SyntaxNode::new_root(parser::build(&source, self.dialect));
         Ok(warnings)
     }
     fn delete_comment(
@@ -147,7 +174,7 @@ impl Document for Env {
     ) -> Result<(), EditError> {
         let key = comments::single_key(path)?;
         let source = comments::delete_key_comment(&self.root, key, kind)?;
-        self.root = SyntaxNode::new_root(parser::build(&source));
+        self.root = SyntaxNode::new_root(parser::build(&source, self.dialect));
         Ok(())
     }
 }
@@ -350,13 +377,17 @@ mod tests {
         let mut count = 0;
         for entry in std::fs::read_dir(&dir).expect("fixtures/env directory") {
             let path = entry.unwrap().path();
-            match path.extension().and_then(|e| e.to_str()) {
-                Some("env") | Some("properties") => {}
+            // The dialect is chosen by extension here only because these are
+            // fixtures; real envspaced files (sshd_config) have no extension,
+            // which is exactly why the CLI refuses to auto-detect them.
+            let dialect = match path.extension().and_then(|e| e.to_str()) {
+                Some("env") | Some("properties") => Dialect::Punctuated,
+                Some("envspaced") => Dialect::Spaced,
                 _ => continue,
-            }
+            };
             let src = std::fs::read_to_string(&path).unwrap();
             assert_eq!(
-                parse(&src).unwrap().to_source(),
+                parse_with(&src, dialect).unwrap().to_source(),
                 src,
                 "round-trip must be byte-identical: {}",
                 path.display()
@@ -526,5 +557,87 @@ mod tests {
             let raw = crate::syntax::EnvLang::kind_to_raw(k);
             assert_eq!(crate::syntax::EnvLang::kind_from_raw(raw), k);
         }
+    }
+
+    // ---- the envspaced dialect (edikt-087 BUG-2) ----
+
+    const SSHD: &str = "# managed\nPort 22\nPermitRootLogin\tyes\n\nHostKey    /etc/ssh/k\n";
+
+    #[test]
+    fn envspaced_parses_and_round_trips_byte_identically() {
+        let doc = parse_spaced(SSHD).unwrap();
+        assert_eq!(doc.to_source(), SSHD);
+    }
+
+    #[test]
+    fn envspaced_reads_values_across_separator_spellings() {
+        let doc = parse_spaced(SSHD).unwrap();
+        // A single space, a tab, and a run of spaces all end the key.
+        assert_eq!(doc.value_at("Port"), Some(Value::Str("22".into())));
+        assert_eq!(
+            doc.value_at("PermitRootLogin"),
+            Some(Value::Str("yes".into()))
+        );
+        assert_eq!(
+            doc.value_at("HostKey"),
+            Some(Value::Str("/etc/ssh/k".into()))
+        );
+    }
+
+    #[test]
+    fn envspaced_value_keeps_its_internal_spaces() {
+        // Only the FIRST whitespace run is the separator; the rest is value.
+        let doc = parse_spaced("Subsystem sftp /usr/lib/sftp-server\n").unwrap();
+        assert_eq!(
+            doc.value_at("Subsystem"),
+            Some(Value::Str("sftp /usr/lib/sftp-server".into()))
+        );
+    }
+
+    #[test]
+    fn envspaced_edit_preserves_the_separator_it_found() {
+        // A tab-separated line must stay tab-separated: the separator is not
+        // the edit's business, only the value is.
+        let mut doc = parse_spaced(SSHD).unwrap();
+        doc.set("PermitRootLogin", &Value::Str("no".into()))
+            .unwrap();
+        assert!(doc.to_source().contains("PermitRootLogin\tno"));
+        // and the untouched lines are byte-identical
+        assert!(doc.to_source().contains("HostKey    /etc/ssh/k"));
+        assert!(doc.to_source().contains("# managed"));
+    }
+
+    #[test]
+    fn envspaced_append_uses_a_space_not_an_equals() {
+        // The dialect is remembered on the document: appending `Key=value` into
+        // a spaced file would produce something that no longer parses as one.
+        let mut doc = parse_spaced(SSHD).unwrap();
+        doc.set("MaxAuthTries", &Value::Str("3".into())).unwrap();
+        assert!(doc.to_source().contains("MaxAuthTries 3"));
+        assert!(!doc.to_source().contains("MaxAuthTries="));
+        // and it parses back as the same document
+        assert_eq!(
+            parse_spaced(&doc.to_source())
+                .unwrap()
+                .value_at("MaxAuthTries"),
+            Some(Value::Str("3".into()))
+        );
+    }
+
+    #[test]
+    fn the_two_dialects_do_not_read_each_others_files() {
+        // `PORT=22` under the spaced dialect is one key with no separator, and
+        // `Port 22` under the punctuated one likewise: neither silently
+        // half-parses the other, which is why detection is never guessed.
+        assert!(parse_spaced("PORT=22\n").is_err());
+        assert!(parse("Port 22\n").is_err());
+    }
+
+    #[test]
+    fn envspaced_deletes_a_whole_line() {
+        let mut doc = parse_spaced(SSHD).unwrap();
+        doc.delete("Port").unwrap();
+        assert!(!doc.to_source().contains("Port"));
+        assert!(doc.to_source().contains("HostKey"));
     }
 }
