@@ -13,15 +13,15 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates (path + version so they can publish independently).
-edikt-core = { path = "crates/edikt-core", version = "0.3.1" }
+edikt-core = { path = "crates/edikt-core", version = "0.4.0" }
 edikt-syntax = { path = "crates/edikt-syntax", version = "0.2.0" }
-edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.2.3" }
-edikt-ini = { path = "crates/edikt-ini", version = "0.2.2" }
-edikt-env = { path = "crates/edikt-env", version = "0.2.2" }
-edikt-toml = { path = "crates/edikt-toml", version = "0.2.3" }
-edikt-yaml = { path = "crates/edikt-yaml", version = "0.2.1" }
-edikt-kdl = { path = "crates/edikt-kdl", version = "0.2.2" }
-edikt-frontmatter = { path = "crates/edikt-frontmatter", version = "0.1.0" }
+edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.3.0" }
+edikt-ini = { path = "crates/edikt-ini", version = "0.3.0" }
+edikt-env = { path = "crates/edikt-env", version = "0.3.0" }
+edikt-toml = { path = "crates/edikt-toml", version = "0.3.0" }
+edikt-yaml = { path = "crates/edikt-yaml", version = "0.3.0" }
+edikt-kdl = { path = "crates/edikt-kdl", version = "0.3.0" }
+edikt-frontmatter = { path = "crates/edikt-frontmatter", version = "0.2.0" }
 # Third-party.
 rowan = "0.16"
 kdl = "6"
