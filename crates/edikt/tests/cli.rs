@@ -1330,3 +1330,117 @@ fn envspaced_converts_in_both_directions() {
     assert_eq!(code, 0);
     assert!(out.contains("\"Port\": \"22\""), "got: {out}");
 }
+
+// ---- auto-vivified nodes follow the file's layout (edikt-087 BUG-5) ----
+
+#[test]
+fn autovivified_object_matches_a_pretty_file() {
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".nonexistent.path = 1"],
+        "{\n  \"include\": [\"src/**/*\"],\n}\n",
+    );
+    assert_eq!(code, 0);
+    // Laid out in the file's own style, not `{"path":1}`; the trailing-comma
+    // style and the untouched member both survive.
+    assert_eq!(
+        out,
+        "{\n  \"include\": [\"src/**/*\"],\n  \"nonexistent\": {\n    \"path\": 1\n  },\n}\n"
+    );
+}
+
+#[test]
+fn autovivified_object_uses_one_level_not_the_full_depth() {
+    // The indent unit is the member indent minus the closing brace's indent, so
+    // new content inside a nested object indents by one level, not by its depth.
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".outer.new.deep = true"],
+        "{\n  \"outer\": {\n    \"a\": 1\n  }\n}\n",
+    );
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("\n    \"new\": {\n      \"deep\": true\n    }"),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn autovivified_object_follows_tabs() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".b.c = 2"], "{\n\t\"a\": 1\n}\n");
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("\n\t\"b\": {\n\t\t\"c\": 2\n\t}"),
+        "got: {out:?}"
+    );
+}
+
+#[test]
+fn a_single_line_object_still_gets_a_compact_insert() {
+    // Compact IS the file's style there, so matching it is the correct answer.
+    let (out, _e, code) = run(&["-t", "jsonc", ".b.c = 2"], "{\"a\": 1}");
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "{\"a\": 1, \"b\": {\"c\":2}}");
+}
+
+#[test]
+fn a_scalar_assignment_is_unchanged_by_the_layout_work() {
+    let (out, _e, code) = run(&["-t", "jsonc", ".b = 2"], "{\n  \"a\": 1\n}\n");
+    assert_eq!(code, 0);
+    assert_eq!(out, "{\n  \"a\": 1,\n  \"b\": 2\n}\n");
+}
+
+// ---- duplicate keys collapse on the way out of the flat family ----
+
+const DUP_ENV: &str = "PORT=22\nPORT=2222\nHOST=a\n";
+
+#[test]
+fn duplicate_keys_collapse_first_wins_with_a_warning() {
+    let (out, err, code) = run(&["-t", "env", "-T", "json", "."], DUP_ENV);
+    assert_eq!(code, 0);
+    assert!(err.contains("duplicate key `PORT`"), "stderr: {err}");
+    // First wins, matching what a query over the same file returns.
+    assert!(out.contains("\"PORT\": \"22\""), "got: {out}");
+    assert!(!out.contains("2222"), "got: {out}");
+}
+
+#[test]
+fn a_query_and_a_conversion_agree_on_which_duplicate_wins() {
+    // The reason first-wins rather than last-wins: `.PORT` already returns the
+    // first, and a conversion disagreeing with a query would be indefensible.
+    let (out, _e, _c) = run(&["-t", "env", ".PORT"], DUP_ENV);
+    assert_eq!(out.trim(), "22");
+}
+
+#[test]
+fn the_flat_family_keeps_its_duplicates() {
+    // Duplicates are legal and meaningful there, so `-T env` must not collapse.
+    let (out, err, code) = run(&["-t", "env", "-T", "env", "."], DUP_ENV);
+    assert_eq!(code, 0);
+    assert!(!err.contains("duplicate"), "stderr: {err}");
+    assert!(
+        out.contains("PORT=22") && out.contains("PORT=2222"),
+        "got: {out}"
+    );
+
+    let (out, _e, _c) = run(
+        &["-t", "envspaced", "-T", "envspaced", "."],
+        "Port 22\nPort 2222\n",
+    );
+    assert!(
+        out.contains("Port 22") && out.contains("Port 2222"),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn strict_promotes_the_duplicate_key_warning() {
+    let (_o, err, code) = run(&["--strict", "-t", "env", "-T", "json", "."], DUP_ENV);
+    assert_eq!(code, 2);
+    assert!(err.contains("duplicate key"), "stderr: {err}");
+}
+
+#[test]
+fn a_document_without_duplicates_converts_silently() {
+    let (_o, err, code) = run(&["-t", "env", "-T", "json", "."], "A=1\nB=2\n");
+    assert_eq!(code, 0);
+    assert!(!err.contains("duplicate"), "stderr: {err}");
+}

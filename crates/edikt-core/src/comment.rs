@@ -87,6 +87,35 @@ pub enum CommentedNode {
 }
 
 impl Commented {
+    /// Collapse duplicate object keys, keeping the first occurrence with its
+    /// comments.
+    ///
+    /// The plain-`Value` twin is `convert::dedupe_keys`; both are needed
+    /// because a comment-carrying selection is emitted from this tree, not from
+    /// the `Value`, so deduping only the latter would warn and change nothing.
+    pub fn dedupe_keys(&self) -> Commented {
+        let node = match &self.node {
+            CommentedNode::Object(entries) => {
+                let mut seen = std::collections::HashSet::new();
+                CommentedNode::Object(
+                    entries
+                        .iter()
+                        .filter(|(k, _)| seen.insert(k.clone()))
+                        .map(|(k, v)| (k.clone(), v.dedupe_keys()))
+                        .collect(),
+                )
+            }
+            CommentedNode::Array(items) => {
+                CommentedNode::Array(items.iter().map(Commented::dedupe_keys).collect())
+            }
+            scalar => scalar.clone(),
+        };
+        Commented {
+            comments: self.comments.clone(),
+            node,
+        }
+    }
+
     /// Wrap a plain value with no comments anywhere.
     pub fn from_value(value: &Value) -> Commented {
         let node = match value {
