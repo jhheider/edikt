@@ -304,6 +304,15 @@ Workspace; each format is an isolated module with no cross-coupling.
 - **`edikt-syntax`** (lib) - shared **rowan** substrate: green-tree helpers,
   generic lossless serialize (walk green tree -> concat token text), splice /
   structural-sharing edit utilities usable by any format's `SyntaxKind`.
+**Library surface (the crates are a public API, not just the binary's guts).**
+Every format crate re-exports the `edikt-core` types that appear in its own
+signatures - `Value`, `Step`, `Expr`, `Document`, `Feature`, `CommentKind`,
+`Commented`, `EditError`, the `json!` macro, and `parse as parse_expr` (aliased
+because each crate's own `parse` is its document parser). A dependent calls
+`Jsonc::set` without also taking a direct `edikt-core` dependency. `json!` is
+the `serde_json`-shaped `Value` constructor; it builds a data-model value, never
+a document, since the CST is what round-trips bytes.
+
 - **`edikt-jsonc` / `edikt-ini` / `edikt-env`** - each = a `logos` lexer + a
   parser emitting a rowan tree over `edikt-syntax`, typed AST accessors, a static
   `FEATURES: &[Feature]`, and impls of `Document` + `Convert`.

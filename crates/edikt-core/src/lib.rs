@@ -18,6 +18,8 @@ mod error;
 mod eval;
 mod feature;
 mod lexer;
+#[macro_use]
+mod macros;
 mod parser;
 mod strings;
 mod value;

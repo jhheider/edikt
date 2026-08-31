@@ -9,10 +9,17 @@ mod edit;
 mod project;
 
 pub use comments::emit_commented;
-pub use edikt_core::EditError;
 pub use edit::{apply, emit};
 
-use edikt_core::{CommentKind, Document, Expr, Feature, Step, Value, eval};
+// The edikt-core types that appear in this crate's own public API, re-exported
+// so a dependent can call these methods without also taking a direct
+// edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
+// crate's own `parse` is the document parser.
+use edikt_core::eval;
+pub use edikt_core::{
+    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    parse as parse_expr,
+};
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 /// Comment kinds this format supports (empty => none); the comment
