@@ -73,7 +73,7 @@ struct Args {
     )]
     output: Option<PathBuf>,
 
-    /// Force the input format: jsonc | json5 | json | ini | env | properties | toml | yaml | kdl | markdown.
+    /// Force the input format: jsonc | json5 | json | ini | env | properties | envspaced | toml | yaml | kdl | markdown.
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
 
@@ -195,6 +195,10 @@ enum Format {
     Jsonc,
     Ini,
     Env,
+    /// The `.env` model with a whitespace separator (`Port 22`): sshd_config
+    /// and other space-separated daemon configs. Same flat, string-valued
+    /// document, so it shares `edikt-env` entirely.
+    EnvSpaced,
     Toml,
     Yaml,
     Kdl,
@@ -217,7 +221,7 @@ impl Format {
             Format::Json => JSON_FEATURES,
             Format::Jsonc => edikt_jsonc::FEATURES,
             Format::Ini => edikt_ini::FEATURES,
-            Format::Env => edikt_env::FEATURES,
+            Format::Env | Format::EnvSpaced => edikt_env::FEATURES,
             Format::Toml => edikt_toml::FEATURES,
             Format::Yaml => edikt_yaml::FEATURES,
             Format::Kdl => edikt_kdl::FEATURES,
@@ -231,6 +235,7 @@ impl Format {
             Format::Jsonc => "jsonc",
             Format::Ini => "ini",
             Format::Env => "env",
+            Format::EnvSpaced => "envspaced",
             Format::Toml => "toml",
             Format::Yaml => "yaml",
             Format::Kdl => "kdl",
@@ -240,19 +245,20 @@ impl Format {
 }
 
 /// All formats, for candidate suggestions.
-const ALL_FORMATS: [Format; 7] = [
+const ALL_FORMATS: [Format; 8] = [
     Format::Jsonc,
     Format::Json,
     Format::Ini,
     Format::Env,
+    Format::EnvSpaced,
     Format::Toml,
     Format::Yaml,
     Format::Kdl,
 ];
 
 /// Every format name accepted by `-t`/`-T`, for error messages.
-const FORMAT_NAMES: &str =
-    "jsonc, json5, json, ini, cfg, conf, env, properties, toml, yaml, yml, kdl, markdown";
+const FORMAT_NAMES: &str = "jsonc, json5, json, ini, cfg, conf, env, properties, \
+     envspaced, toml, yaml, yml, kdl, markdown";
 
 /// Resolve a `-t`/`-T` format name.
 fn format_from_name(name: &str) -> Result<Format> {
@@ -261,6 +267,7 @@ fn format_from_name(name: &str) -> Result<Format> {
         "jsonc" | "json5" => Ok(Format::Jsonc),
         "ini" | "cfg" | "conf" => Ok(Format::Ini),
         "env" | "properties" | "props" => Ok(Format::Env),
+        "envspaced" | "spaced" => Ok(Format::EnvSpaced),
         "toml" => Ok(Format::Toml),
         "yaml" | "yml" => Ok(Format::Yaml),
         "kdl" => Ok(Format::Kdl),
@@ -302,6 +309,7 @@ fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
         Format::Json | Format::Jsonc => Box::new(edikt_jsonc::parse(src)?),
         Format::Ini => Box::new(edikt_ini::parse(src)?),
         Format::Env => Box::new(edikt_env::parse(src)?),
+        Format::EnvSpaced => Box::new(edikt_env::parse_spaced(src)?),
         Format::Toml => Box::new(edikt_toml::parse(src)?),
         Format::Yaml => Box::new(edikt_yaml::parse(src)?),
         Format::Kdl => Box::new(edikt_kdl::parse(src)?),
@@ -319,6 +327,7 @@ fn emit(format: Format, c: &Commented) -> Result<(String, Vec<String>)> {
         Format::Json | Format::Jsonc => (edikt_jsonc::emit_commented(c), Vec::new()),
         Format::Ini => edikt_ini::emit_commented(c)?,
         Format::Env => edikt_env::emit_commented(c)?,
+        Format::EnvSpaced => edikt_env::emit_commented_with(c, edikt_env::Dialect::Spaced)?,
         Format::Toml => edikt_toml::emit_commented(c)?,
         Format::Yaml => edikt_yaml::emit_commented(c)?,
         Format::Kdl => edikt_kdl::emit_commented(c)?,
@@ -824,6 +833,10 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
     {
         return Ok(Format::Env);
     }
+    // envspaced is deliberately NOT auto-detected: `sshd_config` has no
+    // extension, `.conf` already means INI, and a `key value` line is
+    // indistinguishable from a malformed `.env` line. Guessing would silently
+    // edit the wrong bytes, so it is `-t envspaced` or nothing.
     match path.and_then(|p| p.extension()).and_then(|e| e.to_str()) {
         Some("json") => Ok(Format::Json),
         Some("jsonc" | "json5") => Ok(Format::Jsonc),

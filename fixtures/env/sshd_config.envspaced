@@ -1,0 +1,9 @@
+# A space-separated daemon config: the envspaced dialect.
+Port 22
+PermitRootLogin	no
+
+# tabs, runs of spaces, and paths with spaces in the value all survive
+HostKey    /etc/ssh/ssh_host_ed25519_key
+LogLevel INFO
+Banner /etc/issue.net
+Subsystem sftp /usr/lib/openssh/sftp-server

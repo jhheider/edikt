@@ -42,7 +42,7 @@ edikt -f script.edk [-f ...] [FILE...]
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
 | `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order. Scripts may open with **header directives** - `toFormat: FMT`, `type: FMT` - which CLI flags override; `#` header lines (comments, shebangs) are skipped |
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin |
-| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`toml`\|`yaml`) |
+| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`) |
 | `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` are shorthands for `-T <fmt>` |
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
@@ -195,6 +195,19 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
   error (exit 2). Iteration over a section's keys is allowed.
+- **`envspaced`** - the `.env` document model with a **whitespace separator**
+  (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
+  entirely; a `Dialect` picks only how the key ends, since the separator is the
+  whole difference. The first run of spaces/tabs ends the key and the rest of
+  the line is the value, so `Subsystem sftp /usr/lib/sftp-server` is one value.
+  A document remembers its dialect, so an appended key is spelled the way the
+  file spells its existing ones. **Never auto-detected**: `sshd_config` has no
+  extension, `.conf` is already an INI alias, and a `key value` line is
+  indistinguishable from a malformed `.env` line, so guessing would silently
+  edit the wrong bytes - it is `-t envspaced` or nothing. Deliberately **not**
+  an `ssh_config` parser: `Match`/`Host` blocks scope the keys beneath them and
+  this model is flat, so such a file is out of scope rather than
+  half-supported, on the same reasoning that keeps interpolation out of `.env`.
 - **`.env` / `.properties`** - flat `.KEY`, string values, **line-level editing
   only, forever.** No grammar, no interpolation, no quoting semantics, no type
   coercion in storage. Set the bytes after the separator; preserve everything
