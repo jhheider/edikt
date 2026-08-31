@@ -25,7 +25,9 @@ pub const COMMENT_KINDS: &[CommentKind] = &[CommentKind::Head, CommentKind::Foot
 
 /// Capabilities: comments only. Flat and string-valued: no nesting, arrays,
 /// typed scalars, or sections.
-pub const FEATURES: &[Feature] = &[Feature::Comments];
+// See the note in edikt-ini: string-valued, so the text is carried faithfully
+// and `TypedScalars` already covers the loss.
+pub const FEATURES: &[Feature] = &[Feature::Comments, Feature::NonFinite];
 
 /// A parse failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

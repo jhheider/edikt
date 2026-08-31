@@ -1243,9 +1243,41 @@ fn non_finite_warns_once_per_document_and_degrades_to_null() {
 
 #[test]
 fn non_finite_is_silent_when_the_target_can_spell_it() {
-    let (_o, err, code) = run(&["-t", "json5", "-T", "json5", "."], "{a: Infinity}");
+    // Every format but plain JSON has a spelling and an emitter that produces
+    // it, so JSON is the only target the degradation fires for.
+    for (target, want) in [
+        ("json5", "Infinity"),
+        ("yaml", ".inf"),
+        ("toml", "inf"),
+        ("kdl", "#inf"),
+        ("ini", "Infinity"),
+        ("env", "Infinity"),
+    ] {
+        let (out, err, code) = run(&["-t", "json5", "-T", target, "."], "{a: Infinity}");
+        assert_eq!(code, 0, "{target} stderr: {err}");
+        assert!(!err.contains("non-finite"), "{target} stderr: {err}");
+        assert!(out.contains(want), "{target} emitted: {out}");
+    }
+}
+
+#[test]
+fn non_finite_degrades_even_when_the_source_carries_comments() {
+    // Regression: the degradation runs after the `Commented` tree is built, so
+    // rewriting the plain `Value` warned and changed nothing for any target
+    // that keeps comments. Only JSON reaches this, but it reached it by
+    // accident of the comments degradation rebuilding the tree.
+    let src = "{\n  // note\n  a: Infinity,\n  c: 1,\n}\n";
+    let (out, err, code) = run(&["-t", "json5", "-T", "json", "."], src);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(err.contains("non-finite"), "stderr: {err}");
+    assert!(out.contains("\"a\": null"), "got: {out}");
+    assert!(!out.contains("Infinity"), "got: {out}");
+
+    // And a comment-keeping target neither warns nor loses the value.
+    let (out, err, code) = run(&["-t", "json5", "-T", "yaml", "."], src);
     assert_eq!(code, 0);
     assert!(!err.contains("non-finite"), "stderr: {err}");
+    assert!(out.contains(".inf") && out.contains("# note"), "got: {out}");
 }
 
 #[test]

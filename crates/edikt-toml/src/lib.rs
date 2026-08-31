@@ -26,6 +26,9 @@ pub const FEATURES: &[Feature] = &[
     Feature::Nesting,
     Feature::Arrays,
     Feature::TypedScalars,
+    // `.inf` / `inf` and `.nan` / `nan` are native spellings here, and the
+    // emitter already produces them; verified to round-trip back as numbers.
+    Feature::NonFinite,
 ];
 
 /// A parse failure.

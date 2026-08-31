@@ -31,8 +31,9 @@ pub const FEATURES: &[Feature] = &[
     Feature::Nesting,
     Feature::Arrays,
     Feature::TypedScalars,
-    // JSON5 spells `Infinity`/`NaN`; plain JSON does not, which is why
-    // `JSON_FEATURES` in the CLI omits this one.
+    // JSON5 spells `Infinity`/`NaN`. Plain JSON is the only format in the tree
+    // with no spelling at all, which is why `JSON_FEATURES` in the CLI is the
+    // one capability set that omits this.
     Feature::NonFinite,
 ];
 

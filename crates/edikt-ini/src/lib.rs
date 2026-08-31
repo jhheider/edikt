@@ -25,7 +25,11 @@ pub const COMMENT_KINDS: &[CommentKind] =
     &[CommentKind::Head, CommentKind::Inline, CommentKind::Foot];
 
 /// Capabilities of INI: comments and a single level of named sections.
-pub const FEATURES: &[Feature] = &[Feature::Comments, Feature::Sections];
+// String-valued, so a non-finite is carried as its text like every other
+// scalar: that loss is `TypedScalars`, which is already absent and already
+// warns. Claiming `NonFinite` keeps the degradation from rewriting a faithful
+// `Infinity` into a `null` the format never asked for.
+pub const FEATURES: &[Feature] = &[Feature::Comments, Feature::Sections, Feature::NonFinite];
 
 /// A parse failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -186,14 +186,18 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   (an error token) rather than half-supported. A bare word is a key spelling
   only, never a value, so `foo` alone is still not a document.
   Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
-  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5, and are a
-  `Feature` like any other (`Feature::NonFinite`), declared by the JSONC/JSON5
-  family alone. Raw output uses the JSON5 spelling; a target that cannot spell
-  them takes `null` with a document-level warning, `--strict` promoting it as
-  usual. The degradation is applied centrally rather than per emitter, so the
-  bytes emitted always match what the warning claims. YAML and TOML do spell
-  non-finites natively (`.inf`, `nan`) but their emitters do not yet, so they
-  warn-and-degrade rather than claiming a capability they would not honour.
+  **Non-finite numbers** (`Infinity`/`NaN`) are a `Feature` like any other
+  (`Feature::NonFinite`). Every format in the tree spells them in its own
+  grammar and every emitter already produces that spelling - `Infinity`,
+  `.inf`, `inf`, `#inf`, and the string-valued formats carry the text - so
+  **plain JSON is the only target that lacks the capability**, having no
+  literal at all. It takes `null` (`JSON.stringify` parity) with a
+  document-level warning, `--strict` promoting as usual. The degradation
+  rewrites the `Commented` tree rather than the plain `Value`, because a
+  comment-carrying selection is emitted from that tree; rewriting the value
+  warns without changing the output. INI and `.env` claim the capability
+  deliberately: they carry the text faithfully, and the loss of number-ness is
+  `TypedScalars`, which they already lack and already warn for.
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
   error (exit 2). Iteration over a section's keys is allowed.
@@ -237,11 +241,11 @@ enum Feature { Comments, Nesting, Arrays, TypedScalars, Sections, NonFinite }
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | JSONC / JSON5 | ● | ● | ● | ● | - | ● |
 | JSON | - | ● | ● | ● | - | - |
-| TOML | ● | ● | ● | ● | - | - |
-| YAML | ● | ● | ● | ● | - | - |
-| KDL | ● | ● | ● | ● | - | - |
-| INI | ● | - | - | - | ● | - |
-| `.env` / `.properties` | ● | - | - | - | - | - |
+| TOML | ● | ● | ● | ● | - | ● |
+| YAML | ● | ● | ● | ● | - | ● |
+| KDL | ● | ● | ● | ● | - | ● |
+| INI | ● | - | - | - | ● | ● |
+| `.env` / `.properties` | ● | - | - | - | - | ● |
 
 The set is consulted in two places:
 

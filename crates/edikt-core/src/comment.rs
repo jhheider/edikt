@@ -87,6 +87,33 @@ pub enum CommentedNode {
 }
 
 impl Commented {
+    /// Replace every non-finite number with `Null`, keeping comments.
+    ///
+    /// Operates on this tree rather than on a plain [`Value`] because a
+    /// comment-carrying selection is emitted from here: rewriting the `Value`
+    /// after this tree was built warns and changes nothing.
+    pub fn strip_non_finite(&self) -> Commented {
+        let node = match &self.node {
+            CommentedNode::Scalar(Value::Float(f)) if !f.is_finite() => {
+                CommentedNode::Scalar(Value::Null)
+            }
+            CommentedNode::Array(items) => {
+                CommentedNode::Array(items.iter().map(Commented::strip_non_finite).collect())
+            }
+            CommentedNode::Object(entries) => CommentedNode::Object(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.strip_non_finite()))
+                    .collect(),
+            ),
+            other => other.clone(),
+        };
+        Commented {
+            comments: self.comments.clone(),
+            node,
+        }
+    }
+
     /// Wrap a plain value with no comments anywhere.
     pub fn from_value(value: &Value) -> Commented {
         let node = match value {

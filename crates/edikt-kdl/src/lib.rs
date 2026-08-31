@@ -34,6 +34,9 @@ pub const FEATURES: &[Feature] = &[
     Feature::Nesting,
     Feature::Arrays,
     Feature::TypedScalars,
+    // KDL v2 spells these `#inf` / `#-inf` / `#nan`, and the emitter produces
+    // them.
+    Feature::NonFinite,
 ];
 
 /// A parse failure.

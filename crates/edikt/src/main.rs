@@ -699,13 +699,16 @@ fn render_value(
             &plain
         }
     };
-    // Feature-derived degradation, same shape as the Comments case below: a
-    // target that cannot spell `Infinity`/`NaN` (everything except the JSON5
-    // family) gets them as `null`. Stripping here rather than in the emitters
-    // keeps the emitted bytes identical to what the warning claims, and keeps
-    // the policy in one place instead of once per format.
+    // Feature-derived degradation, same shape as the Comments case below.
+    // Every format in the tree spells non-finite numbers in its own grammar
+    // (`Infinity`, `.inf`, `inf`, `#inf`; the string-valued ones carry the
+    // text), so plain JSON is the only target this fires for - it has no
+    // literal, and `JSON.stringify` parity makes that `null`.
+    //
+    // It rewrites `commented`, not the plain value: this runs after that tree
+    // is built, and a comment-carrying selection is emitted from it, so
+    // rewriting the `Value` here warned without changing the output.
     let definite;
-    let mut value = value;
     if edikt_core::convert::has_non_finite(value)
         && !target.features().contains(&edikt_core::Feature::NonFinite)
     {
@@ -714,8 +717,8 @@ fn render_value(
             bail!("{loc}: {w} (--strict)");
         }
         eprintln!("edikt: warning: {loc}: {w}");
-        definite = edikt_core::convert::strip_non_finite(value);
-        value = &definite;
+        definite = commented.strip_non_finite();
+        commented = &definite;
     }
 
     // Feature-derived degradation: a target with no Comments capability (JSON)
