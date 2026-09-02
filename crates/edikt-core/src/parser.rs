@@ -544,12 +544,20 @@ impl Parser {
             // `key = value` when the target file is TOML. Accept both; the
             // expression parses before any file is read, so the grammar cannot
             // be conditioned on the target format.
-            match self.peek() {
-                Some(Lx::Colon) | Some(Lx::Assign) => self.pos += 1,
-                _ => return Err(self.err_here("expected `:` or `=`")),
-            }
-            // A comparison-level value keeps `,` free to separate entries.
-            let value = self.parse_cmp()?;
+            //
+            // A key with no separator is jq's pluck shorthand: `{a, b}` is
+            // `{a: .a, b: .b}`, the usual way to select a few keys. The key is
+            // already a literal name, so the desugared value is just that
+            // field read off the current input.
+            let value = match self.peek() {
+                Some(Lx::Colon) | Some(Lx::Assign) => {
+                    self.pos += 1;
+                    // A comparison-level value keeps `,` free to separate entries.
+                    self.parse_cmp()?
+                }
+                Some(Lx::Comma) | Some(Lx::RBrace) => Expr::Path(vec![Step::Field(key.clone())]),
+                _ => return Err(self.err_here("expected `:`, `=`, `,` or `}`")),
+            };
             pairs.push((key, value));
             match self.peek() {
                 Some(Lx::Comma) => self.pos += 1,
@@ -955,7 +963,42 @@ mod tests {
     #[test]
     fn object_construct_names_both_separators() {
         let e = parse("{a 1}").unwrap_err();
-        assert!(e.to_string().contains("expected `:` or `=`"), "got: {e}");
+        assert!(
+            e.to_string().contains("expected `:`, `=`, `,` or `}`"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn object_construct_plucks_bare_keys() {
+        // jq's shorthand: `{a}` is `{a: .a}`, and it mixes with explicit pairs.
+        let pluck = |k: &str| Expr::Path(vec![Step::Field(k.into())]);
+        assert_eq!(
+            p("{MemoryMiB}"),
+            Expr::ObjectConstruct(vec![("MemoryMiB".into(), pluck("MemoryMiB"))])
+        );
+        assert_eq!(
+            p("{MemoryMiB, UseGrpcfuse}"),
+            Expr::ObjectConstruct(vec![
+                ("MemoryMiB".into(), pluck("MemoryMiB")),
+                ("UseGrpcfuse".into(), pluck("UseGrpcfuse")),
+            ])
+        );
+        // A quoted key plucks too, which is how a key that is not a bare
+        // identifier reaches the shorthand at all.
+        assert_eq!(
+            p(r#"{"a.b", c: 1}"#),
+            Expr::ObjectConstruct(vec![
+                ("a.b".into(), pluck("a.b")),
+                ("c".into(), Expr::Literal(Value::Int(1))),
+            ])
+        );
+        // A hyphenated bare key is one name here (an object key is never
+        // evaluated), so it plucks the hyphenated field.
+        assert_eq!(
+            p("{default-features}"),
+            Expr::ObjectConstruct(vec![("default-features".into(), pluck("default-features"))])
+        );
     }
 
     #[test]
