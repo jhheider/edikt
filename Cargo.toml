@@ -13,7 +13,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates (path + version so they can publish independently).
-edikt-core = { path = "crates/edikt-core", version = "0.4.0" }
+edikt-core = { path = "crates/edikt-core", version = "0.4.1" }
 edikt-syntax = { path = "crates/edikt-syntax", version = "0.2.0" }
 edikt-jsonc = { path = "crates/edikt-jsonc", version = "0.3.0" }
 edikt-ini = { path = "crates/edikt-ini", version = "0.3.0" }
