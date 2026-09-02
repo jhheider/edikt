@@ -111,7 +111,13 @@ an *edit* language, not a general-purpose one.
 
 **Value calculus** (what makes "fuller" fuller: the evaluator computes, it
 doesn't just place literals):
-- JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[...]`, `{...}`
+- JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[...]`, `{...}`.
+  An object entry spells its separator `key: value` (jq) or `key = value`
+  (the TOML/KDL inline-table hand), and a **bare key with no separator is
+  jq's pluck shorthand**: `{MemoryMiB, UseGrpcfuse}` is
+  `{MemoryMiB: .MemoryMiB, UseGrpcfuse: .UseGrpcfuse}`, the common way to
+  select a few keys. Quoted (`{"a.b"}`) and hyphenated (`{default-features}`)
+  keys pluck too; a key the input lacks yields `null`, as in jq
 - arithmetic on numbers: `+ - * / %`
 - string concat with `+`
 - a small function registry, jq-named: `length`, `keys`, `has`, `type`,

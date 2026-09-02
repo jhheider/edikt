@@ -713,6 +713,30 @@ fn object_literal_and_bracket_key() {
 }
 
 #[test]
+fn object_construct_pluck_shorthand() {
+    // jq's `{a, b}` sugar, the usual way to pluck a few keys out of a config.
+    let src = "{ \"MemoryMiB\": 32768, \"UseGrpcfuse\": true, \"SwapMiB\": 1024 }";
+    let (out, err, code) = run(&["-t", "jsonc", "{MemoryMiB, UseGrpcfuse}"], src);
+    assert_eq!(
+        out,
+        "{\n  \"MemoryMiB\": 32768,\n  \"UseGrpcfuse\": true\n}\n"
+    );
+    assert_eq!(err, "");
+    assert_eq!(code, 0);
+
+    // Mixes with explicit pairs; a key the document lacks comes back null.
+    let (out2, _e, code2) = run(
+        &["-t", "jsonc", "{MemoryMiB, swap: .SwapMiB, Missing}"],
+        src,
+    );
+    assert_eq!(
+        out2,
+        "{\n  \"MemoryMiB\": 32768,\n  \"swap\": 1024,\n  \"Missing\": null\n}\n"
+    );
+    assert_eq!(code2, 0);
+}
+
+#[test]
 fn reads_a_file_and_infers_by_extension() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/sample.jsonc");
