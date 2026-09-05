@@ -130,26 +130,39 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Int(i) => i.to_string(),
             Value::Float(f) => format_f64(*f),
-            Value::Array(_) | Value::Object(_) => self.to_json(),
+            Value::Array(_) | Value::Object(_) => self.to_json5(),
         }
     }
 
     /// Render as compact JSON.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
-        self.write_json(&mut out);
+        self.write_json_inner(&mut out, false);
         out
     }
 
-    fn write_json(&self, out: &mut String) {
+    /// Render as compact JSON in the JSON5 spelling: non-finite floats keep
+    /// their `Infinity` / `-Infinity` / `NaN` literals instead of degrading to
+    /// `null`. This is what the JSONC/JSON5-family emitters use, so converting
+    /// or querying a JSON5 source with a non-finite number preserves it; strict
+    /// JSON must use [`Value::to_json`] (which, like `JSON.stringify`, encodes
+    /// one as `null`).
+    pub fn to_json5(&self) -> String {
+        let mut out = String::new();
+        self.write_json_inner(&mut out, true);
+        out
+    }
+
+    fn write_json_inner(&self, out: &mut String, json5: bool) {
         match self {
             Value::Null => out.push_str("null"),
             Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Value::Int(i) => out.push_str(&i.to_string()),
-            // JSON's grammar has no non-finite literal, so encoding one emits
-            // `null`, matching `JSON.stringify`. Only a JSON5 source can supply
-            // one, and only a conversion away from the JSON5 family reaches
-            // this; an in-place JSON5 edit never re-encodes untouched bytes.
+            // JSON5 documents may carry a non-finite literal; JSON's grammar
+            // has none, so encoding one there emits `null`, matching
+            // `JSON.stringify`. Only a JSON5 source can supply one (the
+            // mutation path refuses to write one into a strict doc).
+            Value::Float(f) if !f.is_finite() && json5 => out.push_str(&format_f64(*f)),
             Value::Float(f) if !f.is_finite() => out.push_str("null"),
             Value::Float(f) => out.push_str(&format_f64(*f)),
             Value::Str(s) => write_json_string(s, out),
@@ -159,7 +172,7 @@ impl Value {
                     if i > 0 {
                         out.push(',');
                     }
-                    v.write_json(out);
+                    v.write_json_inner(out, json5);
                 }
                 out.push(']');
             }
@@ -171,7 +184,7 @@ impl Value {
                     }
                     write_json_string(k, out);
                     out.push(':');
-                    v.write_json(out);
+                    v.write_json_inner(out, json5);
                 }
                 out.push('}');
             }
@@ -385,8 +398,28 @@ mod tests {
             obj(&[("a", Value::Float(f64::NEG_INFINITY))]).to_json(),
             "{\"a\":null}"
         );
+        // The JSON5 spelling keeps the literal, recursively: a non-finite
+        // nested inside an array or object survives in `to_json5` but still
+        // degrades in `to_json`.
+        assert_eq!(Value::Float(f64::INFINITY).to_json5(), "Infinity");
+        assert_eq!(Value::Float(f64::NEG_INFINITY).to_json5(), "-Infinity");
+        assert_eq!(Value::Float(f64::NAN).to_json5(), "NaN");
+        assert_eq!(
+            arr(&[Value::Float(f64::INFINITY), Value::Float(f64::NAN)]).to_json5(),
+            "[Infinity,NaN]"
+        );
+        assert_eq!(
+            obj(&[("n", Value::Float(f64::NEG_INFINITY))]).to_json5(),
+            "{\"n\":-Infinity}"
+        );
+        assert_eq!(
+            obj(&[("a", Value::Array(vec![Value::Float(f64::INFINITY)]))]).to_json(),
+            "{\"a\":[null]}"
+        );
         // Finite formatting is unchanged.
         assert_eq!(Value::Float(1e14).to_json(), "100000000000000");
+        assert_eq!(arr(&[Value::Float(1.5)]).to_json(), "[1.5]");
+        assert_eq!(arr(&[Value::Float(1.5)]).to_json5(), "[1.5]");
     }
 
     #[test]

@@ -731,12 +731,20 @@ fn comment_kind(word: &str) -> Option<CommentKind> {
 }
 
 fn number_value(t: &str) -> Value {
-    if t.contains(['.', 'e', 'E']) {
-        Value::Float(t.parse().unwrap_or(0.0))
-    } else {
-        match t.parse::<i64>() {
-            Ok(i) => Value::Int(i),
-            Err(_) => Value::Float(t.parse().unwrap_or(0.0)),
+    match t {
+        // JSON5 non-finite literals (lexed as `Num`).
+        "Infinity" | "+Infinity" => Value::Float(f64::INFINITY),
+        "-Infinity" => Value::Float(f64::NEG_INFINITY),
+        "NaN" => Value::Float(f64::NAN),
+        _ => {
+            if t.contains(['.', 'e', 'E']) {
+                Value::Float(t.parse().unwrap_or(0.0))
+            } else {
+                match t.parse::<i64>() {
+                    Ok(i) => Value::Int(i),
+                    Err(_) => Value::Float(t.parse().unwrap_or(0.0)),
+                }
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ fn write_pretty(value: &Value, indent: usize, out: &mut String) {
             indent_by(indent, out);
             out.push(']');
         }
-        scalar => out.push_str(&scalar.to_json()),
+        scalar => out.push_str(&scalar.to_json5()),
     }
 }
 
@@ -160,6 +160,35 @@ pub fn dedupe_keys(value: &Value) -> Value {
 
 fn is_container(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
+}
+
+/// Whether `value` contains a non-finite float (`Infinity`/`-Infinity`/`NaN`)
+/// anywhere. Such values are only reachable from a JSON5 source; encoding them
+/// in strict JSON (which has no literal for them) degrades them to `null`, and
+/// that degradation must be visible (a warning, fatal under `--strict`), not
+/// silent.
+pub fn contains_non_finite(value: &Value) -> bool {
+    match value {
+        Value::Float(f) => !f.is_finite(),
+        Value::Array(a) => a.iter().any(contains_non_finite),
+        Value::Object(m) => m.iter().any(|(_, v)| contains_non_finite(v)),
+        _ => false,
+    }
+}
+
+/// Replace every non-finite float in `value` with `null` (`JSON.stringify`
+/// parity). Used when emitting strict JSON, which cannot represent them.
+pub fn nullify_non_finite(value: &Value) -> Value {
+    match value {
+        Value::Float(f) if !f.is_finite() => Value::Null,
+        Value::Array(a) => Value::Array(a.iter().map(nullify_non_finite).collect()),
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), nullify_non_finite(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// The [`Feature`]s a value needs a format to have to represent it faithfully:

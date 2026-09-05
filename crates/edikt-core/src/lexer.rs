@@ -68,6 +68,13 @@ pub enum Lx {
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Ident,
     #[regex(r"[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?")]
+    // JSON5's non-finite number literals. `Infinity`/`NaN` outrank `Ident` on
+    // logos' length-derived priority (pinned by `infinity_and_nan_are_numbers`),
+    // so they are numbers in the value calculus, never identifiers - a field
+    // literally named `Infinity` needs `."Infinity"` quoting, same as the JSON5
+    // reader.
+    #[regex(r"[+-]?Infinity")]
+    #[token("NaN")]
     Num,
     #[regex(r#""([^"\\]|\\.)*""#, allow_greedy = true)]
     Str,
