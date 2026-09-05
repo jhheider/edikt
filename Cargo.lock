@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-env"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "edikt-core",
  "edikt-syntax",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "edikt-frontmatter"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "edikt-core",
  "edikt-jsonc",
