@@ -12,7 +12,7 @@
 //! mapping. Restructuring a block in place (replacing a mapping/sequence wholesale,
 //! or creating nested keys) is refused rather than reflowed.
 
-use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, render_path};
+use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, render_path};
 use std::ops::Range;
 
 use crate::Yaml;
@@ -87,11 +87,27 @@ fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Res
     match expr {
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
-            let value = eval_one(rhs, &doc.doc_value(idx))?;
+            let whole = doc.doc_value(idx);
+            let value = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                return set_each(doc, idx, steps, &whole, true, |_| Ok(value.clone()), strict);
+            }
             doc.set(idx, steps, &value, strict)
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            let whole = doc.doc_value(idx);
+            if steps.contains(&Step::Iterate) {
+                return set_each(
+                    doc,
+                    idx,
+                    steps,
+                    &whole,
+                    false,
+                    |current| eval_one(rhs, current),
+                    strict,
+                );
+            }
             let Some(current) = doc.value_at(idx, steps) else {
                 return miss(strict, steps);
             };
@@ -100,10 +116,22 @@ fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Res
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            let whole = doc.doc_value(idx);
+            let addend = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                return set_each(
+                    doc,
+                    idx,
+                    steps,
+                    &whole,
+                    false,
+                    |current| add_values(current, &addend),
+                    strict,
+                );
+            }
             let Some(current) = doc.value_at(idx, steps) else {
                 return miss(strict, steps);
             };
-            let addend = eval_one(rhs, &doc.doc_value(idx))?;
             match (&current, &addend) {
                 (Value::Array(_), Value::Array(items)) => doc.append(idx, steps, items, strict),
                 _ => doc.set(idx, steps, &add_values(&current, &addend)?, strict),
@@ -169,6 +197,34 @@ fn doc_matches(pred: &Expr, val: &Value) -> Result<bool, EditError> {
 fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
     lhs.as_path()
         .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
+}
+
+/// Apply `f` to each element selected by `steps` (a path containing at least one
+/// `Step::Iterate`), splicing each element in place via the ordinary index-keyed
+/// `set` path. Each splice recomposes from the new source, exactly as a
+/// sequential program of `.a[i] = ...` edits would - just derived from the
+/// element expansion instead of typed by hand.
+fn set_each(
+    doc: &mut Yaml,
+    idx: usize,
+    steps: &[Step],
+    whole: &Value,
+    create: bool,
+    f: impl Fn(&Value) -> Result<Value, EditError>,
+    strict: Strictness,
+) -> Result<(), EditError> {
+    let paths = expand_iter_paths(steps, whole).map_err(|e| EditError::new(e.to_string()))?;
+    if paths.is_empty() && create {
+        return Err(EditError::new("cannot create through `[]`"));
+    }
+    for path in &paths {
+        let Some(current) = doc.value_at(idx, path) else {
+            return miss(strict, path);
+        };
+        let value = f(&current)?;
+        doc.set(idx, path, &value, strict)?;
+    }
+    Ok(())
 }
 
 fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
@@ -318,6 +374,27 @@ impl Yaml {
 
     /// Delete the mapping entry or sequence item at `path` in document `idx`.
     pub(crate) fn delete(&mut self, idx: usize, path: &[Step]) -> Result<(), EditError> {
+        // Fan-out delete: resolve the iterate to concrete index/key paths and
+        // splice each through the ordinary single-target machinery, back-to-
+        // front so indices stay valid as the collection shrinks.
+        if path.contains(&Step::Iterate) {
+            // A **trailing** iterate (`del(.a[])`) empties the container it
+            // names: rewrite the whole entry/container to its inline empty
+            // spelling (`a: []` / `a: {}`), the jq-analogue of leaving `[]`.
+            // Block-form items and the comments inside the emptied region go
+            // with it. A nested iterate (`del(.a[].b)`) composes the per-item
+            // deletes below instead, matching YAML's block semantics.
+            if let Some(Step::Iterate) = path.last() {
+                return self.delete_within(idx, &path[..path.len() - 1]);
+            }
+            let whole = self.doc_value(idx);
+            let paths = edikt_core::expand_delete_paths(path, &whole)
+                .map_err(|e| EditError::new(e.to_string()))?;
+            for p in &paths {
+                self.delete(idx, p)?;
+            }
+            return Ok(());
+        }
         let Some((last, parent_path)) = path.split_last() else {
             return Err(EditError::new("cannot delete the whole document"));
         };
@@ -345,6 +422,61 @@ impl Yaml {
             _ => return Ok(()),
         };
         self.commit(range, "")
+    }
+
+    /// Replace `range` with `text`, then recompose every document. Atomic: if
+    /// the result no longer parses, nothing changes and the error surfaces.
+    /// Recomposing the whole stream keeps later documents' byte marks correct
+    /// after an edit shifts offsets.
+    /// Replace `range` with `text`, then recompose every document. Atomic: if
+    /// the result no longer parses, nothing changes and the error surfaces.
+    /// Recomposing the whole stream keeps later documents' byte marks correct
+    /// after an edit shifts offsets.
+    /// The container emptied by a trailing `del(...[])`: rewrite the entry (or
+    /// the root document) to its inline empty spelling, like jq leaves `[]`.
+    /// A missing parent or non-container is a no-op, matching delete.
+    fn delete_within(&mut self, idx: usize, prefix: &[Step]) -> Result<(), EditError> {
+        let empty = |kind: &NodeKind| -> &'static str {
+            match kind {
+                NodeKind::Sequence(_) => "[]",
+                _ => "{}",
+            }
+        };
+        // block_end consumes the trailing newline; the empty rewrite keeps it.
+        let end_of = |n: &Node| -> usize {
+            let e = block_end(&self.source, n);
+            if e > n.span.start && self.source.as_bytes().get(e - 1) == Some(&b'\n') {
+                e - 1
+            } else {
+                e
+            }
+        };
+        match prefix.split_last() {
+            // Root container (`del(.[])`): replace the whole document's bytes.
+            None => {
+                let Resolved::Found(root) = resolve(self.root(idx), &[]) else {
+                    return Ok(());
+                };
+                let range = line_start(&self.source, root.span.start)..end_of(root);
+                self.commit(range, empty(&root.kind))
+            }
+            Some((Step::Field(k), rest)) => {
+                let Resolved::Found(map) = resolve(self.root(idx), rest) else {
+                    return Ok(());
+                };
+                let NodeKind::Mapping(entries) = &map.kind else {
+                    return Ok(());
+                };
+                let Some(entry) = entries.iter().find(|e| &e.key == k) else {
+                    return Ok(());
+                };
+                let key = &self.source[entry.key_span.start..entry.key_span.end];
+                let range = entry.key_span.start..end_of(&entry.value);
+                let text = format!("{key}: {}", empty(&entry.value.kind));
+                self.commit(range, &text)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Replace `range` with `text`, then recompose every document. Atomic: if

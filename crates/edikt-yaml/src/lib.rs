@@ -576,12 +576,59 @@ mod tests {
     }
 
     #[test]
+    fn iterate_assignment_maps_over_elements() {
+        // `.a[] |= f` maps over elements; `.a[] += x` is per-element `. + x`;
+        // `.a[] = x` sets every element. Comments beside elements survive.
+        assert_eq!(
+            edit("a:\n  - 1\n  - 2\n", ".a[] |= . * 2"),
+            "a:\n  - 2\n  - 4\n"
+        );
+        assert_eq!(
+            edit("a:\n  - 1  # one\n  - 2\n", ".a[] += 10"),
+            "a:\n  - 11  # one\n  - 12\n"
+        );
+        assert_eq!(edit("a:\n  - 1\n  - 2\n", ".a[] = 9"), "a:\n  - 9\n  - 9\n");
+        // Object iterate fans out over a mapping's values.
+        assert_eq!(
+            edit("o:\n  x: 1\n  y: 2\n", ".o[] += 5"),
+            "o:\n  x: 6\n  y: 7\n"
+        );
+        // Empty iterate is a no-op for update forms.
+        assert_eq!(edit("xs: []\n", ".xs[] |= . + 1"), "xs: []\n");
+    }
+
+    #[test]
     fn delete_missing_is_a_noop_like_the_other_formats() {
         // Regression: YAML `del` of a missing key / OOB index used to error;
         // jq semantics (and every other format) make it a silent no-op.
         assert_eq!(edit("a: 1\nb: 2\n", "del(.nope)"), "a: 1\nb: 2\n");
         assert_eq!(edit("xs:\n  - 1\n", "del(.xs[9])"), "xs:\n  - 1\n");
         assert_eq!(edit("a: 1\n", "del(.deep.miss)"), "a: 1\n");
+    }
+
+    #[test]
+    fn delete_iterate_fans_out() {
+        // `del(.a[])` empties a sequence or mapping to its inline empty form,
+        // jq's `del(.[]) -> []`/`{}`; comments inside the emptied region go.
+        assert_eq!(edit("a:\n  - 1\n  - 2\n", "del(.a[])"), "a: []\n");
+        assert_eq!(edit("o:\n  x: 1\n  y: 2\n", "del(.o[])"), "o: {}\n");
+        assert_eq!(
+            edit("a:\n  - 1  # one\n  - 2  # two\n", "del(.a[])"),
+            "a: []\n"
+        );
+        assert_eq!(edit("a: [1, 2]\n", "del(.a[])"), "a: []\n");
+        assert_eq!(edit("- 1\n- 2\n", "del(.[])"), "[]\n");
+        // A nested iterate composes the per-item deletes (YAML block semantics:
+        // deleting a subentry removes the item line).
+        assert_eq!(edit("a:\n  - b: 1\n  - b: 2\n", "del(.a[].b)"), "a:\n");
+        // Missing target / empty collection is a no-op.
+        assert_eq!(edit("a: []\n", "del(.a[])"), "a: []\n");
+        assert_eq!(edit("a: 1\n", "del(.nope[])"), "a: 1\n");
+        // Multi-document: a `[]` fan-out maps over every selected document.
+        assert_eq!(
+            edit("a:\n  - 1\n  - 2\n---\na:\n  - 3\n", "del(.a[])"),
+            "a: []\n---\na: []\n"
+        );
     }
 
     #[test]
@@ -894,12 +941,13 @@ mod tests {
         assert!(e("a: 1\n", "del(.a; .b)").contains("one path"));
         assert!(e("a: 1\n", "del(.)").contains("whole document"));
         // Set through a missing intermediate key (Field on a mapping, no key),
-        // a Field into a non-mapping, an out-of-range index, an iterate, and a
-        // comment step all report "path not found".
+        // a Field into a non-mapping, and an out-of-range index all report
+        // "path not found". Creating through an iterate is refused outright; a
+        // comment step is not a value path.
         assert!(e("a: 1\n", ".missing.child = 1").contains("path not found"));
         assert!(e("xs:\n  - 1\n", ".xs.name = 1").contains("path not found"));
         assert!(e("xs:\n  - 1\n", ".xs[5] = 9").contains("path not found"));
-        assert!(e("xs:\n  - 1\n", ".xs[] = 9").contains("path not found"));
+        assert!(e("a: 1\n", ".xs[] = 1").contains("cannot create through `[]`"));
         assert!(e("a: 1\n", ".a.# = \"x\"").contains("path not found"));
         // A new key on an empty (flow) mapping can't match an entry's indent.
         assert!(e("foo: {}\n", ".foo.bar = 1").contains("empty or flow"));
