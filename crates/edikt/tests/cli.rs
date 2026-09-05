@@ -400,6 +400,65 @@ fn creates_new_key_env() {
 }
 
 #[test]
+fn auto_vivify_notes_created_paths() {
+    // `=` auto-creates missing keys (jq-style) but says so on stderr, so a
+    // mistyped or wrongly-scoped path can't write silently.
+    let (out, err, code) = run(&["-t", "json", ".b = 2"], "{\"a\":1}");
+    assert_eq!(out, "{\"a\":1, \"b\": 2}");
+    assert_eq!(code, 0);
+    assert!(err.contains("created `.b`"), "got: {err}");
+
+    // An existing-path edit stays quiet.
+    let (out2, err2, code2) = run(&["-t", "json", ".a = 2"], "{\"a\":1}");
+    assert_eq!(out2, "{\"a\":2}");
+    assert_eq!(code2, 0);
+    assert!(err2.is_empty(), "expected no note, got: {err2}");
+
+    // A nested create notes the whole path.
+    let (out3, err3, _c3) = run(&["-t", "json", ".a.b = 1"], "{\"a\":{}}");
+    assert!(err3.contains("created `.a.b`"), "got: {err3}");
+    assert!(out3.contains("\"b\""), "got: {out3}");
+}
+
+#[test]
+fn no_vivify_refuses_missing_paths_and_leaves_files_alone() {
+    // Miss -> hard error, nothing written even under -i.
+    let (_o, err, code) = run(&["-t", "json", "--no-vivify", ".b = 2"], "{\"a\":1}");
+    assert_eq!(code, 2);
+    assert!(err.contains("not auto-creating"), "got: {err}");
+
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/nv.json");
+    std::fs::write(&path, "{\"a\":1}\n").unwrap();
+    let (_o2, err2, code2) = run(&["-i", "--no-vivify", ".b = 2", &path], "");
+    assert_eq!(code2, 2);
+    assert!(err2.contains(".b"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":1}\n");
+
+    // A nested path with a missing intermediate is caught too.
+    let (_o3, _e3, code3) = run(&["-t", "json", "--no-vivify", ".a.b = 1"], "{\"a\":{}}");
+    assert_eq!(code3, 2);
+
+    // Existing target edits go through unchanged.
+    let (o4, _e4, code4) = run(&["-t", "json", "--no-vivify", ".a = 2"], "{\"a\":1}");
+    assert_eq!(o4, "{\"a\":2}");
+    assert_eq!(code4, 0);
+
+    // An `arr[len] = v` append is a TOML append, not a create: exempt.
+    let (o5, _e5, code5) = run(&["-t", "toml", "--no-vivify", ".xs[1] = 2"], "xs = [1]\n");
+    assert_eq!(o5, "xs = [1, 2]\n");
+    assert_eq!(code5, 0);
+
+    // `|=`/`+=` already error on a missing target; the flag doesn't change it.
+    let (_o6, e6, code6) = run(
+        &["-t", "json", "--no-vivify", ".nope |= . + 1"],
+        "{\"a\":1}",
+    );
+    assert_eq!(code6, 2);
+    assert!(e6.contains("path not found"), "got: {e6}");
+}
+
+#[test]
 fn convert_ini_to_json() {
     let (out, _e, code) = run(&["-t", "ini", "-T", "json"], "[a]\nb = c\n");
     assert_eq!(out, "{\n  \"a\": {\n    \"b\": \"c\"\n  }\n}\n");

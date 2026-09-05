@@ -46,6 +46,7 @@ edikt -f script.edk [-f ...] [FILE...]
 | `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` are shorthands for `-T <fmt>` |
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
+| `--no-vivify` | assignments **fail** (exit 2) when the target path doesn't already exist, instead of auto-creating. Plain `=` is jq-style and creates missing keys by default (announced by a stderr `created` **note**); this opts out so a mistyped or wrongly-scoped path can't silently write a new key. An `arr[len] = v` TOML append is exempt (it's not a create); `select(`/`^dN`-scoped edits keep default behavior; `|=`/`+=` already error on a missing target and `del` stays a no-op |
 
 **Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) ->
 `-o` FILE's extension -> script `toFormat:` directive -> the input format,
@@ -116,7 +117,11 @@ an *edit* language, not a general-purpose one.
   block container to its inline form (`a: []`/`o: {}`) rather than a dangling
   `a:`-null. A fan-out delete resolves to concrete paths via
   `expand_delete_paths` (the iterate expansion, reversed back-to-front so
-  indices stay valid as the collection shrinks).
+  indices stay valid as the collection shrinks). An auto-vivifying `=` is
+  announced: the CLI prints `edikt: note: <file>: created `<path>` (was
+  missing)` on stderr, so a wrong path is visible even when it "succeeds" -
+  a scripted edit must assert that it applied. `--no-vivify` hard-fails
+  instead (see the CLI contract).
 
 **Value calculus** (what makes "fuller" fuller: the evaluator computes, it
 doesn't just place literals):

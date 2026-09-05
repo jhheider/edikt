@@ -115,6 +115,15 @@ struct Args {
     #[arg(long)]
     strict: bool,
 
+    /// Don't auto-create missing keys: an assignment whose path doesn't
+    /// already exist fails (exit 2) instead of creating it. Plain `=` is
+    /// jq-style and creates by default (with a stderr note); this opts out so
+    /// a mistyped or wrongly-scoped path can't silently write a new key.
+    /// The `select(`/`^dN` scoping gates  are unaffected; `|=`/`+=` already
+    /// error on a missing path and `del` stays a no-op.
+    #[arg(long)]
+    no_vivify: bool,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     raw: bool,
@@ -529,7 +538,30 @@ fn run(args: Args) -> Result<ExitCode> {
                     eprintln!("edikt: warning: {loc}: {w}");
                 }
             } else {
+                // `=` auto-vivifies missing paths (jq-style). Surface every
+                // path a plain assignment would create - a mistyped or wrongly
+                // scoped path writes a key you didn't intend, and an edit
+                // shouldn't do that silently. `--no-vivify` turns any would-be
+                // creation into a hard error *before* anything is written.
+                let creating = if scoped_edit(mexpr) {
+                    Vec::<String>::new()
+                } else {
+                    let values = doc.to_values();
+                    let mut notes = Vec::new();
+                    for (di, path) in would_create(mexpr, &values) {
+                        notes.push(create_note(di, values.len(), &path));
+                    }
+                    notes
+                };
+                if args.no_vivify
+                    && let Some(note) = creating.first()
+                {
+                    bail!("{loc}: {note}; not auto-creating (--no-vivify)");
+                }
                 let warnings = doc.apply(mexpr).with_context(|| loc.clone())?;
+                for note in &creating {
+                    eprintln!("edikt: note: {loc}: {note}");
+                }
                 if args.strict && !warnings.is_empty() {
                     bail!("{loc}: {} (--strict)", warnings.join("; "));
                 }
@@ -883,6 +915,94 @@ fn terminated(outputs: &[String]) -> String {
         }
     }
     joined
+}
+
+/// Is the mutation exempt from auto-vivify inspection? A `select(` filter or a
+/// `^dN` document selector scopes the edit at apply time (per document / per
+/// match), so whether a path "exists" can't be decided against the whole
+/// document; those keep the default behavior.
+fn scoped_edit(expr: &edikt_core::Expr) -> bool {
+    match expr {
+        edikt_core::Expr::DocSelect(..) => true,
+        edikt_core::Expr::Pipe(a, b) => scoped_edit(a) || scoped_edit(b),
+        edikt_core::Expr::Call(name, _) => name == "select",
+        _ => false,
+    }
+}
+
+/// The concrete paths a plain `=` assignment would create (its LHS doesn't
+/// resolve against the value model, and it's not an array-append). One entry
+/// per document per created path. A path that errors mid-walk isn't ours to
+/// judge - the apply will raise the real error.
+fn would_create(expr: &edikt_core::Expr, values: &[Value]) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    for (di, v) in values.iter().enumerate() {
+        for steps in assign_paths(expr) {
+            if !path_resolves(&steps, v) {
+                out.push((di, edikt_core::render_path(&steps)));
+            }
+        }
+    }
+    out
+}
+
+/// The LHS paths of every plain `=` in the expression (not `|=`/`+=`/`del`,
+/// which already handle a miss on their own). Iterate fan-outs (`[]`) are
+/// skipped: creating *through* `[]` errors anyway.
+fn assign_paths(expr: &edikt_core::Expr) -> Vec<Vec<edikt_core::Step>> {
+    match expr {
+        edikt_core::Expr::Assign(lhs, _) => match lhs.as_path() {
+            Some(p) if !p.is_empty() && !p.contains(&edikt_core::Step::Iterate) => vec![p.to_vec()],
+            _ => Vec::new(),
+        },
+        edikt_core::Expr::Pipe(a, b) => {
+            let mut out = assign_paths(a);
+            out.extend(assign_paths(b));
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Does `steps` already address a value (or a TOML-style `arr[len]` append
+/// point)? A key missing entirely, or ending mid-path, means `=` would create.
+fn path_resolves(steps: &[edikt_core::Step], v: &Value) -> bool {
+    match edikt_core::eval(&edikt_core::Expr::Path(steps.to_vec()), v) {
+        Ok(stream) => {
+            if !stream.is_empty() {
+                true
+            } else {
+                // `arr[i] = v` appends when i == len (TOML; JSONC refuses there).
+                let Some((last, parent)) = steps.split_last() else {
+                    return false;
+                };
+                let edikt_core::Step::Index(i) = last else {
+                    return false;
+                };
+                let some = edikt_core::eval(&edikt_core::Expr::Path(parent.to_vec()), v)
+                    .ok()
+                    .and_then(|s| s.into_iter().next());
+                match some {
+                    Some(Value::Array(a)) => {
+                        let idx = if *i < 0 { a.len() as i64 + *i } else { *i };
+                        idx >= 0 && idx == a.len() as i64
+                    }
+                    _ => false,
+                }
+            }
+        }
+        // A type error mid-path is the apply's to raise, not ours.
+        Err(_) => true,
+    }
+}
+
+/// "created `<path>` (was missing)", with a document qualifier on streams.
+fn create_note(doc: usize, ndocs: usize, path: &str) -> String {
+    if ndocs > 1 {
+        format!("created `{path}` in document {doc} (was missing)")
+    } else {
+        format!("created `{path}` (was missing)")
+    }
 }
 
 /// Write an in-place result, optionally backing up the pre-edit bytes first
