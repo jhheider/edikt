@@ -271,6 +271,47 @@ fn extend_repeated(
 // --- delete ----------------------------------------------------------------
 
 pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), EditError> {
+    // Fan-out delete: `.foo[]` iterates the projection - repeated occurrences
+    // when `/foo` is an array of objects, the node's contents otherwise -
+    // expanded to concrete paths and deleted back-to-front.
+    if path.contains(&Step::Iterate) {
+        let whole = crate::project::doc_to_value(doc);
+        // `del(.name[])` on an array **of objects** is a run of repeated nodes:
+        // one whole-document retain (which also sidesteps the single-occurrence
+        // `.name[i]`-means-argument quirk the per-path deletes would hit on the
+        // last remaining node). A single node's value is an object (its args/
+        // props/children) or an args array of scalars - jq's `{a:1,b:2} |
+        // del(.[]) -> {}` / `[1,2] | del(.[]) -> []` - and falls through to the
+        // per-path deletes below.
+        if path.len() == 2 && matches!(path[0], Step::Field(_)) && path[1] == Step::Iterate {
+            // `del(.name[])` on a **repeated** name removes every occurrence:
+            // one retain (which also sidesteps the single-occurrence
+            // `.name[i]`-means-argument quirk the per-path deletes would hit on
+            // the last remaining node). A repeated single-arg node projects
+            // identically to a single multi-arg node (`["a","b"]` either way),
+            // so the discriminating truth is the actual node count in the DOM,
+            // not the value model. A single node falls through to per-path
+            // deletes over its contents: `{a:1,b:2} | del(.[]) -> {}`,
+            // `[1,2] | del(.[]) -> []`.
+            let Step::Field(name) = &path[0] else {
+                unreachable!("guarded by the matches! above");
+            };
+            let occurrences = doc
+                .nodes()
+                .iter()
+                .filter(|n| n.name().value() == name)
+                .count();
+            if occurrences > 1 {
+                return delete_in_doc(doc, &path[..1]);
+            }
+        }
+        let paths = edikt_core::expand_delete_paths(path, &whole)
+            .map_err(|e| EditError::new(e.to_string()))?;
+        for p in &paths {
+            delete_in_doc(doc, p)?;
+        }
+        return Ok(());
+    }
     let Some(Step::Field(name)) = path.first() else {
         return Err(EditError::new("KDL paths start with a node name"));
     };
@@ -285,21 +326,32 @@ pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), 
         return Ok(());
     }
     if let Step::Index(i) = path[1] {
-        let Some(idx) = resolve_index(i, occurrences.len()) else {
-            return Ok(());
-        };
-        if path.len() == 2 {
-            if occurrences.len() > 1 {
+        // Multiple occurrences: the index picks the i-th occurrence. A *single*
+        // occurrence's index addresses that node's **arguments** (the
+        // projection: `.node` is the args array), so it must not be gated on
+        // the occurrence count - resolving `.node[1]` against 1 occurrence
+        // silently no-ops. `remove_arg` resolves against the real arg count.
+        if occurrences.len() > 1 {
+            let Some(idx) = resolve_index(i, occurrences.len()) else {
+                return Ok(());
+            };
+            if path.len() == 2 {
                 doc.nodes_mut().remove(occurrences[idx]);
-            } else {
-                // A single node indexed: the index addresses its arguments.
-                return delete_in_node(&mut doc.nodes_mut()[occurrences[idx]], &path[1..]);
+                return Ok(());
             }
-            return Ok(());
+            return delete_in_node(&mut doc.nodes_mut()[occurrences[idx]], &path[2..]);
         }
-        return delete_in_node(&mut doc.nodes_mut()[occurrences[idx]], &path[2..]);
-    }
-    if occurrences.len() > 1 {
+        // A single occurrence: `.node[i]` addresses the node's arguments (the
+        // projection makes `.node` the args array), so the index goes to
+        // `remove_arg` - but only as a terminal step; a deeper path is a
+        // node-level delete (`.node[0].x`), resolved from the index onward.
+        let tail = if path.len() == 2 {
+            &path[1..]
+        } else {
+            &path[2..]
+        };
+        return delete_in_node(&mut doc.nodes_mut()[occurrences[0]], tail);
+    } else if occurrences.len() > 1 {
         return Err(EditError::new(format!(
             "`{name}` is repeated: address one occurrence (.{name}[i])"
         )));

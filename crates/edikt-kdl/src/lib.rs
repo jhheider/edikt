@@ -650,8 +650,38 @@ mod tests {
     }
 
     #[test]
-    fn delete_iterate_is_unsupported() {
-        assert!(edit_err(SAMPLE, "del(.layout[])").contains("del(.[]) is not supported"));
+    fn delete_iterate_fans_out_over_children() {
+        // `del(.layout[])` on a **single** node iterates its projected object
+        // values (args-key, props, children): deleting them all leaves the
+        // node shell, jq's `{a:1,b:2} | del(.[]) -> {}`.
+        assert_eq!(
+            edit_src(SAMPLE, "del(.layout[])"),
+            "// window manager config\nlayout {}\nbind \"Mod+h\" \"focus-left\"\nbind \"Mod+l\" \"focus-right\"\n"
+        );
+        // A single node with only arguments projects to the args array:
+        // `del(.node[])` empties the args, keeping the bare node (`[1,2] |
+        // del(.[]) -> []`).
+        assert_eq!(edit_src("node 1 2\n", "del(.node[])"), "node\n");
+        // A **repeated** name is an array of occurrences: `del(.n[])` removes
+        // them all (the DOM node count, not the value shape, decides - a
+        // repeated single-arg node projects identically to a single multi-arg
+        // node).
+        let repeated = "n 1\nn 2\nn 3\n";
+        assert_eq!(edit_src(repeated, "del(.n[])"), "");
+    }
+
+    #[test]
+    fn delete_single_occurrence_index_addresses_arguments() {
+        // `.node[i]` on a single occurrence is an **argument** (the projection
+        // makes `.node` the args array): every index, not just 0 and -1.
+        assert_eq!(edit_src("node 1 2 3\n", "del(.node[1])"), "node 1 3\n");
+        assert_eq!(edit_src("node 1 2 3\n", "del(.node[2])"), "node 1 2\n");
+        assert_eq!(edit_src("node 1 2 3\n", "del(.node[0])"), "node 2 3\n");
+        assert_eq!(edit_src("node 1 2 3\n", "del(.node[-1])"), "node 1 2\n");
+        // Out-of-range stays a no-op.
+        assert_eq!(edit_src("node 1 2\n", "del(.node[5])"), "node 1 2\n");
+        // Multi-occurrence: the index addresses the node.
+        assert_eq!(edit_src("bind 1\nbind 2\n", "del(.bind[0])"), "bind 2\n");
     }
 
     // --- build: value_to_nodes / emit -------------------------------------
