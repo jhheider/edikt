@@ -109,9 +109,21 @@ an *edit* language, not a general-purpose one.
 - append `.arr += [<expr>]`
 - delete `del(PATH)`
 
+  **Mutations fan out over `[]`** exactly like jq: `.a[] |= f` maps `f` over
+  every element, `.a[] += x` is `.a[] |= . + x`, `.a[] = x` sets every element,
+  and `del(.a[])` empties the collection (each stays a single clean splice per
+  node; creating *new* elements through `[]` still errors). YAML empties a
+  block container to its inline form (`a: []`/`o: {}`) rather than a dangling
+  `a:`-null. A fan-out delete resolves to concrete paths via
+  `expand_delete_paths` (the iterate expansion, reversed back-to-front so
+  indices stay valid as the collection shrinks).
+
 **Value calculus** (what makes "fuller" fuller: the evaluator computes, it
 doesn't just place literals):
-- JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[...]`, `{...}`.
+- JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[...]`, `{...}`,
+  plus JSON5's non-finite number literals `Infinity` / `-Infinity` / `NaN`
+  (numbers, never identifiers - a field literally named `Infinity` needs
+  `."Infinity"` quoting, same rule as the JSON5 reader).
   An object entry spells its separator `key: value` (jq) or `key = value`
   (the TOML/KDL inline-table hand), and a **bare key with no separator is
   jq's pluck shorthand**: `{MemoryMiB, UseGrpcfuse}` is
@@ -192,12 +204,18 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   (an error token) rather than half-supported. A bare word is a key spelling
   only, never a value, so `foo` alone is still not a document.
   Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
-  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output uses
-  the JSON5 spelling, and JSON encoding emits `null` (`JSON.stringify` parity),
-  since JSON's grammar has no such literal. That degradation is currently
-  silent, which is the one place this family does not yet honour the
-  "never silently drop data" rule; promoting it to a conversion warning is
-  open.
+  **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output and
+  the JSONC/JSON5-family emitters keep the JSON5 spelling, and only strict `-T
+  json` encodes them as `null` (`JSON.stringify` parity) - that degradation
+  warns (it is fatal under `--strict`), since JSON's grammar has no such
+  literal. **Inserting** a non-finite value follows the same dialect rule at
+  the document level: the source is flagged `json5` at parse if it uses any
+  JSON5-only spelling (unquoted keys, single quotes, `+`/hex/leading- or
+  trailing-dot numbers, `Infinity`/`NaN`, line continuations) - comments and
+  trailing commas alone are JSONC, not JSON5 - and an insert into a `json5`
+  document keeps the literal while one into a strict document *errors* rather
+  than silently writing `null` (the moat's never-silently-drop rule, at
+  mutation time).
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
   error (exit 2). Iteration over a section's keys is allowed.

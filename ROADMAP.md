@@ -23,9 +23,47 @@ in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
 
 Release infra is intentionally **last**: build the capability, then ship it.
 
-- ⬜ **Small fixes.** New-key creation for INI (section-aware), object literals
-  `{...}` and `.["key"]` bracket keys in the language, `-i.bak` backups,
-  iterate-in-assignment (`.a[] = x`).
+- ✅ **Small fixes.** New-key creation for INI (section-aware),
+  `-i.bak` backups, iterate-in-assignment (`.a[] = x`).
+- ✅ **`-i.bak` backups and iterate-in-assignment.** `-i.SUFFIX` writes the
+  pre-edit bytes to `FILE.SUFFIX` (sed/perl style; bare `-i` still backs
+  nothing up); `--in-place=SUFFIX` too, and `-i` never swallows the expression
+  that follows it. `.a[] = x`, `.a[] |= f`, and `.a[] += x` now map `f` over
+  array elements / object values format-preservingly (one node changed per
+  element, comments and layout around them untouched) across JSONC/JSON5, TOML,
+  and YAML, via a shared `expand_iter_paths` in `edikt-core`; nested iterates
+  (`.a[].b |= f`) work; creating elements through `[]` still errors. INI/`.env`
+  and KDL keep their clean errors (no arrays there).
+- ✅ **`del(.[])` fan-out delete.** `del(.a[])` now deletes **every** iterated
+  element/member, jq-correct and format-preserving, across the structural
+  formats: JSONC/JSON5 (`{"a":[1,2]}` -> `{"a":[]}`, one clean line splice per
+  element, comments between elements untouched), TOML (`xs = [1, 2, 3]` ->
+  `xs = []`; `[[bin]]` array-of-tables all removed), YAML (a block sequence or
+  mapping rewritten to its inline empty form `a: []`/`o: {}` - jq's `[]`/`{}`,
+  not a dangling `a:`-null; the trailing-newline shape survives), and KDL
+  (`.n[]` removes every repeated occurrence; `del(.layout[])` empties a single
+  node to `layout {}`, the object-iterate analogue of jq). Nested fan-outs
+  (`del(.a[].b)`) compose the per-item deletes back-to-front via a shared
+  `expand_delete_paths` in `edikt-core` (the `expand_iter_paths` expansion,
+  reversed so indices stay valid as the collection shrinks). A missing target or
+  empty collection stays a no-op; an empty root (`del(.[])` -> `[]`) is
+  reachable too. Along the way: fixed a pre-existing KDL bug where
+  `del(.node[i])` on a single occurrence silently no-oped for any `i > 0` (the
+  index was resolved against the occurrence count, not the argument count) -
+  single-occurrence indexes now correctly address arguments, and a repeated
+  name's `del(.name[])` is decided by the actual DOM node count (a repeated
+  single-arg node projects identically to a single multi-arg node in the value
+  model, so the value shape alone can't tell them apart).
+- ✅ **JSON5 non-finite numbers, complete.** `Infinity`/`-Infinity`/`NaN` are now
+  *literals* in the expression language (`.a = Infinity` parses), and assigning
+  one is dialect-gated on the document: a JSON5-sourced file (any JSON5-only
+  spelling - unquoted keys, single quotes, hex/`+`/leading-or-trailing-dot
+  numbers, a non-finite literal already present, line continuations) writes the
+  literal; a strict-JSON or comment-only-JSONC file **errors** rather than
+  silently writing `null`. The comment/conversion path was already carried;
+  this closes the mutation path (copying a non-finite key, or assigning from a
+  literal). TOML (`inf`), YAML (`.inf`), and KDL write their own native
+  spellings, round-trippable.
 - ✅ **M8 - YAML & TOML** (newly in scope). ✅ **TOML**: full lossless edit via
   `toml_edit` (query + edit + convert). ✅ **YAML**: **lossless in-place edit** +
   query + convert, **pure Rust** via `libyaml-safer` (safe port of the reference
