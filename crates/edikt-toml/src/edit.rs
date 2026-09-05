@@ -1,7 +1,7 @@
 //! Format-preserving edits and conversion emit, backed by `toml_edit`.
 
 use crate::Toml;
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, expand_iter_paths};
 use toml_edit::{
     Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue,
 };
@@ -10,11 +10,19 @@ pub fn apply(doc: &mut Toml, expr: &Expr) -> Result<(), EditError> {
     match expr {
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
-            let value = eval_one(rhs, &doc.to_value())?;
+            let whole = doc.to_value();
+            let value = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                return set_each(doc, steps, &whole, true, |_| Ok(value.clone()));
+            }
             doc.set(steps, &value)
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            let whole = doc.to_value();
+            if steps.contains(&Step::Iterate) {
+                return set_each(doc, steps, &whole, false, |current| eval_one(rhs, current));
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
@@ -23,10 +31,16 @@ pub fn apply(doc: &mut Toml, expr: &Expr) -> Result<(), EditError> {
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            let whole = doc.to_value();
+            let addend = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                return set_each(doc, steps, &whole, false, |current| {
+                    add_values(current, &addend)
+                });
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
-            let addend = eval_one(rhs, &doc.to_value())?;
             doc.set(steps, &add_values(&current, &addend)?)
         }
         Expr::Pipe(a, b) => {
@@ -68,6 +82,32 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
         Box::new(Expr::Literal(addend.clone())),
     );
     eval_one(&expr, current)
+}
+
+/// Apply `f` to each element selected by `steps` (which contains at least one
+/// `Step::Iterate`), setting each element's value in place via the ordinary
+/// index-keyed `set` path. `steps` must *resolve* against the value model so the
+/// expansion knows how many elements exist; the per-element edit is then a
+/// plain `.a[i]` set, format-preserving.
+fn set_each(
+    doc: &mut Toml,
+    steps: &[Step],
+    whole: &Value,
+    create: bool,
+    f: impl Fn(&Value) -> Result<Value, EditError>,
+) -> Result<(), EditError> {
+    let paths = expand_iter_paths(steps, whole).map_err(|e| EditError::new(e.to_string()))?;
+    if paths.is_empty() && create {
+        return Err(EditError::new("cannot create through `[]`"));
+    }
+    for path in &paths {
+        let current = doc
+            .value_at(path)
+            .ok_or_else(|| EditError::new("path not found"))?;
+        let value = f(&current)?;
+        doc.set(path, &value)?;
+    }
+    Ok(())
 }
 
 /// A `Value` as a TOML `Item` for setting a key (nested objects become inline

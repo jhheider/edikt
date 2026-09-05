@@ -99,7 +99,18 @@ impl Toml {
     }
 
     /// Delete the key or array element at `path` (a missing target is a no-op).
+    /// A `[]` in `path` deletes **every** iterated element/table-entry (jq's
+    /// `del(.a[])` empties the collection).
     pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        if path.contains(&Step::Iterate) {
+            let whole = self.to_value();
+            let paths = edikt_core::expand_delete_paths(path, &whole)
+                .map_err(|e| EditError::new(e.to_string()))?;
+            for p in &paths {
+                self.delete(p)?;
+            }
+            return Ok(());
+        }
         let Some((last, parent)) = path.split_last() else {
             return Ok(());
         };
@@ -428,6 +439,23 @@ mod tests {
         assert!(edit_src(SAMPLE, r#".package.edition = "2024""#).contains("edition = \"2024\""));
     }
 
+    #[test]
+    fn del_iterate_fans_out() {
+        // `del(.a[])` empties an inline array or table (jq).
+        assert_eq!(edit_src("xs = [1, 2, 3]\n", "del(.xs[])"), "xs = []\n");
+        assert_eq!(edit_src("[t]\na = 1\nb = 2\n", "del(.t[])"), "[t]\n");
+        // An array-of-tables: `del(.bin[])` removes every `[[bin]]` block.
+        assert_eq!(
+            edit_src(
+                "[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\n",
+                "del(.bin[])"
+            ),
+            ""
+        );
+        // Missing target is a no-op.
+        assert_eq!(edit_src("xs = [1]\n", "del(.nope[])"), "xs = [1]\n");
+    }
+
     // --- comment model (extraction + commented emit) -----------------------
 
     #[test]
@@ -683,6 +711,25 @@ mod tests {
         assert_eq!(edit_src("xs = [1]\n", "del(.xs[9])"), "xs = [1]\n");
         // A scalar can't be set at an array-of-tables index.
         assert!(edit_err("[[bin]]\nname = \"a\"\n", ".bin[1] = 5").contains("not an array"));
+    }
+
+    #[test]
+    fn iterate_assignment_maps_over_elements() {
+        // `.a[] |= f` maps over elements; `.a[] += x` is per-element `. + x`;
+        // `.a[] = x` sets every element.
+        assert_eq!(
+            edit_src("xs = [1, 2, 3]\n", ".xs[] |= . * 2"),
+            "xs = [2, 4, 6]\n"
+        );
+        assert_eq!(edit_src("xs = [1, 2]\n", ".xs[] += 10"), "xs = [11, 12]\n");
+        assert_eq!(edit_src("xs = [1, 2]\n", ".xs[] = 9"), "xs = [9, 9]\n");
+        // An empty iterate is a no-op for update forms.
+        assert_eq!(edit_src("xs = []\n", ".xs[] |= . + 1"), "xs = []\n");
+        // Creating through `[]` is refused.
+        assert!(
+            edit_err("a = 1\n", ".xs[] = 1").contains("cannot create through `[]`"),
+            "iterate create"
+        );
     }
 
     #[test]
