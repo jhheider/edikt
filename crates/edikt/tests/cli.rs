@@ -181,6 +181,103 @@ fn in_place_edits_file_and_keeps_comments() {
 }
 
 #[test]
+fn in_place_with_backup_suffix_keeps_a_backup() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/bak.json");
+    std::fs::write(&path, "{\"a\": 1}\n").unwrap();
+    // `-i.bak` writes the pre-edit bytes to `path.bak` (sed/perl style).
+    let (_o, _e, code) = run(&["-i.bak", ".a = 2", &path], "");
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\": 2}\n");
+    assert_eq!(
+        std::fs::read_to_string(format!("{path}.bak")).unwrap(),
+        "{\"a\": 1}\n"
+    );
+
+    // Bare `-i` still backs nothing up.
+    let plain = format!("{dir}/bak-plain.json");
+    std::fs::write(&plain, "{\"a\": 1}\n").unwrap();
+    let (_o2, _e2, code2) = run(&["-i", ".a = 3", &plain], "");
+    assert_eq!(code2, 0);
+    assert_eq!(std::fs::read_to_string(&plain).unwrap(), "{\"a\": 3}\n");
+    assert!(
+        !std::fs::exists(format!("{plain}.bak")).unwrap(),
+        "bare -i must not leave a backup"
+    );
+
+    // The long form (`--in-place=.bak`) works too.
+    let long = format!("{dir}/bak-long.json");
+    std::fs::write(&long, "{\"a\": 4}\n").unwrap();
+    let (_o3, _e3, code3) = run(&["--in-place=.bak", ".a = 5", &long], "");
+    assert_eq!(code3, 0);
+    assert_eq!(
+        std::fs::read_to_string(format!("{long}.bak")).unwrap(),
+        "{\"a\": 4}\n"
+    );
+
+    // `-i=.bak` (short form with the equals) is not double-mangled: the backup
+    // lands at `FILE.bak`, never `FILE=.bak`.
+    let eq = format!("{dir}/bak-eq.json");
+    std::fs::write(&eq, "{\"a\": 1}\n").unwrap();
+    let (_o4, _e4, code4) = run(&["-i=.bak", ".a = 2", &eq], "");
+    assert_eq!(code4, 0);
+    assert_eq!(
+        std::fs::read_to_string(format!("{eq}.bak")).unwrap(),
+        "{\"a\": 1}\n"
+    );
+    assert!(
+        !std::fs::exists(format!("{eq}=.bak")).unwrap(),
+        "the `-i=SUFFIX` spelling must not create a `FILE=SUFFIX` backup"
+    );
+}
+
+#[test]
+fn dashdash_keeps_dash_operands_untouched() {
+    // The `-i.bak` argv rewrite is limited to the option region: a positional
+    // operand that merely *looks* like a short flag (here, a file named
+    // `-ifoo`) survives after `--`, so it is read as itself, not as
+    // `-i=foo`.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let weird = format!("{dir}/-ifoo");
+    std::fs::write(&weird, "{\"x\": 1}\n").unwrap();
+    let (out, _e, code) = run(&["-t", "json", ".x", "--", &weird], "");
+    assert_eq!(
+        out, "1\n",
+        "the operand after `--` must reach the file reader"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn del_iterate_empties_containers_across_formats() {
+    // `del(.a[])` empties an array (jq), leaving the container.
+    let (out, _e, code) = run(&["-t", "jsonc", "del(.a[])"], "{\"a\":[1,2,3]}");
+    assert_eq!(out, "{\"a\":[]}");
+    assert_eq!(code, 0);
+
+    // YAML block sequence -> inline empty form; file keeps its newline.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let y = format!("{dir}/del.yaml");
+    std::fs::write(&y, "a:\n  - 1\n  - 2\n").unwrap();
+    let (_o, _e2, code2) = run(&["-i", "del(.a[])", &y], "");
+    assert_eq!(code2, 0);
+    assert_eq!(std::fs::read_to_string(&y).unwrap(), "a: []\n");
+
+    // TOML array-of-tables: every `[[bin]]` block goes.
+    let (out3, _e3, code3) = run(
+        &["-t", "toml", "del(.bin[])"],
+        "[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\n",
+    );
+    assert_eq!(out3, "");
+    assert_eq!(code3, 0);
+
+    // KDL: repeated node occurrences all removed.
+    let (out4, _e4, code4) = run(&["-t", "kdl", "del(.n[])"], "n 1\nn 2\n");
+    assert_eq!(out4, "");
+    assert_eq!(code4, 0);
+}
+
+#[test]
 fn in_place_on_stdin_errors() {
     let (_o, err, code) = run(&["-t", "jsonc", "-i", ".a = 1"], "{\"a\":0}");
     assert_eq!(code, 2);
@@ -315,6 +412,74 @@ fn convert_jsonc_to_env_flattens_with_warning() {
     assert_eq!(out, "A.B=1\n");
     assert!(err.contains("flattened"));
     assert_eq!(code, 0);
+}
+
+#[test]
+fn json5_nonfinite_degrades_only_to_strict_json_with_a_warning() {
+    // Only a JSON5 source can carry `Infinity`/`NaN`. Converting it to strict
+    // JSON must warn (it encodes as null, JSON.stringify parity) and be fatal
+    // under --strict.
+    let (out, err, code) = run(&["-t", "json5", "-T", "json"], "{a: Infinity, b: NaN}");
+    assert_eq!(out, "{\n  \"a\": null,\n  \"b\": null\n}\n");
+    assert!(err.contains("non-finite"));
+    assert_eq!(code, 0);
+
+    let (_o, err2, code2) = run(&["-t", "json5", "--strict", "-T", "json"], "{a: Infinity}");
+    assert!(err2.contains("non-finite"));
+    assert_eq!(code2, 2);
+
+    // The JSONC/JSON5 family keeps the number: no warning, literal preserved.
+    let (out3, err3, code3) = run(&["-t", "json5", "-T", "jsonc"], "{a: Infinity}");
+    assert!(out3.contains("Infinity"), "got: {out3}");
+    assert!(!err3.contains("non-finite"));
+    assert_eq!(code3, 0);
+
+    // A bare query renders the JSON5 spelling raw.
+    let (out4, _e, code4) = run(&["-t", "json5", ".a"], "{a: Infinity}");
+    assert_eq!(out4, "Infinity\n");
+    assert_eq!(code4, 0);
+}
+
+#[test]
+fn nonfinite_insert_keeps_literal_in_json5_and_errors_in_strict_json() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    // JSON5 document: assigning the literal writes it, no null in sight.
+    let j5 = format!("{dir}/nf.json5");
+    std::fs::write(&j5, "{a: 1}\n").unwrap();
+    let (_o, _e, code) = run(&["-i", ".b = Infinity", &j5], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&j5).unwrap(),
+        "{a: 1, \"b\": Infinity}\n"
+    );
+
+    // Strict JSON document (not even a comment): the same edit is refused and
+    // the file is left untouched.
+    let strict = format!("{dir}/nf-strict.json");
+    std::fs::write(&strict, "{\"a\": 1}\n").unwrap();
+    let (_o2, err2, code2) = run(&["-i", ".a = Infinity", &strict], "");
+    assert_eq!(code2, 2);
+    assert!(err2.contains("strict JSON"), "got: {err2}");
+    assert_eq!(std::fs::read_to_string(&strict).unwrap(), "{\"a\": 1}\n");
+
+    // A `.jsonc` file whose only JSON5-ish feature is a comment is still
+    // strict for the purposes of the literal (VS Code JSONC rejects Infinity).
+    let commented = format!("{dir}/nf.jsonc");
+    std::fs::write(&commented, "// keep\n{\"a\": 1}\n").unwrap();
+    let (_o3, _e3, code3) = run(&["-i", ".b = NaN", &commented], "");
+    assert_eq!(code3, 2);
+
+    // TOML/YAML have their own native non-finite spellings (inf /.inf).
+    let toml = format!("{dir}/nf.toml");
+    std::fs::write(&toml, "a = 1\n").unwrap();
+    let (_o4, _e4, code4) = run(&["-i", ".b = Infinity", &toml], "");
+    assert_eq!(code4, 0);
+    assert_eq!(std::fs::read_to_string(&toml).unwrap(), "a = 1\nb = inf\n");
+    let yaml = format!("{dir}/nf.yaml");
+    std::fs::write(&yaml, "a: 1\n").unwrap();
+    let (_o5, _e5, code5) = run(&["-i", ".b = Infinity", &yaml], "");
+    assert_eq!(code5, 0);
+    assert_eq!(std::fs::read_to_string(&yaml).unwrap(), "a: 1\nb: .inf\n");
 }
 
 #[test]

@@ -58,8 +58,17 @@ struct Args {
     script_files: Vec<PathBuf>,
 
     /// Edit files in place (requires a mutating expression or a conversion -T).
-    #[arg(short = 'i', long = "in-place")]
-    in_place: bool,
+    /// `-i.SUFFIX` keeps a backup of the pre-edit file as `FILE.SUFFIX`
+    /// (sed/perl style); bare `-i` does not.
+    #[arg(
+        short = 'i',
+        long = "in-place",
+        value_name = "SUFFIX",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+    )]
+    in_place: Option<String>,
 
     /// Write output to FILE instead of stdout. For queries/conversions the
     /// output format is inferred from FILE's extension (explicit -T/--fmt wins);
@@ -157,8 +166,39 @@ impl Args {
     }
 }
 
+/// Normalize sed/perl's `-i.SUFFIX` spelling before clap parses. clap's
+/// optional-value flags (`num_args 0..=1`) greedily consume the *next operand*
+/// when a value isn't attached, which would swallow the expression in the
+/// headline `edikt -i '.expr' file` form. Rather than lose that, we take
+/// `require_equals = true` (so `-i` alone never eats a token) and map the
+/// classic attached spelling onto `-i=SUFFIX` here.
+fn munge_args() -> Vec<String> {
+    // Only the option region is rewritten: everything at or after a `--`
+    // terminator is positional (a file name), so an operand genuinely named
+    // `-ifoo` stays intact.
+    let raw = std::env::args().collect::<Vec<_>>();
+    let cut = raw.iter().position(|a| a == "--").unwrap_or(raw.len());
+    let mut out: Vec<String> = raw[..cut]
+        .iter()
+        .map(|a| {
+            if let Some(rest) = a.strip_prefix("-i")
+                && !rest.is_empty()
+                && !rest.starts_with(['-', '='])
+            {
+                format!("-i={rest}")
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    for a in &raw[cut..] {
+        out.push(a.clone());
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    let args = Args::parse();
+    let args = Args::parse_from(munge_args());
     // Packager outputs (hidden flags): the binary is its own doc generator,
     // so release archives and package builds need no extra tooling.
     if let Some(shell) = args.completions {
@@ -455,7 +495,7 @@ fn run(args: Args) -> Result<ExitCode> {
             out.name()
         );
     }
-    if args.in_place && !is_mutation && explicit_out.is_none() {
+    if args.in_place.is_some() && !is_mutation && explicit_out.is_none() {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
 
@@ -498,11 +538,11 @@ fn run(args: Args) -> Result<ExitCode> {
                 }
             }
             let out = doc.to_source();
-            if args.in_place {
+            if args.in_place.is_some() {
                 let p = path
                     .as_ref()
                     .context("cannot edit stdin in place; pass a file")?;
-                std::fs::write(p, out).with_context(|| format!("writing {}", p.display()))?;
+                write_in_place(p, &args.in_place, &out)?;
             } else if args.output.is_some() {
                 file_out.push(out);
             } else {
@@ -649,12 +689,12 @@ fn run(args: Args) -> Result<ExitCode> {
             )?);
         }
 
-        if args.in_place {
+        if args.in_place.is_some() {
             let p = path
                 .as_ref()
                 .context("cannot convert stdin in place; pass a file")?;
             let joined = terminated(&outputs);
-            std::fs::write(p, joined).with_context(|| format!("writing {}", p.display()))?;
+            write_in_place(p, &args.in_place, &joined)?;
             emitted = true;
         } else if args.output.is_some() {
             emitted |= !outputs.is_empty();
@@ -702,16 +742,34 @@ fn render_value(
     explicit: bool,
     loc: &str,
 ) -> Result<String> {
+    // A non-finite number (`Infinity`/`-Infinity`/`NaN`) exists only in JSON5;
+    // strict JSON has no literal for it, so encoding one there degrades it to
+    // `null`. That drop must be visible (a warning, fatal under --strict), and
+    // the JSONC/JSON5 family keeps the number instead (the emitters use the
+    // JSON5 spelling). Only reachable when the source carried one.
+    let nonfinite = target == Format::Json && edikt_core::convert::contains_non_finite(value);
+    if nonfinite {
+        let w =
+            "non-finite numbers (Infinity/NaN) were encoded as null; JSON has no literal for them";
+        if args.strict {
+            bail!("{loc}: {w} (--strict)");
+        }
+        eprintln!("edikt: warning: {loc}: {w}");
+    }
     if !matches!(value, Value::Array(_) | Value::Object(_)) {
         // Scalars are raw text, except an explicitly-requested JSON-family
         // output JSON-encodes them (strings quoted) for machine consumers.
-        return Ok(
-            if explicit && matches!(target, Format::Json | Format::Jsonc) {
-                value.to_json()
-            } else {
-                value.to_raw_string()
-            },
-        );
+        return Ok(if explicit {
+            match target {
+                // Strict JSON can't hold a non-finite; it's already warned.
+                Format::Json => value.to_json(),
+                // JSONC/JSON5 keep the literal.
+                Format::Jsonc => value.to_json5(),
+                _ => value.to_raw_string(),
+            }
+        } else {
+            value.to_raw_string()
+        });
     }
     let plain;
     let mut commented = match annotated {
@@ -755,6 +813,14 @@ fn render_value(
         eprintln!("edikt: warning: {loc}: {w}");
         stripped = Commented::from_value(value);
         commented = &stripped;
+    }
+    // Non-finite numbers degrade to `null` only under strict JSON (warned
+    // above); swap the nulled value in so the shared emitter never writes an
+    // `Infinity` literal into a `.json` target.
+    let jsoned;
+    if nonfinite {
+        jsoned = Commented::from_value(&edikt_core::convert::nullify_non_finite(value));
+        commented = &jsoned;
     }
     let (text, warnings) = match emit(target, commented) {
         Ok(ok) => ok,
@@ -817,6 +883,21 @@ fn terminated(outputs: &[String]) -> String {
         }
     }
     joined
+}
+
+/// Write an in-place result, optionally backing up the pre-edit bytes first
+/// (`-i.SUFFIX` -> `PATH.SUFFIX`, sed/perl style; bare `-i` backs nothing up).
+fn write_in_place(p: &Path, suffix: &Option<String>, out: &str) -> Result<()> {
+    if let Some(suffix) = suffix.as_deref()
+        && !suffix.is_empty()
+    {
+        let mut backup = p.as_os_str().to_os_string();
+        backup.push(suffix);
+        fs::copy(p, PathBuf::from(&backup)).with_context(|| {
+            format!("backing up {} to {}", p.display(), backup.to_string_lossy())
+        })?;
+    }
+    fs::write(p, out).with_context(|| format!("writing {}", p.display()))
 }
 
 /// Read each input as (path, contents). No files (or `-`) means stdin.
