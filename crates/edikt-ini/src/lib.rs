@@ -301,6 +301,36 @@ mod tests {
     }
 
     #[test]
+    fn iterate_mutation_errors_are_honest() {
+        // `[]` in a mutation path is the array family this flat format lacks.
+        // A value that exists gives the precise type error (matching the
+        // query side), not a misleading "path not found".
+        assert!(
+            edit_err("[s]\na=1\n", ".s.a[] |= . * 2").contains("cannot iterate over string"),
+            "scalar iterate"
+        );
+        assert!(
+            edit_err("[s]\na=1\n", ".s.a[] += 1").contains("cannot iterate over string"),
+            "nested scalar iterate"
+        );
+        // A section iterate can't fan out either; say so clearly.
+        assert!(
+            edit_err("[s]\na=1\n", ".s[] |= . * 2").contains("not supported for INI"),
+            "section iterate"
+        );
+        // Plain `=` already messages the path shape.
+        assert!(
+            edit_err("[s]\na=1\n", ".s[] = 5").contains("INI paths are `.key` or `.section.key`"),
+            "assign shape"
+        );
+        // A missing iterate target stays a miss (no error), not a lie.
+        assert!(
+            edit_err("[s]\na=1\n", ".nope[] |= . * 2").contains("not supported for INI"),
+            "absent target"
+        );
+    }
+
+    #[test]
     fn creates_new_key_in_existing_section() {
         let src = "[server]\nhost = x\n\n[logging]\nlevel = info\n";
         assert_eq!(

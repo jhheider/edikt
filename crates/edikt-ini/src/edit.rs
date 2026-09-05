@@ -21,6 +21,12 @@ pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            // `[]` is the array family, which this flat format lacks; the
+            // update forms resolve through `value_at` and would otherwise
+            // misreport it as "path not found".
+            if steps.contains(&Step::Iterate) {
+                return no_iterate(doc, steps);
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
@@ -29,6 +35,9 @@ pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            if steps.contains(&Step::Iterate) {
+                return no_iterate(doc, steps);
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
@@ -57,6 +66,20 @@ pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
 fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
     lhs.as_path()
         .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
+}
+
+/// INI's answer to `[]` in an update/append path: the precise type error when
+/// the iterate would land on a value (e.g. `cannot iterate over string`), or a
+/// clear unsupported hint for a section iterate - never the misleading
+/// `path not found` that `value_at` would produce for any `[]` path.
+fn no_iterate(doc: &Ini, steps: &[Step]) -> Result<(), EditError> {
+    if let Err(e) = eval(&Expr::Path(steps.to_vec()), &doc.to_value()) {
+        return Err(EditError::new(e.to_string()));
+    }
+    Err(EditError::new(
+        "`[]` in an assignment is not supported for INI: it is flat key-value, \
+         with nothing to iterate but scalars",
+    ))
 }
 
 fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
