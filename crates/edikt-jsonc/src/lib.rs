@@ -66,6 +66,14 @@ pub struct ParseError {
 /// A parsed JSONC document, backed by a lossless CST.
 pub struct Jsonc {
     root: SyntaxNode,
+    /// Whether the source uses any spelling strict JSON forbids (JSON5's
+    /// unquoted keys, single-quoted strings, `+`/hex/leading-dot numbers,
+    /// `Infinity`/`NaN`, line continuations). Gates what bytes a **freshly
+    /// inserted** value may use: a JSON5 document can take an `Infinity`
+    /// literal; a strict-JSON document cannot (it errors rather than writing
+    /// `null`). Untouched regions round-trip regardless - this only decides the
+    /// spelling of new nodes.
+    json5: bool,
 }
 
 impl Jsonc {
@@ -87,7 +95,7 @@ impl Jsonc {
             .ok_or_else(|| EditError::new("empty document"))?;
         let (container, remaining) = edit::walk_partial(top, path);
         let new_root = if remaining.is_empty() {
-            container.replace_with(edit::value_green(value))
+            container.replace_with(edit::value_green(value, self.json5)?)
         } else {
             let Step::Field(key) = &remaining[0] else {
                 return Err(EditError::new(
@@ -99,7 +107,12 @@ impl Jsonc {
                 .find(|n| n.kind() == Sk::Object)
                 .ok_or_else(|| EditError::new("cannot create a key inside a non-object"))?;
             let member_value = edit::nest_value(&remaining[1..], value)?;
-            let text = edit::insert_into_object(&object.text().to_string(), key, &member_value);
+            let text = edit::insert_into_object(
+                &object.text().to_string(),
+                key,
+                &member_value,
+                self.json5,
+            )?;
             object.replace_with(edit::object_green_from_text(&text))
         };
         self.root = SyntaxNode::new_root(new_root);
@@ -121,7 +134,7 @@ impl Jsonc {
             .children()
             .find(|n| n.kind() == Sk::Array)
             .ok_or_else(|| EditError::new("`+= [..]` target is not an array"))?;
-        let new_text = edit::insert_into_array(&array.text().to_string(), items);
+        let new_text = edit::insert_into_array(&array.text().to_string(), items, self.json5)?;
         let new_root = array.replace_with(edit::array_green_from_text(&new_text));
         self.root = SyntaxNode::new_root(new_root);
         Ok(())
@@ -129,8 +142,22 @@ impl Jsonc {
 
     /// Delete the value at `path`, format-preserving: the member's or element's
     /// line is removed cleanly (no dangling comma or blank line). A missing key
-    /// or out-of-range index is a no-op (jq semantics).
+    /// or out-of-range index is a no-op (jq semantics). A `[]` in `path`
+    /// deletes **every** iterated element/member (jq's `del(.a[])` empties the
+    /// collection), one clean splice each.
     pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        // Fan-out delete: resolve the iterate to concrete index/key paths and
+        // delete each through the ordinary single-target machinery, back-to-
+        // front so indices stay valid as the collection shrinks.
+        if path.contains(&Step::Iterate) {
+            let whole = self.to_value();
+            let paths = edikt_core::expand_delete_paths(path, &whole)
+                .map_err(|e| EditError::new(e.to_string()))?;
+            for p in &paths {
+                self.delete(p)?;
+            }
+            return Ok(());
+        }
         let Some((last, parent)) = path.split_last() else {
             return Err(EditError::new("del(.) is not allowed"));
         };
@@ -170,7 +197,7 @@ impl Jsonc {
                 }
                 Ok(())
             }
-            Step::Iterate => Err(EditError::new("del(.[]) is not supported yet")),
+            Step::Iterate => unreachable!("`[]` fanned out above"),
             Step::Comment(_) => Err(EditError::new(
                 "deleting comments (`#`) is not supported yet (planned for v0.2)",
             )),
@@ -201,7 +228,39 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
         });
     }
 
-    Ok(Jsonc { root })
+    let json5 = detect_json5(&root);
+    Ok(Jsonc { root, json5 })
+}
+
+/// Does the source use a spelling that strict JSON forbids? That is the JSON5
+/// test: unquoted keys (`Ident`), single-quoted strings, `+`/hex/leading-dot
+/// numbers, `Infinity`/`NaN`, and backslash-newline string continuations.
+/// Comments and trailing commas are JSONC, not JSON5, and do not count - so a
+/// commented-but-otherwise-strict `.jsonc` still refuses a non-finite insert
+/// rather than writing bytes VS Code-style consumers reject.
+fn detect_json5(root: &SyntaxNode) -> bool {
+    root.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| match t.kind() {
+            Sk::SingleStr | Sk::Ident => true,
+            Sk::Str => t.text().to_string().contains("\\\n"),
+            Sk::Num => {
+                let s = t.text().to_string();
+                let u = if s.starts_with('+') || s.starts_with('-') {
+                    &s[1..]
+                } else {
+                    &s
+                };
+                s.starts_with('+')
+                    || u.starts_with("0x")
+                    || u.starts_with("0X")
+                    || u.starts_with('.')
+                    || u.ends_with('.')
+                    || s.ends_with("Infinity")
+                    || s == "NaN"
+            }
+            _ => false,
+        })
 }
 
 /// Does the document have a top-level value (not just whitespace/comments)?
@@ -905,10 +964,69 @@ mod tests {
     }
 
     #[test]
+    fn iterate_assignment_maps_over_elements() {
+        // `.a[] |= f` maps `f` over each element, touching only element bytes.
+        assert_eq!(
+            edit_src("{\"a\":[1,2,3]}", ".a[] |= . * 2"),
+            "{\"a\":[2,4,6]}"
+        );
+        // `.a[] += x` is jq's `.a[] |= . + x`.
+        assert_eq!(edit_src("{\"a\":[1,2]}", ".a[] += 10"), "{\"a\":[11,12]}");
+        // `.a[] = x` sets every element to the same value.
+        assert_eq!(edit_src("{\"a\":[1,2]}", ".a[] = 9"), "{\"a\":[9,9]}");
+        // An object iterate fans out over values.
+        assert_eq!(
+            edit_src("{\"o\":{\"x\":1,\"y\":2}}", ".o[] += 5"),
+            "{\"o\":{\"x\":6,\"y\":7}}"
+        );
+        // A nested iterate (`.[].b`) works, not just a trailing one.
+        assert_eq!(
+            edit_src("{\"a\":[{\"b\":1},{\"b\":2}]}", ".a[].b |= . * 10"),
+            "{\"a\":[{\"b\":10},{\"b\":20}]}"
+        );
+        // Empty/absent iterates are a no-op for update forms (`|=`/`+=`).
+        assert_eq!(edit_src("{\"a\":[]}", ".a[] |= . + 1"), "{\"a\":[]}");
+        assert_eq!(edit_src("{}", ".a[] |= . + 1"), "{}");
+        // Creating through `[]` is still refused.
+        assert!(
+            edit_err("{}", ".a[] = 1").contains("cannot create through `[]`"),
+            "iterate create"
+        );
+    }
+
+    #[test]
     fn del_with_extra_arguments_errors() {
         assert!(
             edit_err("{ \"a\": 1 }", "del(.a; .b)").contains("one path argument"),
             "del arity"
+        );
+    }
+
+    #[test]
+    fn del_dot_iterate_fans_out() {
+        // `del(.a[])` empties an array/object (jq), one clean line removed
+        // each; comments and layout between elements survive.
+        assert_eq!(edit_src("{\"a\":[1,2,3]}", "del(.a[])"), "{\"a\":[]}");
+        assert_eq!(
+            edit_src("{\"o\":{\"x\":1,\"y\":2}}", "del(.o[])"),
+            "{\"o\":{}}"
+        );
+        assert_eq!(edit_src("{\"a\": [1, 2, 3]}", "del(.a[])"), "{\"a\": []}");
+        // Nested fan-out deletes the target under each element.
+        assert_eq!(
+            edit_src("{\"a\":[{\"b\":1},{\"b\":2}]}", "del(.a[].b)"),
+            "{\"a\":[{},{}]}"
+        );
+        // Root-level iterate empties the whole document array.
+        assert_eq!(edit_src("[1, 2]", "del(.[])"), "[]");
+        // Missing target or empty collection is a no-op.
+        assert_eq!(edit_src("{\"a\":[]}", "del(.a[])"), "{\"a\":[]}");
+        assert_eq!(edit_src("{\"a\":[1]}", "del(.nope[])"), "{\"a\":[1]}");
+        // Multi-line formatting: each deleted element's line disappears (the closing
+        // bracket keeps its own line's indent).
+        assert_eq!(
+            edit_src("{\n  \"a\": [\n    1,\n    2,\n  ],\n}\n", "del(.a[])"),
+            "{\n  \"a\": [\n    ],\n}\n"
         );
     }
 
@@ -918,11 +1036,6 @@ mod tests {
         assert!(
             edit_err("{ \"a\": 1 }", "del(.)").contains("del(.) is not allowed"),
             "del(.)"
-        );
-        // del(.[]) is a known-unsupported form.
-        assert!(
-            edit_err("[1, 2]", "del(.[])").contains("del(.[]) is not supported"),
-            "del(.[])"
         );
         // del of a comment through the plain edit path is refused (comment edits
         // route elsewhere).
@@ -1198,6 +1311,77 @@ mod tests {
             [Value::Float(f)] => assert!(f.is_nan()),
             other => panic!("expected NaN, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn detect_json5_classifies_spellings() {
+        let is_json5 = |src: &str| parse(src).unwrap().json5;
+        // Strict JSON and JSONC-only features (comments, trailing commas) are
+        // NOT json5: they cannot carry a non-finite literal a strict consumer
+        // would reject.
+        assert!(!is_json5("{\"a\": 1}"));
+        assert!(!is_json5("// comment\n{\"a\": 1,}"));
+        assert!(!is_json5("{\"a\": [1, 2],}"));
+        // Every JSON5-only spelling flips the flag.
+        assert!(is_json5("{a: 1}")); // unquoted key
+        assert!(is_json5("{'a': 1}")); // single-quoted string
+        assert!(is_json5("{\"a\": 0x1f}")); // hex number
+        assert!(is_json5("{\"a\": .5}")); // leading-dot number
+        assert!(is_json5("{\"a\": 5.}")); // trailing-dot number
+        assert!(is_json5("{\"a\": +1}")); // +-signed number
+        assert!(is_json5("{\"a\": Infinity}")); // non-finite literals
+        assert!(is_json5("{\"a\": -Infinity}"));
+        assert!(is_json5("{\"a\": NaN}"));
+        assert!(is_json5("{\"a\": \"one \\\ntwo\"}")); // line continuation
+    }
+
+    #[test]
+    fn non_finite_insertion_keeps_json5_literal() {
+        // A JSON5 document inserting a non-finite value writes the literal,
+        // not `null` (a fresh node uses the document's dialect).
+        assert_eq!(
+            edit_src("{a: 1}", ".\"b\" = Infinity"),
+            "{a: 1, \"b\": Infinity}"
+        );
+        assert_eq!(edit_src("{a: 1}", ".\"a\" = NaN"), "{a: NaN}");
+        assert_eq!(
+            edit_src("{a: 1}", ".\"c\" = {n: -Infinity}"),
+            "{a: 1, \"c\": {\"n\":-Infinity}}"
+        );
+        assert_eq!(
+            edit_src("{a: [1]}", ".\"a\" += [Infinity, NaN]"),
+            "{a: [1, Infinity, NaN]}"
+        );
+        // Copying a non-finite from one key to another keeps the literal.
+        assert_eq!(
+            edit_src("{a: Infinity, b: 1}", ".\"b\" = .a"),
+            "{a: Infinity, b: Infinity}"
+        );
+    }
+
+    #[test]
+    fn non_finite_insertion_into_strict_json_errors() {
+        // A strict-JSON document (or a JSONC one that only uses comments) has no
+        // spelling for the literal: refuse rather than silently writing `null`.
+        let e = |src: &str, expr: &str| edit_err(src, expr);
+        assert!(e("{\"a\": 1}", ".\"a\" = Infinity").contains("strict JSON"));
+        assert!(e("{\"a\": 1}", ".\"b\" = NaN").contains("strict JSON"));
+        assert!(e("{\"a\": 1}", ".\"c\" = {n: Infinity}").contains("strict JSON"));
+        assert!(e("{\"a\": [1]}", ".\"a\" += [Infinity]").contains("strict JSON"));
+        // Comments alone don't make it JSON5.
+        assert!(e("// keep\n{\"a\": 1}", ".\"b\" = Infinity").contains("strict JSON"));
+        // The document is untouched on failure.
+        let mut doc = parse("{\"a\": 1}").unwrap();
+        assert!(
+            doc.apply(&parse_expr(".\"a\" = Infinity").unwrap())
+                .is_err()
+        );
+        assert_eq!(doc.to_source(), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn non_finite_document_round_trips_byte_identically() {
+        roundtrips("{ a: Infinity, b: -Infinity, c: NaN }");
     }
 
     #[test]

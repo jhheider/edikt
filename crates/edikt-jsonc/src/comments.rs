@@ -416,7 +416,7 @@ fn write_node(c: &Commented, indent: usize, out: &mut String) {
             indent_by(indent, out);
             out.push(']');
         }
-        CommentedNode::Scalar(v) => out.push_str(&v.to_json()),
+        CommentedNode::Scalar(v) => out.push_str(&v.to_json5()),
     }
 }
 

@@ -5,14 +5,14 @@
 //! byte-identical everywhere except the value we replaced. The replacement's own
 //! bytes are compact JSON: we format what we insert, never what we didn't touch.
 //!
-//! Supports `set` (`=`, `|=`), `+=`/append, `del`, and new-key creation
-//! (inserting a member into the deepest existing object, matching its style).
-//! Not yet: creating through an array index, and iterate-in-assignment
-//! (`.a[] = x`).
+//! Supports `set` (`=`, `|=`), `+=`/append, `del`, new-key creation
+//! (inserting a member into the deepest existing object, matching its style),
+//! and iterate-assignment (`.a[] = x`, `.a[] |= f`, `.a[] += x` per element).
+//! Not yet: creating *new* elements through an array index or `[]`.
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, expand_iter_paths};
 use rowan::{GreenNode, NodeOrToken};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
@@ -23,11 +23,20 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
             // `path = rhs`: rhs is evaluated against the whole document.
             let whole = doc.to_value();
             let value = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                // `.a[] = x`: set every iterated element to the same value.
+                return set_each(doc, steps, &whole, true, |_| Ok(value.clone()));
+            }
             doc.set(steps, &value)
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
             // `path |= rhs`: rhs sees the current value at `path`.
+            if steps.contains(&Step::Iterate) {
+                // `.a[] |= f`: map `f` over each element.
+                let whole = doc.to_value();
+                return set_each(doc, steps, &whole, false, |current| eval_one(rhs, current));
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
@@ -36,11 +45,17 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
+            let whole = doc.to_value();
+            let addend = eval_one(rhs, &whole)?;
+            if steps.contains(&Step::Iterate) {
+                // `.a[] += x`: jq's `.a[] |= . + x`, per element.
+                return set_each(doc, steps, &whole, false, |current| {
+                    add_values(current, &addend)
+                });
+            }
             let current = doc
                 .value_at(steps)
                 .ok_or_else(|| EditError::new("path not found"))?;
-            let whole = doc.to_value();
-            let addend = eval_one(rhs, &whole)?;
             match (&current, &addend) {
                 // Array + array -> format-preserving element insert.
                 (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
@@ -70,6 +85,34 @@ pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
 fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
     lhs.as_path()
         .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
+}
+
+/// Apply `f` to each element selected by `steps` (which contains at least one
+/// `Step::Iterate`), replacing each element's value node with the result. Every
+/// replacement is a single-value-node splice, so layout/comments around and
+/// between elements are untouched. `create` is true for plain assignment (`=`),
+/// where an expansion resolving to nothing means "you asked to create elements
+/// through `[]`" and errors rather than silently doing nothing; update forms
+/// (`|=`, `+=`) treat an empty expansion as a miss (a no-op), jq-shaped.
+fn set_each(
+    doc: &mut Jsonc,
+    steps: &[Step],
+    whole: &Value,
+    create: bool,
+    f: impl Fn(&Value) -> Result<Value, EditError>,
+) -> Result<(), EditError> {
+    let paths = expand_iter_paths(steps, whole).map_err(|e| EditError::new(e.to_string()))?;
+    if paths.is_empty() && create {
+        return Err(EditError::new("cannot create through `[]`"));
+    }
+    for path in &paths {
+        let current = doc
+            .value_at(path)
+            .ok_or_else(|| EditError::new("path not found"))?;
+        let value = f(&current)?;
+        doc.set(path, &value)?;
+    }
+    Ok(())
 }
 
 fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
@@ -161,7 +204,8 @@ fn step_into(value_node: &SyntaxNode, step: &Step) -> Option<SyntaxNode> {
             }
             values.into_iter().nth(idx as usize)
         }
-        // Setting through `[]` (all elements) needs multi-target splicing; later.
+        // A bare `[]` (all elements) has many value nodes, not one; the
+        // iterate-assignment path (`set_each`) handles that fan-out separately.
         Step::Iterate => None,
         // A comment is not a navigable value node.
         Step::Comment(_) => None,
@@ -281,14 +325,27 @@ fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
 
 /// Insert `items` at the end of an array's source text, matching its existing
 /// style (single-line `, x`; multi-line newline + indent + trailing comma). All
-/// original bytes are preserved; only the new elements are added.
-pub(crate) fn insert_into_array(orig: &str, items: &[Value]) -> String {
-    let elems: Vec<String> = items.iter().map(|v| v.to_json()).collect();
-    insert_elements(orig, &elems)
+/// original bytes are preserved; only the new elements are added. `json5`
+/// picks the number spelling (see [`spell`]).
+pub(crate) fn insert_into_array(
+    orig: &str,
+    items: &[Value],
+    json5: bool,
+) -> Result<String, EditError> {
+    let mut elems = Vec::new();
+    for v in items {
+        elems.push(spell(v, json5)?);
+    }
+    Ok(insert_elements(orig, &elems))
 }
 
 /// Insert `"key": value` as a new member of an object's source text.
-pub(crate) fn insert_into_object(orig: &str, key: &str, value: &Value) -> String {
+pub(crate) fn insert_into_object(
+    orig: &str,
+    key: &str,
+    value: &Value,
+    json5: bool,
+) -> Result<String, EditError> {
     // A composite value inserted into a multi-line object is laid out in the
     // file's own style rather than emitted compact. `to_json()` produced
     // `{"path":1}` against a 2-space file, which is valid but reads as foreign
@@ -296,11 +353,30 @@ pub(crate) fn insert_into_object(orig: &str, key: &str, value: &Value) -> String
     // (edikt-087 BUG-5). Single-line objects still take the compact form,
     // because there it IS the file's style.
     let rendered = match indent_style(orig) {
-        Some((base, unit)) => pretty_value(value, &base, &unit),
-        None => value.to_json(),
+        Some((base, unit)) => pretty_value(value, &base, &unit, json5)?,
+        None => spell(value, json5)?,
     };
     let member = format!("{}: {rendered}", json_string(key));
-    insert_elements(orig, &[member])
+    Ok(insert_elements(orig, &[member]))
+}
+
+/// The byte spelling of a fresh value in this document. A JSON5 document can
+/// carry a non-finite `Infinity`/`NaN` literal (its own spelling); a strict-JSON
+/// document cannot, and refuses rather than silently degrading the value to
+/// `null` (the moat's "never silently drop data" rule, honored at mutation time).
+fn spell(value: &Value, json5: bool) -> Result<String, EditError> {
+    if !json5 && edikt_core::convert::contains_non_finite(value) {
+        return Err(EditError::new(
+            "cannot write Infinity/NaN here: this document is strict JSON, which has no \
+             literal for it; use `Infinity` only in a JSON5 document (unquoted keys, \
+             single quotes, or a non-finite literal already present)",
+        ));
+    }
+    Ok(if json5 {
+        value.to_json5()
+    } else {
+        value.to_json()
+    })
 }
 
 /// The `(base, unit)` indentation of a multi-line container's text, or `None`
@@ -332,33 +408,32 @@ fn indent_style(orig: &str) -> Option<(String, String)> {
 
 /// Render `value` as JSON laid out at `base`, one level being `unit`.
 ///
-/// Scalars and empty containers are unchanged from `to_json()`; only composites
-/// gain the line breaks, so a scalar assignment is byte-for-byte what it was.
-fn pretty_value(value: &Value, base: &str, unit: &str) -> String {
+/// Scalars and empty containers are unchanged from the compact spelling; only
+/// composites gain the line breaks, so a scalar assignment is byte-for-byte
+/// what it was.
+fn pretty_value(value: &Value, base: &str, unit: &str, json5: bool) -> Result<String, EditError> {
     match value {
         Value::Object(m) if !m.is_empty() => {
             let inner = format!("{base}{unit}");
-            let body: Vec<String> = m
-                .iter()
-                .map(|(k, v)| {
-                    format!(
-                        "{inner}{}: {}",
-                        json_string(k),
-                        pretty_value(v, &inner, unit)
-                    )
-                })
-                .collect();
-            format!("{{\n{}\n{base}}}", body.join(",\n"))
+            let mut body = Vec::new();
+            for (k, v) in m {
+                body.push(format!(
+                    "{inner}{}: {}",
+                    json_string(k),
+                    pretty_value(v, &inner, unit, json5)?
+                ));
+            }
+            Ok(format!("{{\n{}\n{base}}}", body.join(",\n")))
         }
         Value::Array(a) if !a.is_empty() => {
             let inner = format!("{base}{unit}");
-            let body: Vec<String> = a
-                .iter()
-                .map(|v| format!("{inner}{}", pretty_value(v, &inner, unit)))
-                .collect();
-            format!("[\n{}\n{base}]", body.join(",\n"))
+            let mut body = Vec::new();
+            for v in a {
+                body.push(format!("{inner}{}", pretty_value(v, &inner, unit, json5)?));
+            }
+            Ok(format!("[\n{}\n{base}]", body.join(",\n")))
         }
-        scalar => scalar.to_json(),
+        scalar => spell(scalar, json5),
     }
 }
 
@@ -480,14 +555,15 @@ pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditErr
     }
 }
 
-/// Build a `Value`-node green subtree by rendering `value` as compact JSON and
-/// reparsing it; the inserted bytes are formatted; surrounding layout is not.
-pub(crate) fn value_green(value: &Value) -> GreenNode {
-    let json = value.to_json();
+/// Build a `Value`-node green subtree by rendering `value` and reparsing it;
+/// the inserted bytes are formatted, surrounding layout is not. `json5` picks
+/// the spelling (see [`spell`]).
+pub(crate) fn value_green(value: &Value, json5: bool) -> Result<GreenNode, EditError> {
+    let json = spell(value, json5)?;
     let root = SyntaxNode::new_root(parser::build(&json));
     let value_node = root
         .children()
         .find(|n| n.kind() == Sk::Value)
         .expect("compact JSON always has a top-level value");
-    value_node.green().into_owned()
+    Ok(value_node.green().into_owned())
 }
