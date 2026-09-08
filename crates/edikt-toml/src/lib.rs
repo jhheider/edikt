@@ -20,7 +20,7 @@ pub use edikt_core::{
     CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
     parse as parse_expr,
 };
-use toml_edit::{DocumentMut, Item, Table, TableLike};
+use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue};
 
 /// Comment kinds this format supports (empty => none); the comment
 /// capability, subsuming the boolean `Feature::Comments`.
@@ -139,19 +139,83 @@ impl Toml {
     }
 }
 
-/// Walk `steps` (all fields) from `root`, **creating** missing intermediate
-/// tables (implicit, so a table that only holds sub-tables emits no bare header).
+/// Descend into element `idx` of the array at `item`, which is either an
+/// array-of-tables (`[[key]]` blocks) or an array of inline tables.
+///
+/// `resolve` is what decides how a negative or past-the-end index is treated,
+/// so a walk on the way to a `set` can append where a walk on the way to a
+/// `del` must not.
+fn descend_index<'a>(
+    item: &'a mut Item,
+    key: &str,
+    idx: i64,
+    resolve: impl Fn(i64, usize) -> Result<Option<usize>, EditError>,
+) -> Result<&'a mut dyn TableLike, EditError> {
+    // Shape is checked immutably first: taking the mutable borrow inside an
+    // `if let` would hold it for the function's whole lifetime, so the second
+    // branch could not borrow `item` again.
+    if item.as_array_of_tables().is_some() {
+        let aot = item
+            .as_array_of_tables_mut()
+            .expect("just checked it is an array of tables");
+        let len = aot.len();
+        let Some(at) = resolve(idx, len)? else {
+            return Err(EditError::new(format!(
+                "`{key}[{idx}]` is out of range (length {len})"
+            )));
+        };
+        if at == len {
+            aot.push(Table::new());
+        }
+        return Ok(aot.get_mut(at).expect("index resolved within the array"));
+    }
+    if item.as_array().is_some() {
+        let arr = item.as_array_mut().expect("just checked it is an array");
+        let len = arr.len();
+        let Some(at) = resolve(idx, len)? else {
+            return Err(EditError::new(format!(
+                "`{key}[{idx}]` is out of range (length {len})"
+            )));
+        };
+        return arr
+            .get_mut(at)
+            .and_then(TomlValue::as_inline_table_mut)
+            .map(|t| t as &mut dyn TableLike)
+            .ok_or_else(|| EditError::new(format!("`{key}[{idx}]` is not a table")));
+    }
+    Err(EditError::new(format!("`{key}` is not an array")))
+}
+
+/// Walk `steps` from `root`, **creating** missing intermediate tables
+/// (implicit, so a table that only holds sub-tables emits no bare header).
+///
+/// A field may be followed by an index, which descends into that element of an
+/// array-of-tables: `.bin[0].name = "x"` edits one `[[bin]]` block in place
+/// rather than making the caller rewrite the whole element.
 fn walk_tables_vivify<'a>(
     root: &'a mut dyn TableLike,
     steps: &[Step],
 ) -> Result<&'a mut dyn TableLike, EditError> {
     let mut current = root;
-    for step in steps {
-        let Step::Field(k) = step else {
+    let mut i = 0;
+    while i < steps.len() {
+        let Step::Field(k) = &steps[i] else {
             return Err(EditError::new(
-                "TOML paths for set are object keys, with an optional trailing array index",
+                "TOML paths for set are object keys, each with an optional array index",
             ));
         };
+        if let Some(Step::Index(n)) = steps.get(i + 1) {
+            let item = current
+                .get_mut(k)
+                .ok_or_else(|| EditError::new(format!("`{k}` does not exist")))?;
+            // Appending at `len` matches what `arr[len] = v` already does, so
+            // walking through an index cannot create more than one element.
+            current = descend_index(item, k, *n, |idx, len| {
+                edit::resolve_set_index(idx, len).map(Some)
+            })?;
+            i += 2;
+            continue;
+        }
         if current.get(k).is_none() {
             let mut t = Table::new();
             t.set_implicit(true);
@@ -163,19 +227,31 @@ fn walk_tables_vivify<'a>(
         current = item
             .as_table_like_mut()
             .ok_or_else(|| EditError::new(format!("`{k}` is not a table")))?;
+        i += 1;
     }
     Ok(current)
 }
 
-/// Walk `steps` (all fields) from `root` **without** creating anything; returns
-/// `None` if the path doesn't resolve to a table (a delete no-op).
+/// Walk `steps` from `root` **without** creating anything; returns `None` if
+/// the path doesn't resolve to a table (a delete no-op).
 fn walk_tables<'a>(root: &'a mut dyn TableLike, steps: &[Step]) -> Option<&'a mut dyn TableLike> {
     let mut current = root;
-    for step in steps {
-        let Step::Field(k) = step else {
+    let mut i = 0;
+    while i < steps.len() {
+        let Step::Field(k) = &steps[i] else {
             return None;
         };
+        if let Some(Step::Index(n)) = steps.get(i + 1) {
+            let item = current.get_mut(k)?;
+            current = descend_index(item, k, *n, |idx, len| {
+                Ok(edit::resolve_del_index(idx, len))
+            })
+            .ok()?;
+            i += 2;
+            continue;
+        }
         current = current.get_mut(k)?.as_table_like_mut()?;
+        i += 1;
     }
     Some(current)
 }
@@ -600,6 +676,108 @@ mod tests {
         );
     }
 
+    // --- walking through an array index ------------------------------------
+
+    #[test]
+    fn sets_a_field_inside_an_array_of_tables() {
+        // The whole point: edit one `[[bin]]` block without rewriting it. This
+        // used to fail with "`bin` is not a table", because the walker only
+        // accepted field steps and an array-of-tables is not table-like.
+        assert_eq!(
+            edit_src(
+                "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n",
+                r#".bin[1].name = "z""#
+            ),
+            "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"z\"\n"
+        );
+    }
+
+    #[test]
+    fn walking_an_index_leaves_every_other_byte_alone() {
+        // The moat: comments, blank lines and the untouched sibling survive.
+        let src = "# which binaries\n[[bin]]\nname = \"a\"  # the first\npath = \"x.rs\"\n\n[[bin]]\nname = \"b\"\n";
+        assert_eq!(
+            edit_src(src, r#".bin[0].path = "y.rs""#),
+            "# which binaries\n[[bin]]\nname = \"a\"  # the first\npath = \"y.rs\"\n\n[[bin]]\nname = \"b\"\n"
+        );
+    }
+
+    #[test]
+    fn an_index_walk_adds_a_key_and_nests() {
+        // A key that is not there yet is created inside the element,
+        assert_eq!(
+            edit_src("[[bin]]\nname = \"a\"\n", r#".bin[0].path = "x.rs""#),
+            "[[bin]]\nname = \"a\"\npath = \"x.rs\"\n"
+        );
+        // and an index may sit anywhere in the path, not only at the end.
+        assert_eq!(
+            edit_src("[[bin]]\nname = \"a\"\n", r#".bin[0].meta.tag = "x""#),
+            "[[bin]]\nname = \"a\"\n\n[bin.meta]\ntag = \"x\"\n"
+        );
+    }
+
+    #[test]
+    fn a_negative_index_counts_from_the_end() {
+        assert_eq!(
+            edit_src(
+                "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n",
+                r#".bin[-1].name = "z""#
+            ),
+            "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"z\"\n"
+        );
+    }
+
+    #[test]
+    fn an_index_walk_appends_at_len_and_refuses_past_it() {
+        // Appending at `len` is what `.bin[len] = {..}` already does, so
+        // walking through the same index is consistent rather than a new rule.
+        assert_eq!(
+            edit_src("[[bin]]\nname = \"a\"\n", r#".bin[1].name = "b""#),
+            "[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n"
+        );
+        assert_eq!(
+            edit_err("[[bin]]\nname = \"a\"\n", r#".bin[4].name = "b""#),
+            "array index 4 out of range (length 1); append with index 1"
+        );
+    }
+
+    #[test]
+    fn an_index_walk_works_on_inline_tables_too() {
+        assert_eq!(
+            edit_src(
+                "bin = [{ name = \"a\" }, { name = \"b\" }]\n",
+                r#".bin[0].name = "z""#
+            ),
+            "bin = [{ name = \"z\" }, { name = \"b\" }]\n"
+        );
+        // An element that is not a table cannot be walked into.
+        assert_eq!(
+            edit_err("bin = [1, 2]\n", r#".bin[0].name = "z""#),
+            "`bin[0]` is not a table"
+        );
+        // Neither can a key that is not an array at all.
+        assert_eq!(
+            edit_err("bin = 1\n", r#".bin[0].name = "z""#),
+            "`bin` is not an array"
+        );
+    }
+
+    #[test]
+    fn deleting_through_an_index_is_a_no_op_when_it_misses() {
+        assert_eq!(
+            edit_src("[[bin]]\nname = \"a\"\npath = \"x\"\n", "del(.bin[0].path)"),
+            "[[bin]]\nname = \"a\"\n"
+        );
+        // Out of range, a missing key, and a non-array all stay no-ops, the
+        // way every other delete does.
+        for expr in ["del(.bin[9].name)", "del(.nope[0].name)"] {
+            assert_eq!(
+                edit_src("[[bin]]\nname = \"a\"\n", expr),
+                "[[bin]]\nname = \"a\"\n"
+            );
+        }
+    }
+
     // --- project.rs: typed scalar projection -------------------------------
 
     #[test]
@@ -641,18 +819,20 @@ mod tests {
 
     #[test]
     fn set_and_del_path_guards() {
-        // set: a field *inside* an array element (an index in the parent) is a
-        // follow-up; only a trailing index is supported.
+        // set: an index may sit anywhere in the path now (see the walk tests),
+        // so this is only an error because `a` is a table rather than an array,
+        // and the message says which.
         assert_eq!(
             edit_err("[a]\nx = 1\n", ".a[0].y = 5"),
-            "TOML paths for set are object keys, with an optional trailing array index"
+            "`a` is not an array"
         );
         // set: the whole document cannot be replaced.
         assert_eq!(
             edit_err("a = 1\n", ". = 5"),
             "cannot set the whole document"
         );
-        // del: a non-field parent step is a silent no-op (path can't match).
+        // del: a parent step that cannot match is still a silent no-op, whether
+        // that is a missing key or, as here, a key that is not an array.
         assert_eq!(edit_src("[a]\nx = 1\n", "del(.a[0].y)"), "[a]\nx = 1\n");
         // del: a missing intermediate table is a silent no-op.
         assert_eq!(edit_src("a = 1\n", "del(.nope.k)"), "a = 1\n");
