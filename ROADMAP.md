@@ -65,7 +65,9 @@ Release infra is intentionally **last**: build the capability, then ship it.
   literal). TOML (`inf`), YAML (`.inf`), and KDL write their own native
   spellings, round-trippable.
 - ✅ **M8 - YAML & TOML** (newly in scope). ✅ **TOML**: full lossless edit via
-  `toml_edit` (query + edit + convert). ✅ **YAML**: **lossless in-place edit** +
+  `toml_edit` (query + edit + convert), including a path that walks *through* an
+  array index (`.bin[0].name = "z"` edits one `[[bin]]` block in place; an index
+  was once usable only as a path's final step). ✅ **YAML**: **lossless in-place edit** +
   query + convert, **pure Rust** via `libyaml-safer` (safe port of the reference
   parser, zero transitive deps). One parse pass -> a span tree that is both the
   data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
