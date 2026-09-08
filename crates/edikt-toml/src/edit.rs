@@ -193,7 +193,7 @@ fn array_is_aot_shaped(container: &dyn TableLike, key: &str) -> bool {
 /// Resolve `idx` (jq-style: negative counts from the end) against `len` for a
 /// set, allowing `idx == len` as an append. Out of range is an error naming the
 /// append index.
-fn resolve_set_index(idx: i64, len: usize) -> Result<usize, EditError> {
+pub(crate) fn resolve_set_index(idx: i64, len: usize) -> Result<usize, EditError> {
     let resolved = if idx < 0 { len as i64 + idx } else { idx };
     if resolved < 0 || resolved as usize > len {
         return Err(EditError::new(format!(
@@ -205,7 +205,7 @@ fn resolve_set_index(idx: i64, len: usize) -> Result<usize, EditError> {
 
 /// Resolve `idx` against `len` for a delete (no append); out of range yields
 /// `None`, a jq-style no-op.
-fn resolve_del_index(idx: i64, len: usize) -> Option<usize> {
+pub(crate) fn resolve_del_index(idx: i64, len: usize) -> Option<usize> {
     let resolved = if idx < 0 { len as i64 + idx } else { idx };
     (resolved >= 0 && (resolved as usize) < len).then_some(resolved as usize)
 }
