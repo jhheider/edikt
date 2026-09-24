@@ -80,9 +80,10 @@ blocks in a Python file (uv) or a shell script (scriptbox), bumps the pin, and
 re-applies the `# ` prefix with the code below untouched.
 
 **Multi-document YAML.** A `---`-separated stream (Kubernetes manifests, Ansible,
-Helm output) is first-class. An edit maps over every document by default and
-silently skips any that lack the target path; a query returns one result per
-document. `select(pred)` targets documents by content
+Helm output) is first-class. An edit maps over every document by default: `=`
+sets the path in each one, creating it (with a note on stderr) where it was
+missing, while `|=` and `+=` skip documents that lack the path. A query returns
+one result per document. `select(pred)` targets documents by content
 (`select(.kind == "Service") | .spec.type = "LoadBalancer"`), and `^dN` selects
 one by position (`^d0` is the first), strict there, so `^d5` on a
 three-document stream is an error, not a no-op.
@@ -167,7 +168,7 @@ Seven config formats with lossless in-place edit, query, and comment-preserving
 conversion, plus a frontmatter lens (Markdown and PEP 723 host-language blocks)
 and multi-document YAML streams with `select`/`^dN` targeting. On crates.io,
 Homebrew, and pkgx, the badge above tracks the current version. See
-[`CLAUDE.md`](./CLAUDE.md) for the build contract.
+[`docs/design/contract.md`](./docs/design/contract.md) for the design contract.
 
 ## Scripting notes
 
