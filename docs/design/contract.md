@@ -22,6 +22,34 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
   comment placement, or trailing newline of any region it did not target.
 - `parse ∘ serialize == identity` is a hard invariant, tested per format.
 - We do **not** format, lint, or normalize. taplo and prettier own that.
+- **An assigned string keeps the quote style of the string it replaces**, and
+  falls back to another style only when the new value can't be spelled in the
+  old one (#81). The fallback is always a style that spells any string
+  (double-quoted, or TOML basic), so it never fails. Only strings carry a
+  style: a number, bool, or null is written bare, since quoting it would change
+  its type. A new key has no old style and takes the format's default. Per
+  format:
+  - **YAML**: double, single, and plain each keep themselves. Single quotes
+    can't hold a control character or line break. Plain can't hold anything
+    that would read as another type or meaning (`1.10`, `null`, `a: b`,
+    `x #y`, a leading indicator such as `@` or `*`), a `,[]{}` inside a flow
+    collection, or a word a YAML 1.1 reader types differently (`yes`/`off`,
+    `1_000`, `12:30`, `2001-12-14`). That last rule is waived when the replaced
+    scalar was the same kind of word, so a file relying on 1.1 booleans can
+    flip `yes` to `no`. New keys and `-T yaml` quote those words too. The
+    scalar's anchor always survives, and so does its tag, unless it is a core
+    tag (`!!str`, `!!int`, ...) that no longer fits the value.
+  - **TOML**: basic `"`, literal `'`, and the multi-line `"""`/`'''` forms
+    keep themselves. A literal has no escapes, so a value it can't hold
+    verbatim becomes basic, staying multi-line if it was.
+  - **JSON5**: a single-quoted string stays single-quoted (any value fits).
+  - **KDL**: quoted, raw (`#"..."#`, adding a `#` as needed), and bare
+    identifier strings keep themselves. A bare string stays bare only while
+    the value is a valid identifier. A multi-line `"""` string has no one-line
+    form, so it becomes quoted.
+  - **INI, `.env`, `envspaced`**: not applicable. A value is its bytes, and
+    any quotes in them are part of the value (`a = "x"` reads as `"x"`), so an
+    assignment writes exactly the string it is given.
 
 ---
 
