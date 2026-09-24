@@ -62,12 +62,13 @@ impl Toml {
                 let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
                 let new_item = edit::value_to_item(value)?;
                 if let Some(existing) = current.get_mut(key) {
-                    // Preserve the existing value's decor (spacing + inline comment).
-                    let decor = existing.as_value().map(|v| v.decor().clone());
-                    *existing = new_item;
-                    if let (Some(decor), Some(v)) = (decor, existing.as_value_mut()) {
-                        *v.decor_mut() = decor;
-                    }
+                    // Keep the existing value's decor (spacing + inline
+                    // comment) and, for a string, its quote style.
+                    let replacement = match (existing.as_value(), new_item) {
+                        (Some(old), Item::Value(new)) => Item::Value(edit::replacing(old, new)),
+                        (_, new_item) => new_item,
+                    };
+                    *existing = replacement;
                 } else {
                     current.insert(key, new_item);
                 }
