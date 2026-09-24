@@ -1,5 +1,16 @@
 # edikt design contract
 
+`edikt` is a **lossless, format-preserving structured-config editor** for
+**JSONC/JSON5**, **INI**, **TOML**, **YAML**, **KDL**, and **sectionless
+key-value** files (`.env`, `.properties`, `zoo.cfg`-style), plus the
+frontmatter block of Markdown files and PEP 723 script headers.
+
+This is the contract for its behavior. Read it before changing behavior, and
+if a rule changes, change it here *first*. Status and backlog live in
+[`ROADMAP.md`](../../ROADMAP.md).
+
+---
+
 ## The moat (non-negotiable)
 
 Every supported format has a **lossless CST**: parse -> tree that stores every
@@ -24,14 +35,16 @@ edikt -f script.edk [-f ...] [FILE...]
 
 | flag | meaning |
 |---|---|
-| *(positional EXPR)* | the expression, jq-style, when no `-e`/`-f` given |
+| *(positional EXPR)* | the expression, jq-style, when no `-e`/`-f` given; with `-e`/`-f` present, every operand is a FILE |
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
 | `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order. Scripts may open with **header directives** - `toFormat: FMT`, `type: FMT` - which CLI flags override; `#` header lines (comments, shebangs) are skipped |
-| `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin |
-| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`) |
-| `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` are shorthands for `-T <fmt>` |
+| `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin. Needs a mutating expression or a conversion (`-T`) |
+| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`\|`kdl`\|`markdown`; aliases `cfg`, `conf`, `props`, `spaced`, `yml`, `md`, `mdx`, `qmd`, `frontmatter`, `fm`) |
+| `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml`/`--kdl` are shorthands for `-T <fmt>`. `markdown` is an input lens and never an output format |
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
+| `--strict` | when output format differs from input, lossy degradations (dropped comments, flattening) are errors (exit 2) instead of warnings |
+| `--exit-status` | a query with no results exits 1 (jq-style presence test) instead of the default silent exit 0 |
 | `--no-vivify` | assignments **fail** (exit 2) when the target path doesn't already exist, instead of auto-creating. Plain `=` is jq-style and creates missing keys by default (announced by a stderr `created` **note**); this opts out so a mistyped or wrongly-scoped path can't silently write a new key. An `arr[len] = v` TOML append is exempt (it's not a create); `select(`/`^dN`-scoped edits keep default behavior; `|=`/`+=` already error on a missing target and `del` stays a no-op |
 
 **Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) ->
@@ -45,10 +58,13 @@ is a real conversion that warns and drops comments.
 FILE without `-i` -> read file, write result to stdout. `-i` -> write back per
 file.
 
-**Format detection:** extension first (`.jsonc`/`.json5`/`.json`,
-`.ini`/`.cfg`/`.conf`, `.env`, `.properties`); `-t` overrides; **stdin without
-`-t` and no reliable sniff -> error** (predictable beats magic). Content sniffing
-is a later nicety, never the primary path.
+**Format detection:** `-t` wins; otherwise the file name (`.env` and `.env.*`
+dotfiles), then the extension: `.json`, `.jsonc`/`.json5`, `.ini`/`.cfg`/`.conf`,
+`.env`/`.properties`/`.props`, `.toml`, `.yaml`/`.yml`, `.kdl`,
+`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd` (see `detect_format` in
+`crates/edikt/src/main.rs`). There is no content sniffing: **stdin without `-t`,
+or an unknown extension, is an error** (predictable beats magic). `envspaced` is
+never auto-detected (see Per-format semantics).
 
 ---
 
@@ -83,12 +99,20 @@ an *edit* language, not a general-purpose one.
   (minified JSON, a YAML flow `[...]`) has no own line to hang an own-line comment,
   so it **errors cleanly** ("needs layout expansion") rather than reflowing bytes
   the user didn't touch; auto-expansion is deferred, revisit-reactively (see
-  [`docs/design/comments-as-first-class.md`](./docs/design/comments-as-first-class.md)).
+  [`comments-as-first-class.md`](./comments-as-first-class.md)).
 - comment stream `comments` - a document-wide stream of `{path, kind, text}`
   records over every comment (query: `comments | select(.text | test("TODO")) |
   .path` = which keys carry a TODO); as a mutation target, `comments |= gsub(...)`
   bulk-edits every comment's text and `del(comments)` clears them all.
 - filter `.items[] | select(.enabled == true)`
+- **document selector** `^dN`: a program prefix (`^d1.spec.replicas = 3`) that
+  scopes the expression to one document of a multi-document YAML stream,
+  0-based and strict (an out-of-range `^dN` is exit 2, not a no-op). Without
+  it an expression maps over every document: a query yields one result per
+  document, `=` applies to each (auto-vivifying, with the note naming the
+  document), and `|=`/`+=` skip documents that lack the path. `select(...)` as the
+  first stage targets documents by content
+  (`select(.kind == "Service") | .spec.type = "LoadBalancer"`).
 
 **Mutation**
 - assign `PATH = <expr>` - the RHS is evaluated in the value calculus
@@ -246,6 +270,17 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
   occurrences); replacing a whole node body wholesale is refused rather than
   reflowed, like YAML.
+- **Frontmatter** (`edikt-frontmatter`, `-t markdown`): a **lens**, not a
+  format. It splits the file into an opaque opening fence, the metadata block,
+  and an opaque suffix (closing fence plus the whole body), hands the block to
+  the YAML/TOML/JSONC engine, and re-splices on serialize, so the body's bytes
+  are never touched. Containers: `---` YAML (closed by `---` or `...`), `+++`
+  TOML, tagged `---yaml`/`---toml`/`---json`, a bare `{ ... }` JSON object at
+  byte 0, and PEP 723 `# /// name` ... `# ///` blocks in a host-language file
+  (TOML once the `# ` prefix is stripped; re-applied on write). `.md`,
+  `.markdown`, `.mdx`, `.qmd`, `.rmd` auto-detect; anything else (a `.py`
+  script) needs `-t markdown`. It is input-only: `-T markdown` errors and names
+  the block's own language as the way out. Capabilities are the inner block's.
 
 ---
 
@@ -328,7 +363,9 @@ Workspace; each format is an isolated module with no cross-coupling.
   Pratt parser + evaluator / value calculus / function registry); the
   **`Document` trait** (format-agnostic seam: resolve path -> node handle(s),
   read value/source-slice/commented projection, format-preserving replace,
-  delete, append) and a **`Convert` trait** (`Value` ↔ per-format emitter).
+  delete, append). There is no conversion trait: each format crate exports
+  `emit` / `emit_commented` free functions, and shared data-model helpers
+  live in `edikt-core`'s `convert` module.
 - **`edikt-syntax`** (lib) - shared **rowan** substrate: green-tree helpers,
   generic lossless serialize (walk green tree -> concat token text), splice /
   structural-sharing edit utilities usable by any format's `SyntaxKind`.
@@ -341,29 +378,32 @@ because each crate's own `parse` is its document parser). A dependent calls
 the `serde_json`-shaped `Value` constructor; it builds a data-model value, never
 a document, since the CST is what round-trips bytes.
 
-- **`edikt-jsonc` / `edikt-ini` / `edikt-env`** - each = a `logos` lexer + a
-  parser emitting a rowan tree over `edikt-syntax`, typed AST accessors, a static
-  `FEATURES: &[Feature]`, and impls of `Document` + `Convert`.
-- **`edikt-toml`** - `Document`/`Convert` over `toml_edit`'s decor-preserving
+- **`edikt-jsonc` / `edikt-ini` / `edikt-env`** - each builds a rowan tree over
+  `edikt-syntax`: `edikt-jsonc` from a `logos` lexer, `edikt-ini` and
+  `edikt-env` from hand-written line scanners (their grammars are
+  line-oriented and context-sensitive). Each has typed AST accessors, a static
+  `FEATURES: &[Feature]`, a `Document` impl, and its emitters.
+- **`edikt-toml`** - `Document` + emitters over `toml_edit`'s decor-preserving
   DOM (edits keep comments/layout; no rowan needed; `toml_edit` is the CST).
-- **`edikt-kdl`** - `Document`/`Convert` over `kdl-rs`'s format-preserving
+- **`edikt-kdl`** - `Document` + emitters over `kdl-rs`'s format-preserving
   document (same pattern as TOML: the library is the CST; per-node `leading` /
   `before_terminator` decor carries the comment model).
 - **`edikt-yaml`** - pure Rust over `libyaml-safer`. Not a rowan CST: one parse
   pass composes the event stream into a **span tree** (every scalar/collection's
   byte range) that doubles as the data model *and* the edit map. Edits are a byte
   splice over the original source (untouched bytes preserved verbatim); merge
-  keys (`<<`) resolve in the value projection. Same `Document`/`Convert` seam, so
-  the CLI dispatches over it identically to the rowan formats.
+  keys (`<<`) resolve in the value projection. Same `Document` seam, so
+  the CLI dispatches over it identically to the rowan formats. A
+  multi-document stream parses into one `Yaml` holding a span tree per
+  document, which is what `^dN` and document-level `select(...)` scope.
+- **`edikt-frontmatter`** - the frontmatter lens: a `Document` that delegates to
+  the YAML/TOML/JSONC crate for the block and re-splices the opaque prefix and
+  suffix in `to_source`.
 
-**Why rowan+logos:** lossless-by-construction CST, edit = structural-sharing
-splice (untouched nodes are the *same* green nodes -> provably byte-identical),
-one framework across all formats. This is the taplo/rust-analyzer pattern; it
-makes "both formats at once" cheaper because they share the harness.
-
-The expression evaluator is written and tested against a plain in-memory `Value`
-model **first**, then wired to the CSTs. Language correctness and CST fidelity
-de-risk independently.
+**Why rowan:** lossless-by-construction CST, edit = structural-sharing splice
+(untouched nodes are the *same* green nodes, so byte-identity holds by
+construction, not bookkeeping), one framework across the hand-built formats.
+This is the taplo/rust-analyzer pattern.
 
 ---
 
@@ -371,13 +411,3 @@ de-risk independently.
 
 - Being jq - no general-purpose/functional language (see v1 scope list above).
 - Formatting / linting / reflowing - ever, for regions not targeted.
-
-Note: the brief originally scoped out YAML/TOML as "already served" by yq/
-`toml_edit`. That decision was **revised**: the goal is now to bring the common
-formats in-house for completeness and conversion. **TOML** is done (lossless, via
-`toml_edit`). **YAML** is done too: lossless in-place edit + query + convert,
-**pure Rust**, driven by `libyaml-safer` (a safe port of the reference parser,
-zero transitive deps). One parse pass yields both the data model and byte-precise
-marks; edits are a byte splice over the untouched source, so comments/layout
-survive (see the `edikt-yaml` module note below). We still don't rebuild JSON's
-plain query (jq owns that) or reflow/format anything.
