@@ -95,7 +95,7 @@ impl Jsonc {
             .ok_or_else(|| EditError::new("empty document"))?;
         let (container, remaining) = edit::walk_partial(top, path);
         let new_root = if remaining.is_empty() {
-            container.replace_with(edit::value_green(value, self.json5)?)
+            container.replace_with(edit::replacement_green(&container, value, self.json5)?)
         } else {
             let Step::Field(key) = &remaining[0] else {
                 return Err(EditError::new(
@@ -1250,10 +1250,11 @@ mod tests {
         let mut doc = parse(JSON5_DOC).unwrap();
         apply(&mut doc, &parse_expr(".unquoted = \"changed\"").unwrap()).unwrap();
         // The bare key stays bare (its bytes were never targeted); only the
-        // value is rewritten, and the hex sibling and trailing comma survive.
+        // value is rewritten, keeping its single quotes (#81), and the hex
+        // sibling and trailing comma survive.
         assert_eq!(
             doc.to_source(),
-            "{\n  unquoted: \"changed\",\n  \"quoted\": 0xff,\n}\n"
+            "{\n  unquoted: 'changed',\n  \"quoted\": 0xff,\n}\n"
         );
     }
 

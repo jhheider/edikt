@@ -559,11 +559,53 @@ pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditErr
 /// the inserted bytes are formatted, surrounding layout is not. `json5` picks
 /// the spelling (see [`spell`]).
 pub(crate) fn value_green(value: &Value, json5: bool) -> Result<GreenNode, EditError> {
-    let json = spell(value, json5)?;
-    let root = SyntaxNode::new_root(parser::build(&json));
+    Ok(green_from_spelling(&spell(value, json5)?))
+}
+
+/// The green subtree that replaces the value node `old` with `value`. A string
+/// replacing a JSON5 single-quoted string stays single-quoted
+/// (jhheider/edikt#81). Only a document that already uses single quotes has
+/// one to replace, so this never writes a spelling the file lacks.
+pub(crate) fn replacement_green(
+    old: &SyntaxNode,
+    value: &Value,
+    json5: bool,
+) -> Result<GreenNode, EditError> {
+    let single = old
+        .children_with_tokens()
+        .any(|e| e.kind() == Sk::SingleStr);
+    match value {
+        Value::Str(s) if single => Ok(green_from_spelling(&single_quoted(s))),
+        _ => value_green(value, json5),
+    }
+}
+
+/// `s` as a JSON5 single-quoted string: JSON's escapes, except that `'` is
+/// escaped and `"` is not. Any string can be spelled this way.
+fn single_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        match c {
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Parse a value's spelling and return its `Value` node's green subtree.
+fn green_from_spelling(text: &str) -> GreenNode {
+    let root = SyntaxNode::new_root(parser::build(text));
     let value_node = root
         .children()
         .find(|n| n.kind() == Sk::Value)
-        .expect("compact JSON always has a top-level value");
-    Ok(value_node.green().into_owned())
+        .expect("a value spelling always has a top-level value");
+    value_node.green().into_owned()
 }
