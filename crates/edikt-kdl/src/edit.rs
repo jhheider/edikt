@@ -7,6 +7,7 @@
 
 use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
+use crate::spell::spell_like;
 use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
 use kdl::{FormatConfig, KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
 
@@ -517,7 +518,8 @@ fn scalar_only(v: &Value) -> Result<KdlValue, EditError> {
 /// Update an entry's value *and* its stored text repr (kdl-rs renders the
 /// repr, so `set_value` alone would print the stale bytes).
 fn set_entry_value(entry: &mut KdlEntry, value: KdlValue) {
-    let repr = value.to_string();
+    let old = entry.format().map_or("", |f| f.value_repr.as_str());
+    let repr = spell_like(old, &value);
     entry.set_value(value);
     if let Some(f) = entry.format_mut() {
         f.value_repr = repr;
@@ -528,7 +530,7 @@ fn set_entry_value(entry: &mut KdlEntry, value: KdlValue) {
 fn arg_entry(value: KdlValue) -> KdlEntry {
     let mut e = KdlEntry::new(value.clone());
     e.set_format(KdlEntryFormat {
-        value_repr: value.to_string(),
+        value_repr: spell_like("", &value),
         leading: " ".into(),
         ..Default::default()
     });

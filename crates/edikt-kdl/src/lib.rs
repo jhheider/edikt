@@ -15,6 +15,7 @@
 mod comments;
 mod edit;
 mod project;
+mod spell;
 
 pub use comments::emit_commented;
 pub use edit::{apply, emit};
@@ -327,8 +328,9 @@ mod tests {
 
     #[test]
     fn edit_edge_cases() {
-        // Set an argument by index; delete a property; delete an argument.
-        assert!(edit_src("node \"a\" \"b\"\n", ".node[0] = \"z\"").contains("node z \"b\""));
+        // Set an argument by index (it stays quoted, #81); delete a property;
+        // delete an argument.
+        assert!(edit_src("node \"a\" \"b\"\n", ".node[0] = \"z\"").contains("node \"z\" \"b\""));
         assert!(!edit_src("node key=1 other=2\n", "del(.node.key)").contains("key="));
         assert_eq!(
             edit_src("node \"a\" \"b\"\n", "del(.node[0])"),
