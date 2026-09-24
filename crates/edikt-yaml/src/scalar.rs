@@ -131,8 +131,207 @@ fn emit_string(s: &str) -> String {
     }
 }
 
-/// Would this string be misread (as null/bool/number) or break plain style?
+/// The spelling of an existing scalar token, as far as re-spelling a new value
+/// in it goes. Block (`|`/`>`) scalars never reach here (a multi-line target is
+/// refused), and an alias (`*a`) has no quote style, so both read as plain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuoteStyle {
+    Plain,
+    Single,
+    Double,
+}
+
+impl QuoteStyle {
+    /// The style of a scalar body (its properties already split off).
+    pub(crate) fn of(body: &str) -> Self {
+        match body.as_bytes().first() {
+            Some(b'"') => Self::Double,
+            Some(b'\'') => Self::Single,
+            _ => Self::Plain,
+        }
+    }
+}
+
+/// Render a scalar [`Value`] to replace an existing scalar in place, reusing
+/// that scalar's quote style (jhheider/edikt#81).
+///
+/// Only strings carry a quote style: a number, bool, or null is written plain,
+/// since quoting it would change its type. A string keeps the old style when
+/// it can be spelled in it and falls back to double quotes (which spell
+/// anything) when it can't: a single-quoted scalar has no escapes, so a
+/// control character or line break can't go there, and a plain scalar can't
+/// hold anything [`needs_quoting`] flags. Plain has two more limits: inside a
+/// flow collection (`flow`) a `,[]{}` would end the scalar early, and a word a
+/// YAML 1.1 reader types differently (`yes`, `2001-12-14`, `1_000`) is quoted
+/// unless the replaced scalar (`old_plain`) was that same kind of word, so a
+/// file relying on 1.1 booleans can still flip `yes` to `no`.
+pub(crate) fn emit_scalar_styled(
+    value: &Value,
+    style: QuoteStyle,
+    flow: bool,
+    old_plain: &str,
+) -> Result<String, EditError> {
+    let Value::Str(s) = value else {
+        return emit_scalar_inline(value);
+    };
+    Ok(match style {
+        QuoteStyle::Double => double_quote(s),
+        QuoteStyle::Single if single_quotable(s) => single_quote(s),
+        QuoteStyle::Single => double_quote(s),
+        QuoteStyle::Plain => {
+            let yaml11 = yaml11_kind(s);
+            if needs_quoting_core(s)
+                || (flow && s.contains([',', '[', ']', '{', '}']))
+                || (yaml11.is_some() && yaml11 != yaml11_kind(old_plain))
+            {
+                double_quote(s)
+            } else {
+                s.to_string()
+            }
+        }
+    })
+}
+
+/// Split a scalar's source token into its node properties (an anchor `&a`
+/// and/or a tag `!t`, with the whitespace after them) and the scalar body.
+/// A plain scalar can't start with `&` or `!`, so a leading one is always a
+/// property.
+pub(crate) fn split_properties(token: &str) -> (&str, &str) {
+    let mut body = token;
+    while body.starts_with(['&', '!']) {
+        let len = body
+            .find([' ', '\t', ',', '[', ']', '{', '}'])
+            .unwrap_or(body.len());
+        body = body[len..].trim_start_matches([' ', '\t']);
+    }
+    token.split_at(token.len() - body.len())
+}
+
+/// The properties to keep when a scalar's value is replaced. An anchor always
+/// stays (an alias elsewhere may name it). A core-schema tag (`!!str`,
+/// `!!int`, ...) stays only while it still names the new value's type, since
+/// `!!str 5` would pin a new int back to a string; any other tag is the
+/// application's (`!Ref`, `!!binary`) and stays.
+pub(crate) fn kept_properties<'a>(props: &'a str, value: &Value) -> std::borrow::Cow<'a, str> {
+    let pieces: Vec<&str> = props.split_whitespace().collect();
+    let keep = |p: &&str| match core_tag(p) {
+        Some(ty) => ty == value_tag(value),
+        None => true,
+    };
+    if pieces.iter().all(keep) {
+        return props.into();
+    }
+    let kept: Vec<&str> = pieces.into_iter().filter(keep).collect();
+    if kept.is_empty() {
+        "".into()
+    } else {
+        format!("{} ", kept.join(" ")).into()
+    }
+}
+
+/// The core-schema type a tag names (`!!str` -> `str`), or `None` for any
+/// other tag or an anchor.
+fn core_tag(piece: &str) -> Option<&str> {
+    let ty = piece.strip_prefix("!!").or_else(|| {
+        piece
+            .strip_prefix("!<tag:yaml.org,2002:")?
+            .strip_suffix('>')
+    })?;
+    matches!(ty, "str" | "int" | "float" | "bool" | "null").then_some(ty)
+}
+
+/// The core-schema tag name of a scalar value's type.
+fn value_tag(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Int(_) => "int",
+        Value::Float(_) => "float",
+        _ => "str",
+    }
+}
+
+/// A plain word a YAML 1.1 reader (PyYAML, go-yaml v2, and the many tools built
+/// on them) resolves to a non-string, though the 1.2 core schema edikt reads by
+/// keeps it a string. Grouped by kind so a replacement of the same kind can stay
+/// plain.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Yaml11 {
+    Bool,
+    Int,
+    Timestamp,
+}
+
+fn yaml11_kind(s: &str) -> Option<Yaml11> {
+    const BOOLS: &[&str] = &[
+        "y", "Y", "yes", "Yes", "YES", "n", "N", "no", "No", "NO", "on", "On", "ON", "off", "Off",
+        "OFF",
+    ];
+    if BOOLS.contains(&s) {
+        return Some(Yaml11::Bool);
+    }
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let b = body.as_bytes();
+    let digits_or = |extra: &[u8]| b.iter().all(|c| c.is_ascii_digit() || extra.contains(c));
+    let has_digit = b.iter().any(u8::is_ascii_digit);
+    // `0b1010`, `1_000` / `1_000.5`, and base-60 `1:30` / `1:30.5`.
+    if (body.starts_with("0b")
+        && b.len() > 2
+        && b[2..].iter().all(|c| matches!(c, b'0' | b'1' | b'_')))
+        || (has_digit && body.contains('_') && digits_or(b"_."))
+        || (has_digit && b[0].is_ascii_digit() && body.contains(':') && digits_or(b":._"))
+    {
+        return Some(Yaml11::Int);
+    }
+    // A timestamp starts `YYYY-M-D`.
+    let date = s.split(['T', 't', ' ']).next().unwrap_or("");
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() == 3
+        && parts[0].len() == 4
+        && (1..=2).contains(&parts[1].len())
+        && (1..=2).contains(&parts[2].len())
+        && parts.iter().all(|p| p.bytes().all(|c| c.is_ascii_digit()))
+    {
+        return Some(Yaml11::Timestamp);
+    }
+    None
+}
+
+/// Can `s` be spelled single-quoted on one line? Only `'` has an escape there
+/// (doubled), so a character that must be escaped can't.
+fn single_quotable(s: &str) -> bool {
+    !s.chars().any(needs_escape)
+}
+
+/// `s` single-quoted, `'` doubled.
+fn single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// A character that can't appear literally in a one-line quoted scalar: a
+/// non-printable (per the YAML character set) or a line break, including the
+/// Unicode ones YAML 1.1 honours (NEL, LS, PS). Tab is printable but is escaped
+/// too, for readability and so it can't be mistaken for separation space.
+fn needs_escape(c: char) -> bool {
+    !matches!(c,
+        '\u{20}'..='\u{7E}'
+        | '\u{A0}'..='\u{2027}'
+        | '\u{202A}'..='\u{D7FF}'
+        | '\u{E000}'..='\u{FEFE}'
+        | '\u{FF00}'..='\u{FFFD}'
+        | '\u{10000}'..)
+}
+
+/// Would this string be misread (as null/bool/number, by the YAML 1.2 core
+/// schema or by a YAML 1.1 reader) or break plain style? What a fresh scalar
+/// (a new key, a conversion) goes by.
 pub(crate) fn needs_quoting(s: &str) -> bool {
+    needs_quoting_core(s) || yaml11_kind(s).is_some()
+}
+
+/// [`needs_quoting`] minus the YAML 1.1 words, which an in-place replacement
+/// weighs against the scalar it replaces.
+fn needs_quoting_core(s: &str) -> bool {
     if s.is_empty() {
         return true;
     }
@@ -174,8 +373,8 @@ pub(crate) fn needs_quoting(s: &str) -> bool {
     s.contains(": ")
         || s.contains(" #")
         || s.ends_with(':')
-        || s.bytes()
-            .any(|b| b < 0x20 || b == b'"' || b == b'\\' || b == b'\t')
+        || s.contains(['"', '\\'])
+        || s.chars().any(needs_escape)
 }
 
 /// Minimal double-quoted YAML string with the standard escapes.
@@ -190,7 +389,13 @@ fn double_quote(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
             '\0' => out.push_str("\\0"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            '\u{85}' => out.push_str("\\N"),
+            '\u{2028}' => out.push_str("\\L"),
+            '\u{2029}' => out.push_str("\\P"),
+            c if (c as u32) <= 0xFF && needs_escape(c) => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c if needs_escape(c) => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }
@@ -262,6 +467,10 @@ mod tests {
         assert_eq!(emit_string("has#hash"), "has#hash"); // '#' not preceded by space is fine
         assert_eq!(emit_string("has # comment"), "\"has # comment\""); // ' #' starts a comment
         assert_eq!(emit_string("- dash"), "\"- dash\"");
+        // A word a YAML 1.1 reader would type as a bool/int/date is quoted too.
+        assert_eq!(emit_string("yes"), "\"yes\"");
+        assert_eq!(emit_string("1_000"), "\"1_000\"");
+        assert_eq!(emit_string("2001-12-14"), "\"2001-12-14\"");
     }
 
     #[test]

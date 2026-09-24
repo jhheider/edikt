@@ -1692,3 +1692,22 @@ fn a_document_without_duplicates_converts_silently() {
     assert_eq!(code, 0);
     assert!(!err.contains("duplicate"), "stderr: {err}");
 }
+
+#[test]
+fn in_place_set_keeps_the_scalars_quote_style() {
+    // jhheider/edikt#81, as reported: the edited scalar keeps its quotes.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/quote-style-81.yaml");
+    std::fs::write(&path, "name: \"old\"\nother: \"keep\"\n").unwrap();
+    let (_o, _e, code) = run(&["-i", ".name = \"new\"", &path], "");
+    assert_eq!(code, 0);
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(after, "name: \"new\"\nother: \"keep\"\n");
+    // The frontmatter lens edits through the same engines.
+    let (out, _e, code) = run(
+        &["-t", "markdown", ".title = \"New\""],
+        "---\ntitle: 'Old'\n---\nbody \"text\"\n",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "---\ntitle: 'New'\n---\nbody \"text\"\n");
+}

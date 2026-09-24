@@ -208,6 +208,11 @@ Homebrew, and pkgx, the badge above tracks the current version. See
 - **`.env` is flat and string-valued**, no arrays or nesting, ever, but
   string computation on values works fine:
   `edikt -i '.VERSION |= sub("^v"; "")' .env`.
+- **An assigned string keeps its quotes.** In YAML, TOML, JSON5 and KDL, setting
+  `name: "old"` to `"new"` writes `name: "new"`, and a single-quoted, literal
+  or raw string stays that way. The style changes only when the new value
+  can't be written in it (a line break into single quotes, or a plain YAML
+  scalar that would read as another type, like `yes` or `1.10`).
 - **`.env` quotes are part of the value, not syntax.** There is no single `.env`
   grammar (docker-compose, dotenv libraries and shell `source` disagree), so
   edikt interprets nothing: for `APP_NAME="my app"` the value is the seven-plus

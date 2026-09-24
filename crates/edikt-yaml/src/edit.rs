@@ -17,7 +17,9 @@ use std::ops::Range;
 
 use crate::Yaml;
 use crate::compose::{Node, NodeKind, node_to_value};
-use crate::scalar::{emit_key, emit_scalar_inline};
+use crate::scalar::{
+    QuoteStyle, emit_key, emit_scalar_inline, emit_scalar_styled, kept_properties, split_properties,
+};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
 ///
@@ -287,6 +289,32 @@ fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
     }
 }
 
+/// Does the node at `path` sit inside a flow collection (`[...]`/`{...}`),
+/// where a plain scalar ends at the first `,[]{}`?
+fn in_flow(source: &str, root: &Node, path: &[Step]) -> bool {
+    let mut node = root;
+    for step in path {
+        let (_, body) = split_properties(&source[node.span.clone()]);
+        if body.starts_with(['[', '{']) {
+            return true;
+        }
+        let next = match (step, &node.kind) {
+            (Step::Field(k), NodeKind::Mapping(entries)) => {
+                entries.iter().find(|e| &e.key == k).map(|e| &e.value)
+            }
+            (Step::Index(i), NodeKind::Sequence(items)) => {
+                normalize_index(*i, items.len()).and_then(|n| items.get(n))
+            }
+            _ => None,
+        };
+        match next {
+            Some(n) => node = n,
+            None => return false,
+        }
+    }
+    false
+}
+
 fn normalize_index(i: i64, len: usize) -> Option<usize> {
     let idx = if i < 0 { len as i64 + i } else { i };
     (idx >= 0).then_some(idx as usize)
@@ -329,12 +357,20 @@ impl Yaml {
                     // scalar) can't be replaced with a single inline token without
                     // reflowing surrounding lines; refuse cleanly rather than
                     // emit something that fails to re-parse.
-                    if self.source[node.span.clone()].contains('\n') {
+                    let token = &self.source[node.span.clone()];
+                    if token.contains('\n') {
                         return Err(EditError::new(
                             "cannot set a multi-line (block `|`/`>`) scalar in place yet",
                         ));
                     }
-                    (node.span.clone(), emit_scalar_inline(value)?)
+                    // Replace the scalar body, not its properties: an anchor
+                    // may be named by an alias elsewhere, and a tag is the
+                    // file's. The new value takes the old body's quote style.
+                    let (props, body) = split_properties(token);
+                    let flow = in_flow(&self.source, self.root(idx), path);
+                    let text = emit_scalar_styled(value, QuoteStyle::of(body), flow, body)?;
+                    let text = format!("{}{text}", kept_properties(props, value));
+                    (node.span.clone(), text)
                 }
                 _ => {
                     return Err(EditError::new(

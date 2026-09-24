@@ -140,6 +140,105 @@ pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
     })
 }
 
+/// `new` as the replacement for `old`, spelled the way `old` was: a string
+/// keeps the old string's quote style where it can (see [`respell`]), and the
+/// old value's decor (surrounding spacing, an inline comment) carries over.
+pub(crate) fn replacing(old: &TomlValue, new: TomlValue) -> TomlValue {
+    let mut new = match (old, &new) {
+        (TomlValue::String(f), TomlValue::String(n)) => f
+            .as_repr()
+            .and_then(|r| r.as_raw().as_str())
+            .and_then(|raw| respell(raw, n.value()))
+            .unwrap_or(new),
+        _ => new,
+    };
+    *new.decor_mut() = old.decor().clone();
+    new
+}
+
+/// `s` spelled in the style of the string token `old` (jhheider/edikt#81),
+/// falling back to the nearest style that can hold it: a literal (`'`, `'''`)
+/// has no escapes, so a value it can't carry verbatim goes basic (`"`,
+/// `"""`), staying multi-line if the old token was. Basic strings spell
+/// anything.
+fn respell(old: &str, s: &str) -> Option<TomlValue> {
+    let text = if old.starts_with("'''") {
+        if ml_literal_ok(s) {
+            format!("'''{s}'''")
+        } else {
+            ml_basic(s)
+        }
+    } else if old.starts_with('\'') {
+        if literal_ok(s) {
+            format!("'{s}'")
+        } else {
+            basic(s)
+        }
+    } else if old.starts_with("\"\"\"") {
+        ml_basic(s)
+    } else {
+        basic(s)
+    };
+    // Parsing the spelling (rather than building a repr by hand) proves it is
+    // valid TOML for exactly this string; anything else keeps the default.
+    text.parse::<TomlValue>()
+        .ok()
+        .filter(|v| v.as_str() == Some(s))
+}
+
+/// A control character a TOML string can't hold raw (tab is allowed).
+fn is_control(c: char) -> bool {
+    c.is_ascii_control() && c != '\t'
+}
+
+fn literal_ok(s: &str) -> bool {
+    !s.chars().any(|c| c == '\'' || is_control(c))
+}
+
+/// A multi-line literal can't contain `'''`, can't end with `'` (it would run
+/// into the closing delimiter), can't start with a newline (TOML trims one
+/// there), and holds only the newline among the controls.
+fn ml_literal_ok(s: &str) -> bool {
+    !s.contains("'''")
+        && !s.ends_with('\'')
+        && !s.starts_with(['\n', '\r'])
+        && !s.chars().any(|c| c != '\n' && is_control(c))
+}
+
+/// A one-line basic string, every special character escaped.
+fn basic(s: &str) -> String {
+    format!("\"{}\"", escape(s, false))
+}
+
+/// A multi-line basic string: line breaks stay raw except a leading one (which
+/// TOML would trim), and everything else is escaped as in [`basic`].
+fn ml_basic(s: &str) -> String {
+    let body = escape(s, true);
+    match body.strip_prefix('\n') {
+        Some(rest) => format!("\"\"\"\\n{rest}\"\"\""),
+        None => format!("\"\"\"{body}\"\"\""),
+    }
+}
+
+fn escape(s: &str, raw_newlines: bool) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' if raw_newlines => out.push('\n'),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if is_control(c) => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Emit a value as TOML: top-level objects become `[table]`s (nested-in-value
 /// objects stay inline). Returns text and warnings (none; TOML holds nesting,
 /// arrays, and typed scalars).
@@ -252,7 +351,7 @@ pub(crate) fn set_array_element(
         if at == arr.len() {
             arr.push(tv);
         } else if let Some(slot) = arr.get_mut(at) {
-            *slot = tv;
+            *slot = replacing(slot, tv);
         }
     }
     Ok(())
