@@ -167,7 +167,7 @@ Seven config formats with lossless in-place edit, query, and comment-preserving
 conversion, plus a frontmatter lens (Markdown and PEP 723 host-language blocks)
 and multi-document YAML streams with `select`/`^dN` targeting. On crates.io,
 Homebrew, and pkgx, the badge above tracks the current version. See
-[`CLAUDE.md`](./CLAUDE.md) for the build contract.
+[`docs/design/contract.md`](./docs/design/contract.md) for the design contract.
 
 ## Scripting notes
 

@@ -1,7 +1,8 @@
 # edikt roadmap
 
-Backlog and direction. The build contract (invariants, CLI, architecture) lives
-in [`CLAUDE.md`](./CLAUDE.md); this file is the sequencing.
+Backlog and direction. The design contract (invariants, CLI, architecture) lives
+in [`docs/design/contract.md`](./docs/design/contract.md); this file is the
+sequencing.
 
 ## Status
 
@@ -169,7 +170,7 @@ lossless editor; we don't rebuild it (we may still *read* it for conversion).
 | flat `key = value` (`zoo.cfg`, `sysctl.conf`, `.npmrc`) | ✅ in scope (done) | handled by the env module (`-t env`) |
 | TOML | ✅ in scope (done) | full lossless edit via `toml_edit` (comments, tables, layout) |
 | YAML | ✅ in scope (done) | lossless edit + query + convert, pure Rust via `libyaml-safer`; merge keys (`<<`) resolve in queries |
-| KDL | ✅ in scope (done) | lossless via `kdl-rs` (the `toml_edit` of KDL); zellij/niri configs. Args/props/children -> `Value` per the convention in CLAUDE.md (`"-"` args key, repeats -> arrays) |
+| KDL | ✅ in scope (done) | lossless via `kdl-rs` (the `toml_edit` of KDL); zellij/niri configs. Args/props/children -> `Value` per the convention in docs/design/contract.md (`"-"` args key, repeats -> arrays) |
 | XML (`.csproj`, `pom.xml`, `web.config`) | 🟡 candidate - demand-gated | lossless XML editing is a genuinely unserved niche, but the biggest CST yet: no `toml_edit`-analog in Rust, and attributes-vs-children need a design doc + new `Feature` variants. Scope to *data-XML*; XML-plist rides as a dialect if this lands |
 | HCL (Terraform) | ⛔ served | `hcledit` already edits HCL losslessly; `terraform fmt` canonicalizes layout anyway; HCL values are *expressions* the `Value` model can't honestly project |
 | plist | ⛔ out of scope | hand-edited plists ≈ only Xcode's `project.pbxproj`, whose emitter is a moving target (the `.env` bottomless-bug-queue trap). Only ever a thin XML dialect, never standalone |
@@ -205,7 +206,7 @@ Capture each quirk as a fixture under `fixtures/ini/` as it comes up:
 - Shared dependencies go through `[workspace.dependencies]`; **crate versions are
   per-crate** so they can publish independently.
 - CI is warnings-as-errors (`check`/`clippy`), `fmt --check`, and a cross-OS test
-  matrix. Every change lands via branch -> PR -> green CI -> squash-merge.
+  matrix. Every change lands via branch -> PR -> green CI -> merge (not squash).
 - **Apply formatting before committing** (`cargo fmt --all`, not just
   `--check`), and never gate on a *piped* check: `cargo fmt --check | tail &&
   echo ok` reports the pipe's exit status (0), not fmt's, which once masked
