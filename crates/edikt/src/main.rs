@@ -22,9 +22,10 @@ use std::process::ExitCode;
 #[command(
     name = "edikt",
     version,
-    about = "Lossless, format-preserving config editor: JSONC, INI, .env, TOML, YAML, KDL.",
+    about = "Lossless, format-preserving config editor: JSONC, INI, .env, TOML, YAML, KDL, Markdown frontmatter.",
     long_about = "Query and losslessly edit JSONC/JSON5, INI, .env/.properties, TOML, \
-YAML, and KDL with a jq-flavored expression language, changing only the bytes you \
+YAML, KDL, and the frontmatter of Markdown files and PEP 723 scripts with a \
+jq-flavored expression language, changing only the bytes you \
 target and leaving comments and layout untouched. Convert between formats with -T. \
 Reads stdin and writes stdout by default, like sed.",
     after_help = "Examples:
