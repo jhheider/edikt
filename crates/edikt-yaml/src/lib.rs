@@ -709,6 +709,13 @@ mod tests {
             edit(seq, ".xs += [3]"),
             "xs:\r\n  - 1\r\n  - 2\r\n  - 3\r\n"
         );
+        // Emptying a block container keeps the line's CRLF (its `\r` used to
+        // go with the removed items, leaving a lone `\n`).
+        assert_eq!(
+            edit("a:\r\n  - 1\r\nb: 2\r\n", "del(.a[])"),
+            "a: []\r\nb: 2\r\n"
+        );
+        assert_eq!(edit("o:\r\n  x: 1\r\n", "del(.o[])"), "o: {}\r\n");
     }
 
     #[test]

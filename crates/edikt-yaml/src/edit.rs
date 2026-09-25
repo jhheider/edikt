@@ -480,12 +480,16 @@ impl Yaml {
         };
         // block_end consumes the trailing newline; the empty rewrite keeps it.
         let end_of = |n: &Node| -> usize {
-            let e = block_end(&self.source, n);
-            if e > n.span.start && self.source.as_bytes().get(e - 1) == Some(&b'\n') {
-                e - 1
-            } else {
-                e
+            let mut e = block_end(&self.source, n);
+            let bytes = self.source.as_bytes();
+            if e > n.span.start && bytes.get(e - 1) == Some(&b'\n') {
+                e -= 1;
+                // A CRLF file keeps its `\r`: the rewrite stops before the break.
+                if e > n.span.start && bytes.get(e - 1) == Some(&b'\r') {
+                    e -= 1;
+                }
             }
+            e
         };
         match prefix.split_last() {
             // Root container (`del(.[])`): replace the whole document's bytes.
