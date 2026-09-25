@@ -9,15 +9,18 @@
 //!
 //! The moat holds: an edit replaces exactly the targeted node's bytes; comments,
 //! indentation, quote style, and layout of every untouched region survive
-//! byte-for-byte. Restructuring a block in place (replacing a whole
-//! mapping/sequence, or creating nested keys) is refused rather than reflowed -
-//! edikt never rewrites what it didn't target.
+//! byte-for-byte. A new mapping or sequence is written in the file's own
+//! layout (block under block, flow under flow, at its indent width), and only
+//! the targeted value's bytes change: edikt never rewrites what it didn't
+//! target.
 
 mod comments;
 mod compose;
 mod edit;
 mod emit;
+mod layout;
 mod scalar;
+mod splice;
 
 use compose::{Node, node_to_value};
 // The edikt-core types that appear in this crate's own public API, re-exported
@@ -646,13 +649,12 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_replace_a_mapping() {
-        let mut doc = parse(SAMPLE).unwrap();
-        let err = doc
-            .apply(&parse_expr(".web = 1").unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("mapping or sequence"), "got: {err}");
+    fn replaces_a_mapping_leaving_the_rest() {
+        // Once refused (jhheider/edikt#83); the splice tests cover the layouts.
+        assert_eq!(
+            edit(SAMPLE, ".web = 1"),
+            "# services\nweb: 1\ndebug: false\n"
+        );
     }
 
     #[test]
@@ -970,11 +972,10 @@ mod tests {
         assert!(e("xs:\n  - 1\n", ".xs[5] = 9").contains("path not found"));
         assert!(e("a: 1\n", ".xs[] = 1").contains("cannot create through `[]`"));
         assert!(e("a: 1\n", ".a.# = \"x\"").contains("path not found"));
-        // A new key on an empty (flow) mapping can't match an entry's indent.
-        assert!(e("foo: {}\n", ".foo.bar = 1").contains("empty or flow"));
-        // Append onto empty / flow sequences is refused cleanly.
-        assert!(e("xs: []\n", ".xs += [1]").contains("empty sequence"));
-        assert!(e("xs: [1, 2]\n", ".xs += [3]").contains("flow sequence"));
+        // Growing a multi-line flow collection would reflow it: refused.
+        assert!(e("xs: [1,\n  2]\n", ".xs += [3]").contains("multi-line flow"));
+        // A multi-line scalar can't become a collection in place either.
+        assert!(e("k: |\n  text\n", ".k = [1]").contains("multi-line"));
     }
 
     #[test]

@@ -85,8 +85,8 @@ fn parse_float(s: &str) -> Option<f64> {
 }
 
 /// Render a scalar [`Value`] to inline YAML bytes suitable for splicing in place
-/// of an existing scalar. Collections error; restructuring a block in place
-/// isn't lossless, so edikt refuses rather than reflow.
+/// of an existing scalar. A collection has no single inline spelling; callers
+/// lay those out with [`crate::layout`], so one reaching here is a bug.
 pub(crate) fn emit_scalar_inline(value: &Value) -> Result<String, EditError> {
     match value {
         Value::Null => Ok("null".to_string()),
@@ -95,8 +95,7 @@ pub(crate) fn emit_scalar_inline(value: &Value) -> Result<String, EditError> {
         Value::Float(f) => Ok(format_float(*f)),
         Value::Str(s) => Ok(emit_string(s)),
         Value::Array(_) | Value::Object(_) => Err(EditError::new(
-            "edikt sets scalar values in YAML losslessly; it can't yet replace or \
-             create a mapping/sequence in block context",
+            "internal: a mapping or sequence reached the inline scalar emitter",
         )),
     }
 }
@@ -200,7 +199,7 @@ pub(crate) fn split_properties(token: &str) -> (&str, &str) {
     let mut body = token;
     while body.starts_with(['&', '!']) {
         let len = body
-            .find([' ', '\t', ',', '[', ']', '{', '}'])
+            .find([' ', '\t', '\n', '\r', ',', '[', ']', '{', '}'])
             .unwrap_or(body.len());
         body = body[len..].trim_start_matches([' ', '\t']);
     }
@@ -237,17 +236,23 @@ fn core_tag(piece: &str) -> Option<&str> {
             .strip_prefix("!<tag:yaml.org,2002:")?
             .strip_suffix('>')
     })?;
-    matches!(ty, "str" | "int" | "float" | "bool" | "null").then_some(ty)
+    matches!(
+        ty,
+        "str" | "int" | "float" | "bool" | "null" | "seq" | "map"
+    )
+    .then_some(ty)
 }
 
-/// The core-schema tag name of a scalar value's type.
+/// The core-schema tag name of a value's type.
 fn value_tag(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "bool",
         Value::Int(_) => "int",
         Value::Float(_) => "float",
-        _ => "str",
+        Value::Str(_) => "str",
+        Value::Array(_) => "seq",
+        Value::Object(_) => "map",
     }
 }
 
@@ -494,12 +499,12 @@ mod tests {
 
     #[test]
     fn inline_refuses_collections() {
-        // A block mapping/sequence can't be spliced in as an inline token.
+        // A collection is laid out by `layout`, never spelled as one token.
         let err = emit_scalar_inline(&Value::Array(vec![Value::Int(1)]))
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("mapping/sequence in block context"),
+            err.contains("reached the inline scalar emitter"),
             "got: {err}"
         );
         assert!(emit_scalar_inline(&Value::Object(vec![])).is_err());

@@ -281,6 +281,25 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   else. (There is no single `.env` grammar: docker-compose, dotenv libs, and
   shell `source` disagree, so "correctly" parsing it is a bottomless bug queue.
   We don't.)
+- **YAML** - a byte splice over the span tree (see Architecture). Assigning
+  a **mapping or sequence** writes it in the file's own layout (#83): **flow
+  under flow** (a slot inside `[...]`/`{...}`, or a value that already was a
+  flow collection, takes the single-line flow spelling, and a key or item added
+  to a single-line flow collection joins it in place), **block under block**
+  otherwise, indented like the file: the most common nesting offset among its
+  existing blocks, and sequences at their key's own column (`key:\n- a`) if
+  that is how the file writes them; two spaces when nothing is nested to learn
+  from. An empty collection is `[]`/`{}`, and a sequence item holding a
+  collection opens on its dash line (`- k: v`, `- - x`). A comment beside a
+  replaced scalar stays on its line, a key's comment stays on the key line when
+  its block becomes a scalar, and comments inside a replaced block go with it,
+  as with `del(.a[])`. A replacement that keeps a collection's shape (the same
+  kind, its existing keys in order or its existing items, anything new after
+  them) edits only the elements that change, so `.tags |= . + ["x"]` appends
+  one line and assigning a collection its own value changes no bytes; any
+  other replacement rewrites the collection, keeping its anchor. Refused rather
+  than reflowed: a multi-line (`|`/`>`) scalar in place, growing a multi-line
+  flow collection, and creating keys through a missing parent.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,
@@ -297,7 +316,7 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
   occurrences); replacing a whole node body wholesale is refused rather than
-  reflowed, like YAML.
+  reflowed.
 - **Frontmatter** (`edikt-frontmatter`, `-t markdown`): a **lens**, not a
   format. It splits the file into an opaque opening fence, the metadata block,
   and an opaque suffix (closing fence plus the whole body), hands the block to

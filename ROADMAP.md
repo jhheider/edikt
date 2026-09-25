@@ -72,7 +72,8 @@ Release infra is intentionally **last**: build the capability, then ship it.
   query + convert, **pure Rust** via `libyaml-safer` (safe port of the reference
   parser, zero transitive deps). One parse pass -> a span tree that is both the
   data model and the byte-splice edit map; set/`|=`/`+=`/`del`/new-key all
-  preserve comments and layout; merge keys (`<<`) resolve in queries. Replaced
+  preserve comments and layout, and a new mapping or sequence is written in
+  the file's own layout (#83); merge keys (`<<`) resolve in queries. Replaced
   the serde floor; the greenfield-CST / `yqlib-sys` paths are moot.
 - ✅ **Output follows the format.** A structural query result is returned in the
   document's format: a **pure-path** result (`.services`) as the original

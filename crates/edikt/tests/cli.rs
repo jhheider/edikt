@@ -1711,3 +1711,30 @@ fn in_place_set_keeps_the_scalars_quote_style() {
     assert_eq!(code, 0);
     assert_eq!(out, "---\ntitle: 'New'\n---\nbody \"text\"\n");
 }
+
+#[test]
+fn yaml_assigns_a_block_sequence_in_place() {
+    // jhheider/edikt#83: a list-valued key lands in block style, indented like
+    // its siblings, with a `created` note; the rest of the file is untouched.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let y = format!("{dir}/registry-83.yaml");
+    let src = "places:\n  city:\n    name: Bahía Carmesí\n    aliases:\n      - the bay\n";
+    std::fs::write(&y, src).unwrap();
+    let (_o, err, code) = run(
+        &[
+            "-i",
+            r#".places.city.deprecated_aliases = ["Puerto Jubilar", "Crimson Bay"]"#,
+            &y,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("created `.places.city.deprecated_aliases`"),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&y).unwrap(),
+        format!("{src}    deprecated_aliases:\n      - Puerto Jubilar\n      - Crimson Bay\n")
+    );
+}
