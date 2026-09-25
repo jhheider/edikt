@@ -1738,3 +1738,30 @@ fn yaml_assigns_a_block_sequence_in_place() {
         format!("{src}    deprecated_aliases:\n      - Puerto Jubilar\n      - Crimson Bay\n")
     );
 }
+
+#[test]
+fn yaml_creates_missing_parents_with_a_note_per_path() {
+    // jhheider/edikt#85: plain `=` creates missing levels in YAML as in every
+    // format, and each created path gets its own `created` note.
+    let (out, err, code) = run(&["-t", "yaml", ".b.c = 1 | .d.e = [2]"], "a:\n    x: 1\n");
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "a:\n    x: 1\nb:\n    c: 1\nd:\n    e:\n        - 2\n");
+    assert!(err.contains("created `.b.c` (was missing)"), "{err}");
+    assert!(err.contains("created `.d.e` (was missing)"), "{err}");
+    // A stream: one note per document, and each document gets the levels.
+    let (out2, err2, code2) = run(
+        &["-t", "yaml", ".m.z = 1"],
+        "---\nk: A\n---\nk: B\nm:\n  x: 1\n",
+    );
+    assert_eq!(code2, 0, "{err2}");
+    assert_eq!(
+        out2,
+        "---\nk: A\nm:\n  z: 1\n---\nk: B\nm:\n  x: 1\n  z: 1\n"
+    );
+    assert!(err2.contains("created `.m.z` in document 0"), "{err2}");
+    assert!(err2.contains("created `.m.z` in document 1"), "{err2}");
+    // `--no-vivify` still refuses before anything is written.
+    let (_o3, err3, code3) = run(&["-t", "yaml", "--no-vivify", ".b.c = 1"], "a: 1\n");
+    assert_eq!(code3, 2);
+    assert!(err3.contains("not auto-creating"), "{err3}");
+}

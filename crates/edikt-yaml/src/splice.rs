@@ -525,6 +525,47 @@ mod tests {
     }
 
     #[test]
+    fn assignment_creates_missing_parents() {
+        // jhheider/edikt#85: `=` creates every missing level, laid out like
+        // any new collection. Under a block mapping, at the file's width:
+        assert_eq!(
+            edit("a:\n    x: 1\n", ".a.b.c = [1]"),
+            "a:\n    x: 1\n    b:\n        c:\n            - 1\n"
+        );
+        // At the root, and after a file without a trailing newline.
+        assert_eq!(edit("a: 1\n", ".b.c = 1"), "a: 1\nb:\n  c: 1\n");
+        assert_eq!(edit("a: 1", ".b.c = 1"), "a: 1\nb:\n  c: 1");
+        // Under a compact list item, at that mapping's column.
+        assert_eq!(
+            edit("xs:\n  - a: 1\n", r#".xs[0].b.c = "v""#),
+            "xs:\n  - a: 1\n    b:\n      c: v\n"
+        );
+        // Indentless sequences stay indentless in the created levels.
+        assert_eq!(
+            edit("m:\n    x:\n    - 1\n", ".m.k.l = [1, 2]"),
+            "m:\n    x:\n    - 1\n    k:\n        l:\n        - 1\n        - 2\n"
+        );
+        // In an empty or flow parent, flow.
+        assert_eq!(edit("f: {}\n", ".f.a.b = 1"), "f: {a: {b: 1}}\n");
+        assert_eq!(
+            edit("f: {a: 1}\n", ".f.b.c = [1]"),
+            "f: {a: 1, b: {c: [1]}}\n"
+        );
+        // CRLF files get CRLF lines.
+        assert_eq!(edit("a: 1\r\n", ".b.c = 1"), "a: 1\r\nb:\r\n  c: 1\r\n");
+        // Every document of a stream gets the missing levels.
+        assert_eq!(
+            edit("---\nk: A\n---\nk: B\nm:\n  x: 1\n", ".m.z = 1"),
+            "---\nk: A\nm:\n  z: 1\n---\nk: B\nm:\n  x: 1\n  z: 1\n"
+        );
+        // No array elements out of thin air, and no key inside a scalar.
+        assert!(edit_err("a: 1\n", ".b.c[0] = 1").contains("cannot create array elements"));
+        assert!(edit_err("a: 1\n", ".a.b = 1").contains("path not found"));
+        // `|=` and `+=` still need the path to exist.
+        assert!(edit_err("a: 1\n", ".b.c |= 1").contains("path not found"));
+    }
+
+    #[test]
     fn roots_aliases_streams_and_crlf() {
         assert_eq!(edit("- 1\n- 2\n", ". = {a: [1]}"), "a:\n  - 1\n");
         assert_eq!(edit("a: 1\n", ". = [1]"), "- 1\n");
@@ -636,6 +677,28 @@ mod corpus {
                             assert_eq!(got.doc_value(idx), want, "{path:?} = {shape:?}");
                         }
                         checked += 1;
+                    }
+                    // Under every mapping, `=` creates two missing levels
+                    // (jhheider/edikt#85) and they read back as assigned.
+                    let base = parse(&src).unwrap();
+                    if matches!(base.value_at(idx, path), Some(Value::Object(_))) {
+                        let deep = [
+                            path.clone(),
+                            vec![Step::Field("zz_new".into()), Step::Field("deep".into())],
+                        ]
+                        .concat();
+                        for shape in &shapes {
+                            let mut doc = parse(&src).unwrap();
+                            match doc.set(idx, &deep, shape, Strictness::Strict) {
+                                Ok(()) => {}
+                                // A mapping reached only through an alias or a merge.
+                                Err(e) if e.to_string().contains("path not found") => continue,
+                                Err(e) => panic!("{deep:?} = {shape:?}: {e}\n{src}"),
+                            }
+                            let got = parse(&doc.to_source()).unwrap();
+                            assert_eq!(got.value_at(idx, &deep).as_ref(), Some(shape), "{deep:?}");
+                            checked += 1;
+                        }
                     }
                 }
             }

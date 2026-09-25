@@ -297,9 +297,11 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   kind, its existing keys in order or its existing items, anything new after
   them) edits only the elements that change, so `.tags |= . + ["x"]` appends
   one line and assigning a collection its own value changes no bytes; any
-  other replacement rewrites the collection, keeping its anchor. Refused rather
-  than reflowed: a multi-line (`|`/`>`) scalar in place, growing a multi-line
-  flow collection, and creating keys through a missing parent.
+  other replacement rewrites the collection, keeping its anchor. Plain `=`
+  creates missing parent mappings at any depth (#85), laid out by the same
+  rules, in every document of a stream; it can't create an array element or
+  a key inside a scalar. Refused rather than reflowed: a multi-line (`|`/`>`)
+  scalar in place, and growing a multi-line flow collection.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,

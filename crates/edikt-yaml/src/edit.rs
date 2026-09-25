@@ -9,10 +9,10 @@
 //! Supported: setting any value (`=`, `|=`), a scalar or a mapping/sequence in
 //! place of either; appending items to a sequence (`+=`); deleting a mapping
 //! entry or a sequence item (`del`); and creating a new **leaf key** on an
-//! existing mapping. A new collection is laid out in the file's own style (see
-//! [`crate::splice`]); a replacement that keeps a collection's shape edits
-//! only the elements that change. Creating nested keys through a missing
-//! parent is refused rather than guessed at.
+//! existing mapping, with any missing parent mappings above it (`=` creates
+//! them, as in every format). A new collection is laid out in the file's own
+//! style (see [`crate::splice`]); a replacement that keeps a collection's
+//! shape edits only the elements that change.
 
 use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, render_path};
 use std::ops::Range;
@@ -249,16 +249,24 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
 }
 
 /// The result of walking a path over the span tree.
-enum Resolved<'a> {
+enum Resolved<'a, 'p> {
     /// The path landed on an existing node.
     Found(&'a Node),
-    /// The path's final field is absent on this (existing) mapping: an insert point.
-    MissingField { parent: &'a Node, key: String },
+    /// Field `key` is absent on this (existing) mapping: an insert point.
+    /// `rest` is the rest of the path below it (empty for a leaf key), all
+    /// fields; `=` creates those levels as nested mappings (jhheider/edikt#85).
+    MissingField {
+        parent: &'a Node,
+        key: String,
+        rest: &'p [Step],
+    },
+    /// A missing key with an index below it: `=` can't invent array elements.
+    Uncreatable,
     /// The path does not resolve (bad step, missing intermediate, out of range).
     NotFound,
 }
 
-fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
+fn resolve<'a, 'p>(node: &'a Node, path: &'p [Step]) -> Resolved<'a, 'p> {
     let Some((step, rest)) = path.split_first() else {
         return Resolved::Found(node);
     };
@@ -266,10 +274,14 @@ fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
         Step::Field(k) => match &node.kind {
             NodeKind::Mapping(entries) => match entries.iter().find(|e| &e.key == k) {
                 Some(e) => resolve(&e.value, rest),
-                None if rest.is_empty() => Resolved::MissingField {
-                    parent: node,
-                    key: k.clone(),
-                },
+                None if rest.iter().all(|s| matches!(s, Step::Field(_))) => {
+                    Resolved::MissingField {
+                        parent: node,
+                        key: k.clone(),
+                        rest,
+                    }
+                }
+                None if rest.iter().any(|s| matches!(s, Step::Index(_))) => Resolved::Uncreatable,
                 None => Resolved::NotFound,
             },
             _ => Resolved::NotFound,
@@ -343,7 +355,7 @@ impl Yaml {
     }
 
     /// Set the value at `path` in document `idx`, or create it as a new leaf
-    /// key. A path that doesn't resolve is an error when strict, a no-op when
+    /// key, creating any missing mappings above it. A path that doesn't resolve is an error when strict, a no-op when
     /// lenient (one of many mapped documents).
     pub(crate) fn set(
         &mut self,
@@ -354,10 +366,22 @@ impl Yaml {
     ) -> Result<(), EditError> {
         let (range, text) = match resolve(self.root(idx), path) {
             Resolved::Found(_) => return self.replace(idx, path, value, strict),
-            Resolved::MissingField { parent, key } => {
+            Resolved::MissingField { parent, key, rest } => {
+                // Missing levels below the key are created as nested mappings,
+                // laid out like any other new collection (jhheider/edikt#85).
+                let value = nest(rest, value);
                 let indent = Indent::infer(&self.source, &self.docs);
-                new_key(&self.source, parent, &key, value, indent)?
+                new_key(&self.source, parent, &key, &value, indent)?
             }
+            Resolved::Uncreatable => match strict {
+                Strictness::Strict => {
+                    return Err(EditError::new(format!(
+                        "cannot create array elements by index: {}",
+                        render_path(path)
+                    )));
+                }
+                Strictness::Lenient => return Ok(()),
+            },
             Resolved::NotFound => return miss(strict, path),
         };
         self.commit(range, &text)
@@ -596,6 +620,17 @@ impl Yaml {
         self.docs = docs;
         Ok(())
     }
+}
+
+/// The nested mapping a missing path's tail names: `[.b, .c]` with `v` is
+/// `{b: {c: v}}`. `rest` is all fields ([`resolve`] guarantees it).
+fn nest(rest: &[Step], value: &Value) -> Value {
+    rest.iter()
+        .rev()
+        .fold(value.clone(), |inner, step| match step {
+            Step::Field(k) => Value::Object(vec![(k.clone(), inner)]),
+            _ => inner,
+        })
 }
 
 /// Where the node at `path` sits: the document root, a mapping value (with

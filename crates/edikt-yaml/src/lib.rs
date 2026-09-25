@@ -257,12 +257,13 @@ mod tests {
     }
 
     #[test]
-    fn multidoc_edit_skips_documents_without_the_parent() {
-        // Doc B has no `.meta`, so it is a no-op there; doc A is edited.
+    fn multidoc_edit_creates_the_parent_where_it_is_missing() {
+        // The contract: `=` auto-creates in each document (jhheider/edikt#85).
+        // Doc A is edited; doc B has no `.meta`, so it gains one.
         let s = "---\nkind: A\nmeta:\n  name: foo\n---\nkind: B\n";
         assert_eq!(
             edit(s, r#".meta.name = "bar""#),
-            "---\nkind: A\nmeta:\n  name: bar\n---\nkind: B\n"
+            "---\nkind: A\nmeta:\n  name: bar\n---\nkind: B\nmeta:\n  name: bar\n"
         );
     }
 
@@ -302,13 +303,15 @@ mod tests {
     }
 
     #[test]
-    fn single_document_behavior_is_unchanged() {
-        // No `---`: strict single-doc semantics; a missing path still errors.
-        let mut doc = parse("a: 1\n").unwrap();
-        assert!(
-            doc.apply(&parse_expr(".missing.deep = 2").unwrap())
-                .is_err()
+    fn single_document_creates_missing_parents() {
+        // No `---`: plain `=` creates the missing levels (jhheider/edikt#85);
+        // a path that runs into a scalar still errors.
+        assert_eq!(
+            edit("a: 1\n", ".missing.deep = 2"),
+            "a: 1\nmissing:\n  deep: 2\n"
         );
+        let mut doc = parse("a: 1\n").unwrap();
+        assert!(doc.apply(&parse_expr(".a.deep = 2").unwrap()).is_err());
     }
 
     #[test]
@@ -327,12 +330,21 @@ mod tests {
 
     #[test]
     fn multidoc_positional_select_is_strict() {
-        // A named document is strict: a missing path errors (you asked for that
-        // document specifically), unlike the lenient map-over-all default.
+        // A named document is strict: a path `|=` can't find, or `=` can't
+        // create, errors (you asked for that document specifically), unlike
+        // the lenient map-over-all default. Plain `=` still creates.
         let mut doc = parse(STREAM).unwrap();
         assert!(
-            doc.apply(&parse_expr("^d1 | .no.such = 1").unwrap())
+            doc.apply(&parse_expr("^d1 | .no.such |= 1").unwrap())
                 .is_err()
+        );
+        assert!(
+            doc.apply(&parse_expr("^d1 | .kind.such = 1").unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            edit(STREAM, "^d1 | .extra.such = 1"),
+            format!("{STREAM}extra:\n  such: 1\n")
         );
     }
 
@@ -963,11 +975,12 @@ mod tests {
         // `del` with the wrong arity, and `del` of the whole document.
         assert!(e("a: 1\n", "del(.a; .b)").contains("one path"));
         assert!(e("a: 1\n", "del(.)").contains("whole document"));
-        // Set through a missing intermediate key (Field on a mapping, no key),
-        // a Field into a non-mapping, and an out-of-range index all report
-        // "path not found". Creating through an iterate is refused outright; a
-        // comment step is not a value path.
-        assert!(e("a: 1\n", ".missing.child = 1").contains("path not found"));
+        // A Field into a scalar or a non-mapping, and an out-of-range index,
+        // report "path not found". Creating an array element under a missing
+        // key, or through an iterate, is refused outright; a comment step is
+        // not a value path.
+        assert!(e("a: 1\n", ".a.child = 1").contains("path not found"));
+        assert!(e("a: 1\n", ".m[0].x = 1").contains("cannot create array elements"));
         assert!(e("xs:\n  - 1\n", ".xs.name = 1").contains("path not found"));
         assert!(e("xs:\n  - 1\n", ".xs[5] = 9").contains("path not found"));
         assert!(e("a: 1\n", ".xs[] = 1").contains("cannot create through `[]`"));
