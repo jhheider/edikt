@@ -45,8 +45,9 @@ Each is spelled out, with its reason, in the contract.
   quoting semantics, or storage coercion.
 - **`envspaced` is never auto-detected**, and it is not an `ssh_config` parser.
 - **A compact/flow target refuses an own-line comment** ("needs layout
-  expansion") rather than reflowing bytes. KDL and YAML refuse wholesale
-  replacement of a node body for the same reason.
+  expansion") rather than reflowing bytes. KDL refuses wholesale replacement
+  of a node body for the same reason; YAML instead writes a new mapping or
+  sequence in the file's own layout (flow under flow, block at its indent).
 - **Nothing is emitted in a spelling the file did not already use** (JSON5
   spellings in a `.jsonc`, a non-finite number into strict JSON errors).
 - **Hyphenated bare keys work only on an assignment LHS or an object key.** In a

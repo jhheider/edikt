@@ -9,15 +9,18 @@
 //!
 //! The moat holds: an edit replaces exactly the targeted node's bytes; comments,
 //! indentation, quote style, and layout of every untouched region survive
-//! byte-for-byte. Restructuring a block in place (replacing a whole
-//! mapping/sequence, or creating nested keys) is refused rather than reflowed -
-//! edikt never rewrites what it didn't target.
+//! byte-for-byte. A new mapping or sequence is written in the file's own
+//! layout (block under block, flow under flow, at its indent width), and only
+//! the targeted value's bytes change: edikt never rewrites what it didn't
+//! target.
 
 mod comments;
 mod compose;
 mod edit;
 mod emit;
+mod layout;
 mod scalar;
+mod splice;
 
 use compose::{Node, node_to_value};
 // The edikt-core types that appear in this crate's own public API, re-exported
@@ -254,12 +257,13 @@ mod tests {
     }
 
     #[test]
-    fn multidoc_edit_skips_documents_without_the_parent() {
-        // Doc B has no `.meta`, so it is a no-op there; doc A is edited.
+    fn multidoc_edit_creates_the_parent_where_it_is_missing() {
+        // The contract: `=` auto-creates in each document (jhheider/edikt#85).
+        // Doc A is edited; doc B has no `.meta`, so it gains one.
         let s = "---\nkind: A\nmeta:\n  name: foo\n---\nkind: B\n";
         assert_eq!(
             edit(s, r#".meta.name = "bar""#),
-            "---\nkind: A\nmeta:\n  name: bar\n---\nkind: B\n"
+            "---\nkind: A\nmeta:\n  name: bar\n---\nkind: B\nmeta:\n  name: bar\n"
         );
     }
 
@@ -299,13 +303,15 @@ mod tests {
     }
 
     #[test]
-    fn single_document_behavior_is_unchanged() {
-        // No `---`: strict single-doc semantics; a missing path still errors.
-        let mut doc = parse("a: 1\n").unwrap();
-        assert!(
-            doc.apply(&parse_expr(".missing.deep = 2").unwrap())
-                .is_err()
+    fn single_document_creates_missing_parents() {
+        // No `---`: plain `=` creates the missing levels (jhheider/edikt#85);
+        // a path that runs into a scalar still errors.
+        assert_eq!(
+            edit("a: 1\n", ".missing.deep = 2"),
+            "a: 1\nmissing:\n  deep: 2\n"
         );
+        let mut doc = parse("a: 1\n").unwrap();
+        assert!(doc.apply(&parse_expr(".a.deep = 2").unwrap()).is_err());
     }
 
     #[test]
@@ -324,12 +330,21 @@ mod tests {
 
     #[test]
     fn multidoc_positional_select_is_strict() {
-        // A named document is strict: a missing path errors (you asked for that
-        // document specifically), unlike the lenient map-over-all default.
+        // A named document is strict: a path `|=` can't find, or `=` can't
+        // create, errors (you asked for that document specifically), unlike
+        // the lenient map-over-all default. Plain `=` still creates.
         let mut doc = parse(STREAM).unwrap();
         assert!(
-            doc.apply(&parse_expr("^d1 | .no.such = 1").unwrap())
+            doc.apply(&parse_expr("^d1 | .no.such |= 1").unwrap())
                 .is_err()
+        );
+        assert!(
+            doc.apply(&parse_expr("^d1 | .kind.such = 1").unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            edit(STREAM, "^d1 | .extra.such = 1"),
+            format!("{STREAM}extra:\n  such: 1\n")
         );
     }
 
@@ -538,6 +553,20 @@ mod tests {
     }
 
     #[test]
+    fn new_key_in_compact_sequence_item_joins_that_mapping() {
+        // The new key sits at the last key's column; copying that line's
+        // literal prefix (`  - `) used to start a new item instead.
+        assert_eq!(
+            edit("xs:\n  - a: 1\n", ".xs[0].b = 2"),
+            "xs:\n  - a: 1\n    b: 2\n"
+        );
+        assert_eq!(
+            edit("- - x\n  - k: 1\n", ".[0][1].j = 2"),
+            "- - x\n  - k: 1\n    j: 2\n"
+        );
+    }
+
+    #[test]
     fn new_root_key_at_column_zero() {
         let out = edit(SAMPLE, ".name = \"stack\"");
         assert!(out.ends_with("debug: false\nname: stack\n"));
@@ -632,13 +661,12 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_replace_a_mapping() {
-        let mut doc = parse(SAMPLE).unwrap();
-        let err = doc
-            .apply(&parse_expr(".web = 1").unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("mapping or sequence"), "got: {err}");
+    fn replaces_a_mapping_leaving_the_rest() {
+        // Once refused (jhheider/edikt#83); the splice tests cover the layouts.
+        assert_eq!(
+            edit(SAMPLE, ".web = 1"),
+            "# services\nweb: 1\ndebug: false\n"
+        );
     }
 
     #[test]
@@ -695,6 +723,13 @@ mod tests {
             edit(seq, ".xs += [3]"),
             "xs:\r\n  - 1\r\n  - 2\r\n  - 3\r\n"
         );
+        // Emptying a block container keeps the line's CRLF (its `\r` used to
+        // go with the removed items, leaving a lone `\n`).
+        assert_eq!(
+            edit("a:\r\n  - 1\r\nb: 2\r\n", "del(.a[])"),
+            "a: []\r\nb: 2\r\n"
+        );
+        assert_eq!(edit("o:\r\n  x: 1\r\n", "del(.o[])"), "o: {}\r\n");
     }
 
     #[test]
@@ -940,20 +975,20 @@ mod tests {
         // `del` with the wrong arity, and `del` of the whole document.
         assert!(e("a: 1\n", "del(.a; .b)").contains("one path"));
         assert!(e("a: 1\n", "del(.)").contains("whole document"));
-        // Set through a missing intermediate key (Field on a mapping, no key),
-        // a Field into a non-mapping, and an out-of-range index all report
-        // "path not found". Creating through an iterate is refused outright; a
-        // comment step is not a value path.
-        assert!(e("a: 1\n", ".missing.child = 1").contains("path not found"));
+        // A Field into a scalar or a non-mapping, and an out-of-range index,
+        // report "path not found". Creating an array element under a missing
+        // key, or through an iterate, is refused outright; a comment step is
+        // not a value path.
+        assert!(e("a: 1\n", ".a.child = 1").contains("path not found"));
+        assert!(e("a: 1\n", ".m[0].x = 1").contains("cannot create array elements"));
         assert!(e("xs:\n  - 1\n", ".xs.name = 1").contains("path not found"));
         assert!(e("xs:\n  - 1\n", ".xs[5] = 9").contains("path not found"));
         assert!(e("a: 1\n", ".xs[] = 1").contains("cannot create through `[]`"));
         assert!(e("a: 1\n", ".a.# = \"x\"").contains("path not found"));
-        // A new key on an empty (flow) mapping can't match an entry's indent.
-        assert!(e("foo: {}\n", ".foo.bar = 1").contains("empty or flow"));
-        // Append onto empty / flow sequences is refused cleanly.
-        assert!(e("xs: []\n", ".xs += [1]").contains("empty sequence"));
-        assert!(e("xs: [1, 2]\n", ".xs += [3]").contains("flow sequence"));
+        // Growing a multi-line flow collection would reflow it: refused.
+        assert!(e("xs: [1,\n  2]\n", ".xs += [3]").contains("multi-line flow"));
+        // A multi-line scalar can't become a collection in place either.
+        assert!(e("k: |\n  text\n", ".k = [1]").contains("multi-line"));
     }
 
     #[test]

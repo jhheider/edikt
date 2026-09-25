@@ -6,20 +6,22 @@
 //! untouched. After each splice we recompose from the new source, so a later step
 //! in the same program sees the updated document.
 //!
-//! Supported losslessly today: setting a **scalar** value (`=`, `|=`), appending
-//! scalar items to a **block sequence** (`+=`), deleting a mapping entry or a
-//! sequence item (`del`), and creating a new **leaf key** on an existing block
-//! mapping. Restructuring a block in place (replacing a mapping/sequence wholesale,
-//! or creating nested keys) is refused rather than reflowed.
+//! Supported: setting any value (`=`, `|=`), a scalar or a mapping/sequence in
+//! place of either; appending items to a sequence (`+=`); deleting a mapping
+//! entry or a sequence item (`del`); and creating a new **leaf key** on an
+//! existing mapping, with any missing parent mappings above it (`=` creates
+//! them, as in every format). A new collection is laid out in the file's own
+//! style (see [`crate::splice`]); a replacement that keeps a collection's
+//! shape edits only the elements that change.
 
 use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, render_path};
 use std::ops::Range;
 
 use crate::Yaml;
-use crate::compose::{Node, NodeKind, node_to_value};
-use crate::scalar::{
-    QuoteStyle, emit_key, emit_scalar_inline, emit_scalar_styled, kept_properties, split_properties,
-};
+use crate::compose::{Node, NodeKind, collect_merge, node_to_value};
+use crate::layout::{Indent, flow_text, inline_text, is_flow, line_start};
+use crate::scalar::{QuoteStyle, emit_scalar_styled, kept_properties, split_properties};
+use crate::splice::{Slot, append_items, block_replace, new_key, scalar_to_block};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
 ///
@@ -247,16 +249,24 @@ fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
 }
 
 /// The result of walking a path over the span tree.
-enum Resolved<'a> {
+enum Resolved<'a, 'p> {
     /// The path landed on an existing node.
     Found(&'a Node),
-    /// The path's final field is absent on this (existing) mapping: an insert point.
-    MissingField { parent: &'a Node, key: String },
+    /// Field `key` is absent on this (existing) mapping: an insert point.
+    /// `rest` is the rest of the path below it (empty for a leaf key), all
+    /// fields; `=` creates those levels as nested mappings (jhheider/edikt#85).
+    MissingField {
+        parent: &'a Node,
+        key: String,
+        rest: &'p [Step],
+    },
+    /// A missing key with an index below it: `=` can't invent array elements.
+    Uncreatable,
     /// The path does not resolve (bad step, missing intermediate, out of range).
     NotFound,
 }
 
-fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
+fn resolve<'a, 'p>(node: &'a Node, path: &'p [Step]) -> Resolved<'a, 'p> {
     let Some((step, rest)) = path.split_first() else {
         return Resolved::Found(node);
     };
@@ -264,10 +274,14 @@ fn resolve<'a>(node: &'a Node, path: &[Step]) -> Resolved<'a> {
         Step::Field(k) => match &node.kind {
             NodeKind::Mapping(entries) => match entries.iter().find(|e| &e.key == k) {
                 Some(e) => resolve(&e.value, rest),
-                None if rest.is_empty() => Resolved::MissingField {
-                    parent: node,
-                    key: k.clone(),
-                },
+                None if rest.iter().all(|s| matches!(s, Step::Field(_))) => {
+                    Resolved::MissingField {
+                        parent: node,
+                        key: k.clone(),
+                        rest,
+                    }
+                }
+                None if rest.iter().any(|s| matches!(s, Step::Index(_))) => Resolved::Uncreatable,
                 None => Resolved::NotFound,
             },
             _ => Resolved::NotFound,
@@ -340,8 +354,8 @@ impl Yaml {
         }
     }
 
-    /// Set the scalar at `path` in document `idx`, or create it as a new leaf
-    /// key. A path that doesn't resolve is an error when strict, a no-op when
+    /// Set the value at `path` in document `idx`, or create it as a new leaf
+    /// key, creating any missing mappings above it. A path that doesn't resolve is an error when strict, a no-op when
     /// lenient (one of many mapped documents).
     pub(crate) fn set(
         &mut self,
@@ -351,41 +365,117 @@ impl Yaml {
         strict: Strictness,
     ) -> Result<(), EditError> {
         let (range, text) = match resolve(self.root(idx), path) {
-            Resolved::Found(node) => match &node.kind {
-                NodeKind::Scalar(_) => {
-                    // A multi-line scalar (block `|`/`>`, or a wrapped quoted
-                    // scalar) can't be replaced with a single inline token without
-                    // reflowing surrounding lines; refuse cleanly rather than
-                    // emit something that fails to re-parse.
-                    let token = &self.source[node.span.clone()];
-                    if token.contains('\n') {
-                        return Err(EditError::new(
-                            "cannot set a multi-line (block `|`/`>`) scalar in place yet",
-                        ));
-                    }
-                    // Replace the scalar body, not its properties: an anchor
-                    // may be named by an alias elsewhere, and a tag is the
-                    // file's. The new value takes the old body's quote style.
-                    let (props, body) = split_properties(token);
-                    let flow = in_flow(&self.source, self.root(idx), path);
-                    let text = emit_scalar_styled(value, QuoteStyle::of(body), flow, body)?;
-                    let text = format!("{}{text}", kept_properties(props, value));
-                    (node.span.clone(), text)
+            Resolved::Found(_) => return self.replace(idx, path, value, strict),
+            Resolved::MissingField { parent, key, rest } => {
+                // Missing levels below the key are created as nested mappings,
+                // laid out like any other new collection (jhheider/edikt#85).
+                let value = nest(rest, value);
+                let indent = Indent::infer(&self.source, &self.docs);
+                new_key(&self.source, parent, &key, &value, indent)?
+            }
+            Resolved::Uncreatable => match strict {
+                Strictness::Strict => {
+                    return Err(EditError::new(format!(
+                        "cannot create array elements by index: {}",
+                        render_path(path)
+                    )));
                 }
-                _ => {
-                    return Err(EditError::new(
-                        "edikt sets scalar values in YAML losslessly; replacing a whole \
-                         mapping or sequence isn't supported yet",
-                    ));
-                }
+                Strictness::Lenient => return Ok(()),
             },
-            Resolved::MissingField { parent, key } => new_key(&self.source, parent, &key, value)?,
             Resolved::NotFound => return miss(strict, path),
         };
         self.commit(range, &text)
     }
 
-    /// Append scalar `items` to the block sequence at `path` in document `idx`.
+    /// Replace the existing node at `path` with `value`, laid out for where it
+    /// sits (see [`crate::splice`]). A collection that already holds `value`
+    /// is left alone, and one that `value` only changes or extends in place is
+    /// edited element by element, so untouched elements keep their bytes.
+    fn replace(
+        &mut self,
+        idx: usize,
+        path: &[Step],
+        value: &Value,
+        strict: Strictness,
+    ) -> Result<(), EditError> {
+        let source = &self.source;
+        let root = self.root(idx);
+        let Resolved::Found(node) = resolve(root, path) else {
+            return miss(strict, path);
+        };
+        let collection = matches!(value, Value::Array(_) | Value::Object(_));
+        if collection && identical(&node_to_value(node), value) {
+            return Ok(());
+        }
+        if let Some(plan) = elementwise(source, node, value) {
+            return self.apply_plan(idx, path, plan, strict);
+        }
+        let scalar = matches!(node.kind, NodeKind::Scalar(_));
+        let token = &source[node.span.clone()];
+        // A multi-line scalar (block `|`/`>`, or a wrapped quoted scalar)
+        // can't be replaced without reflowing the lines around it; refuse
+        // cleanly rather than emit something that fails to re-parse.
+        if scalar && token.contains('\n') {
+            return Err(EditError::new(
+                "cannot set a multi-line (block `|`/`>`) scalar in place yet",
+            ));
+        }
+        // Replace the body, not its properties: an anchor may be named by an
+        // alias elsewhere, and a tag is the file's (unless it is a core tag
+        // that no longer fits).
+        let (props, body) = split_properties(token);
+        let props = kept_properties(props, value);
+        let ctx_flow = in_flow(source, root, path);
+        let (range, text) = if ctx_flow || is_flow(source, node) {
+            let text = if collection {
+                flow_text(value)?
+            } else {
+                emit_scalar_styled(value, QuoteStyle::of(body), ctx_flow, body)?
+            };
+            (node.span.clone(), format!("{props}{text}"))
+        } else if scalar && let Some(text) = inline_text(value) {
+            // A scalar takes the old body's quote style; an empty collection
+            // is `[]`/`{}`.
+            let text = if collection {
+                text?
+            } else {
+                emit_scalar_styled(value, QuoteStyle::of(body), false, body)?
+            };
+            (node.span.clone(), format!("{props}{text}"))
+        } else {
+            let slot = slot_of(root, path);
+            let indent = Indent::infer(source, &self.docs);
+            if scalar {
+                scalar_to_block(source, node, slot, &props, value, indent)?
+            } else {
+                block_replace(source, node, slot, value, indent)?
+            }
+        };
+        self.commit(range, &text)
+    }
+
+    /// Run an [`elementwise`] plan against the collection at `path`.
+    fn apply_plan(
+        &mut self,
+        idx: usize,
+        path: &[Step],
+        plan: Plan,
+        strict: Strictness,
+    ) -> Result<(), EditError> {
+        let child = |step: Step| [path, &[step]].concat();
+        for (step, v) in plan.changes {
+            self.set(idx, &child(step), &v, strict)?;
+        }
+        if !plan.append.is_empty() {
+            self.append(idx, path, &plan.append, strict)?;
+        }
+        for (k, v) in plan.add {
+            self.set(idx, &child(Step::Field(k)), &v, strict)?;
+        }
+        Ok(())
+    }
+
+    /// Append `items` to the sequence at `path` in document `idx`.
     pub(crate) fn append(
         &mut self,
         idx: usize,
@@ -395,7 +485,11 @@ impl Yaml {
     ) -> Result<(), EditError> {
         let (range, text) = match resolve(self.root(idx), path) {
             Resolved::Found(node) => match &node.kind {
-                NodeKind::Sequence(seq) => append_items(&self.source, node, seq, items)?,
+                NodeKind::Sequence(_) if items.is_empty() => return Ok(()),
+                NodeKind::Sequence(_) => {
+                    let indent = Indent::infer(&self.source, &self.docs);
+                    append_items(&self.source, node, items, indent)?
+                }
                 _ => {
                     return Err(EditError::new(format!(
                         "`+=` with an array needs a sequence at {}",
@@ -478,15 +572,9 @@ impl Yaml {
                 _ => "{}",
             }
         };
-        // block_end consumes the trailing newline; the empty rewrite keeps it.
-        let end_of = |n: &Node| -> usize {
-            let e = block_end(&self.source, n);
-            if e > n.span.start && self.source.as_bytes().get(e - 1) == Some(&b'\n') {
-                e - 1
-            } else {
-                e
-            }
-        };
+        // block_end consumes the trailing newline; the empty rewrite keeps it
+        // (all of a CRLF, not just its `\n`).
+        let end_of = |n: &Node| trim_newline(&self.source, block_end(&self.source, n));
         match prefix.split_last() {
             // Root container (`del(.[])`): replace the whole document's bytes.
             None => {
@@ -534,79 +622,137 @@ impl Yaml {
     }
 }
 
-/// Build the splice that inserts `key: value` as a new entry in `parent` (a block
-/// mapping), matching the last entry's indentation.
-fn new_key(
-    source: &str,
-    parent: &Node,
-    key: &str,
-    value: &Value,
-) -> Result<(Range<usize>, String), EditError> {
-    let NodeKind::Mapping(entries) = &parent.kind else {
-        return Err(EditError::new("can only add a key to a mapping"));
+/// The nested mapping a missing path's tail names: `[.b, .c]` with `v` is
+/// `{b: {c: v}}`. `rest` is all fields ([`resolve`] guarantees it).
+fn nest(rest: &[Step], value: &Value) -> Value {
+    rest.iter()
+        .rev()
+        .fold(value.clone(), |inner, step| match step {
+            Step::Field(k) => Value::Object(vec![(k.clone(), inner)]),
+            _ => inner,
+        })
+}
+
+/// Where the node at `path` sits: the document root, a mapping value (with
+/// its key's span), or a sequence item.
+fn slot_of(root: &Node, path: &[Step]) -> Slot {
+    let Some((last, parent)) = path.split_last() else {
+        return Slot::Root;
     };
-    let valtext = emit_scalar_inline(value)?;
-    let Some(last) = entries.last() else {
-        return Err(EditError::new(
-            "cannot add a key to an empty or flow mapping yet",
-        ));
-    };
-    let indent = &source[line_start(source, last.key_span.start)..last.key_span.start];
-    let at = block_end(source, &last.value);
-    let nl = newline(source);
-    let line = format!("{indent}{}: {valtext}", emit_key(key));
-    if at == source.len() && !ends_with_newline(source) {
-        // No trailing newline: start a fresh line for the new entry.
-        Ok((at..at, format!("{nl}{line}")))
-    } else {
-        Ok((at..at, format!("{line}{nl}")))
+    if let (Step::Field(k), Resolved::Found(parent)) = (last, resolve(root, parent))
+        && let NodeKind::Mapping(entries) = &parent.kind
+        && let Some(e) = entries.iter().find(|e| &e.key == k)
+    {
+        return Slot::Value {
+            key: (e.key_span.start, e.key_span.end),
+        };
+    }
+    Slot::Item
+}
+
+/// Exactly the same value: same types, same float bits, keys in the same
+/// order. Stricter than `==`, which is jq's (`1 == 1.0`, key order ignored),
+/// because an element judged unchanged keeps its bytes, and `.a = 1.0` over
+/// `a: 1` must still write `1.0`.
+fn identical(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| identical(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|((xk, xv), (yk, yv))| xk == yk && identical(xv, yv))
+        }
+        _ => false,
     }
 }
 
-/// Build the splice that appends scalar `items` to a block sequence.
-fn append_items(
-    source: &str,
-    seq_node: &Node,
-    items_nodes: &[Node],
-    items: &[Value],
-) -> Result<(Range<usize>, String), EditError> {
-    if items_nodes.is_empty() {
-        return Err(EditError::new(
-            "cannot append to an empty sequence yet (no item to match indentation)",
-        ));
+/// A replacement applied element by element: the changed elements, the items
+/// to append, and the keys to add.
+struct Plan {
+    changes: Vec<(Step, Value)>,
+    append: Vec<Value>,
+    add: Vec<(String, Value)>,
+}
+
+/// Plan `value` as element edits to the collection `node` when it keeps the
+/// collection's shape: the same kind, every existing key in its order (or
+/// every existing item), and anything new after them. Then only the elements
+/// that change are touched, and the rest keep their bytes and comments; `.a
+/// |= . + [x]` appends one line instead of rewriting the list. A flow
+/// collection takes element edits only when nothing is added, so a growing
+/// one is respelled whole. `None` means a wholesale replacement.
+fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
+    let mut plan = Plan {
+        changes: Vec::new(),
+        append: Vec::new(),
+        add: Vec::new(),
+    };
+    match (&node.kind, value) {
+        (NodeKind::Sequence(items), Value::Array(new)) if new.len() >= items.len() => {
+            for (i, (old, new)) in items.iter().zip(new).enumerate() {
+                if !identical(&node_to_value(old), new) {
+                    plan.changes.push((Step::Index(i as i64), new.clone()));
+                }
+            }
+            plan.append = new[items.len()..].to_vec();
+        }
+        (NodeKind::Mapping(entries), Value::Object(new)) => {
+            // Physical keys, in order. A merge (`<<`) supplies keys too, which
+            // the value view lists after the explicit ones.
+            let phys: Vec<_> = entries.iter().filter(|e| e.key != "<<").collect();
+            if (1..phys.len()).any(|i| phys[..i].iter().any(|e| e.key == phys[i].key)) {
+                return None;
+            }
+            let mut merged = Vec::new();
+            for e in entries.iter().filter(|e| e.key == "<<") {
+                collect_merge(&node_to_value(&e.value), &mut merged);
+            }
+            merged.retain(|(k, _)| !phys.iter().any(|e| &e.key == k));
+            // Dropping a merged-in key can't be done element-wise.
+            if merged
+                .iter()
+                .any(|(k, _)| !new.iter().any(|(nk, _)| nk == k))
+            {
+                return None;
+            }
+            let mut pos = 0;
+            for (k, v) in new {
+                if let Some(e) = phys.get(pos).filter(|e| &e.key == k) {
+                    if !identical(&node_to_value(&e.value), v) {
+                        plan.changes.push((Step::Field(k.clone()), v.clone()));
+                    }
+                    pos += 1;
+                } else if phys.iter().any(|e| &e.key == k) {
+                    return None; // reordered
+                } else if merged.iter().any(|(mk, mv)| mk == k && identical(mv, v)) {
+                    // Still supplied, unchanged, by the merge.
+                } else if pos < phys.len() {
+                    return None; // a new key ahead of existing ones
+                } else {
+                    plan.add.push((k.clone(), v.clone()));
+                }
+            }
+            if pos < phys.len() {
+                return None; // a key was removed
+            }
+        }
+        _ => return None,
     }
-    // A block sequence's start-mark sits on the first item's `-`. Derive the dash
-    // column + indentation from there, so this is robust even when the *last* item
-    // is a block scalar (whose span starts at its content, not the dash); the case
-    // that used to misreport as a flow sequence.
-    let dash = seq_node.span.start;
-    if source.as_bytes().get(dash) != Some(&b'-') {
-        return Err(EditError::new(
-            "cannot append to a flow sequence (`[...]`) yet",
-        ));
-    }
-    let indent = &source[line_start(source, dash)..dash];
-    let nl = newline(source);
-    let at = block_end(source, seq_node);
-    let mut out = String::new();
-    for item in items {
-        let text = emit_scalar_inline(item)?;
-        out.push_str(indent);
-        out.push_str("- ");
-        out.push_str(&text);
-        out.push_str(nl);
-    }
-    if at == source.len() && !ends_with_newline(source) {
-        // No trailing newline at EOF: lead with one, drop the dangling trailer.
-        out.insert_str(0, nl);
-        out.truncate(out.len() - nl.len());
-    }
-    Ok((at..at, out))
+    let grows = !plan.append.is_empty() || !plan.add.is_empty();
+    (!(grows && is_flow(source, node))).then_some(plan)
 }
 
 /// The newline style the document uses, so inserted lines match it (a lone `\n`
 /// spliced into a CRLF file would leave observably mixed line endings).
-fn newline(source: &str) -> &'static str {
+pub(crate) fn newline(source: &str) -> &'static str {
     if source.contains("\r\n") {
         "\r\n"
     } else {
@@ -615,13 +761,8 @@ fn newline(source: &str) -> &'static str {
 }
 
 /// Whether the source already ends with a line break (`\n`, hence also `\r\n`).
-fn ends_with_newline(source: &str) -> bool {
+pub(crate) fn ends_with_newline(source: &str) -> bool {
     source.ends_with('\n')
-}
-
-/// The byte offset of the start of the line containing `pos`.
-fn line_start(source: &str, pos: usize) -> usize {
-    source[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
 }
 
 /// The byte offset just after the newline that ends the line at/after `end`.
@@ -640,12 +781,19 @@ fn line_after(source: &str, end: usize) -> usize {
     }
 }
 
+/// `end` with the line break just before it (`\n` or `\r\n`) excluded.
+pub(crate) fn trim_newline(source: &str, end: usize) -> usize {
+    let s = &source[..end];
+    let s = s.strip_suffix('\n').unwrap_or(s);
+    s.strip_suffix('\r').unwrap_or(s).len()
+}
+
 /// The byte offset just after the last physical line of `node`.
 ///
 /// A collection's own end-mark is unreliable for line math; libyaml lands it on
 /// the *next sibling's* text (past that sibling's indent), which would overshoot.
 /// So we drill to the node's deepest last scalar and take the line after *it*.
-fn block_end(source: &str, node: &Node) -> usize {
+pub(crate) fn block_end(source: &str, node: &Node) -> usize {
     match &node.kind {
         NodeKind::Scalar(_) => line_after(source, node.span.end),
         NodeKind::Sequence(items) => match items.last() {

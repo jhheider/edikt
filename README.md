@@ -213,6 +213,12 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   or raw string stays that way. The style changes only when the new value
   can't be written in it (a line break into single quotes, or a plain YAML
   scalar that would read as another type, like `yes` or `1.10`).
+- **A new list or map follows the file.** Assigning a sequence or mapping in
+  YAML writes it the way the file already writes one: block lines at the
+  file's own indent width (and its `key:\n- item` habit, if it has one), or
+  `[a, b]` inside a flow collection. A comment beside the replaced value stays
+  on its line, and a list or map that only changes or grows keeps its
+  untouched entries byte for byte, so `.tags |= . + ["x"]` adds one line.
 - **`.env` quotes are part of the value, not syntax.** There is no single `.env`
   grammar (docker-compose, dotenv libraries and shell `source` disagree), so
   edikt interprets nothing: for `APP_NAME="my app"` the value is the seven-plus
