@@ -551,7 +551,13 @@ fn new_key(
             "cannot add a key to an empty or flow mapping yet",
         ));
     };
-    let indent = &source[line_start(source, last.key_span.start)..last.key_span.start];
+    // The last key's column as spaces, not its line's literal prefix: in a
+    // compact `- a: 1` item that prefix holds the dash, and copying it would
+    // start a new item instead of adding a key.
+    let col = source[line_start(source, last.key_span.start)..last.key_span.start]
+        .chars()
+        .count();
+    let indent = " ".repeat(col);
     let at = block_end(source, &last.value);
     let nl = newline(source);
     let line = format!("{indent}{}: {valtext}", emit_key(key));

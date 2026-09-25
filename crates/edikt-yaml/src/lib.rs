@@ -538,6 +538,20 @@ mod tests {
     }
 
     #[test]
+    fn new_key_in_compact_sequence_item_joins_that_mapping() {
+        // The new key sits at the last key's column; copying that line's
+        // literal prefix (`  - `) used to start a new item instead.
+        assert_eq!(
+            edit("xs:\n  - a: 1\n", ".xs[0].b = 2"),
+            "xs:\n  - a: 1\n    b: 2\n"
+        );
+        assert_eq!(
+            edit("- - x\n  - k: 1\n", ".[0][1].j = 2"),
+            "- - x\n  - k: 1\n    j: 2\n"
+        );
+    }
+
+    #[test]
     fn new_root_key_at_column_zero() {
         let out = edit(SAMPLE, ".name = \"stack\"");
         assert!(out.ends_with("debug: false\nname: stack\n"));
