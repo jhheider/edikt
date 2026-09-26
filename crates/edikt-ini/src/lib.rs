@@ -62,14 +62,15 @@ impl Ini {
     /// key that would read as a header or comment) errors: INI has no
     /// quoting to fall back on.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        let text = edit::scalar_string(value)?;
+        let text = edikt_core::convert::scalar_string(value, "INI")?;
         edit::check_value(&text)?;
         if let Some(entry) = edit::resolve_entry(&self.root, path) {
             let value_node = entry
                 .children()
                 .find(|n| n.kind() == Sk::Value)
                 .ok_or_else(|| EditError::new("entry has no value slot"))?;
-            let new_root = value_node.replace_with(edit::value_node_green(&text));
+            let new_root =
+                value_node.replace_with(edikt_syntax::leaf_node(Sk::Value, Sk::ValStr, &text));
             self.root = SyntaxNode::new_root(new_root);
             return Ok(());
         }

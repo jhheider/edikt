@@ -12,9 +12,10 @@
 //! comments, and JSON5 spellings.
 
 use crate::lexer::Tok;
-use crate::syntax::{Sk, is_key, is_trivia, sk};
+use crate::syntax::{Sk, is_key, is_trivia};
+use edikt_syntax::Builder;
 use logos::Logos;
-use rowan::{GreenNode, GreenNodeBuilder};
+use rowan::GreenNode;
 
 /// A structural problem, located at a byte offset into the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +41,9 @@ pub(crate) fn build_checked(src: &str) -> (GreenNode, Vec<SyntaxError>) {
         pos: 0,
         offset: 0,
         errors: Vec::new(),
-        builder: GreenNodeBuilder::new(),
+        builder: Builder::new(),
     };
-    p.builder.start_node(sk(Sk::Root));
+    p.builder.start_node(Sk::Root);
     p.value();
     p.skip_trivia();
     if p.cur().is_some_and(|k| k != Sk::Error) {
@@ -90,7 +91,7 @@ struct Parser<'a> {
     /// Byte offset of `toks[pos]` in the source.
     offset: usize,
     errors: Vec<SyntaxError>,
-    builder: GreenNodeBuilder<'static>,
+    builder: Builder<Sk>,
 }
 
 impl Parser<'_> {
@@ -106,7 +107,7 @@ impl Parser<'_> {
             let c = text.chars().next().unwrap_or('?');
             self.error(format!("unexpected character `{c}`"));
         }
-        self.builder.token(sk(kind), text);
+        self.builder.token(kind, text);
         self.pos += 1;
         self.offset += text.len();
     }
@@ -171,7 +172,7 @@ impl Parser<'_> {
 
     fn value(&mut self) {
         self.skip_trivia();
-        self.builder.start_node(sk(Sk::Value));
+        self.builder.start_node(Sk::Value);
         match self.cur() {
             Some(Sk::LBrace) => self.object(),
             Some(Sk::LBracket) => self.array(),
@@ -196,7 +197,7 @@ impl Parser<'_> {
 
     fn object(&mut self) {
         let open = self.offset;
-        self.builder.start_node(sk(Sk::Object));
+        self.builder.start_node(Sk::Object);
         self.bump(); // {
         loop {
             self.skip_trivia();
@@ -211,7 +212,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     let start = self.pos;
-                    self.builder.start_node(sk(Sk::Member));
+                    self.builder.start_node(Sk::Member);
                     // JSON's quoted key, or any of JSON5's key spellings.
                     if self.cur().is_some_and(is_key) {
                         self.bump(); // key
@@ -256,7 +257,7 @@ impl Parser<'_> {
 
     fn array(&mut self) {
         let open = self.offset;
-        self.builder.start_node(sk(Sk::Array));
+        self.builder.start_node(Sk::Array);
         self.bump(); // [
         loop {
             self.skip_trivia();

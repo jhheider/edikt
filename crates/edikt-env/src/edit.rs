@@ -4,10 +4,9 @@
 //! (key/separator/spacing kept); `del` detaches the whole line. Values are
 //! strings; an array or object errors (the format is flat and string-only).
 
-use crate::syntax::{Sk, SyntaxNode, sk};
+use crate::syntax::{Sk, SyntaxNode};
 use crate::{Dialect, Env, project};
 use edikt_core::{Document, EditError, Expr, Mutable, MutationKind, Step, Value};
-use rowan::{GreenNode, GreenNodeBuilder};
 
 pub fn apply(doc: &mut Env, expr: &Expr) -> Result<(), EditError> {
     edikt_core::apply_mutation(doc, expr)
@@ -55,17 +54,7 @@ pub(crate) fn find_entry(root: &SyntaxNode, key: &str) -> Option<SyntaxNode> {
         .find(|e| project::entry_key(e) == key)
 }
 
-pub(crate) fn value_node_green(s: &str) -> GreenNode {
-    let mut b = GreenNodeBuilder::new();
-    b.start_node(sk(Sk::Value));
-    if !s.is_empty() {
-        b.token(sk(Sk::ValStr), s);
-    }
-    b.finish_node();
-    b.finish()
-}
-
-fn format_name(dialect: Dialect) -> &'static str {
+pub(crate) fn format_name(dialect: Dialect) -> &'static str {
     match dialect {
         Dialect::Punctuated => ".env",
         Dialect::Spaced => "envspaced",
@@ -119,14 +108,5 @@ pub(crate) fn check_key(key: &str, dialect: Dialect) -> Result<(), EditError> {
             "{fmt} can't hold the key {key:?}: {why}, and {fmt} has no quoting"
         ))),
         None => Ok(()),
-    }
-}
-
-pub(crate) fn scalar_string(value: &Value) -> Result<String, EditError> {
-    match value {
-        Value::Array(_) | Value::Object(_) => Err(EditError::new(
-            "this format is flat and string-only; cannot store an array or object",
-        )),
-        other => Ok(other.to_raw_string()),
     }
 }

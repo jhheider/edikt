@@ -69,6 +69,11 @@ pub fn ending_of(line: &str) -> &'static str {
     }
 }
 
+/// Split `line` into its content and its terminator (see [`ending_of`]).
+pub fn split_ending(line: &str) -> (&str, &str) {
+    line.split_at(line.len() - ending_of(line).len())
+}
+
 /// The byte offset of the start of the line containing `pos`.
 pub fn line_start(src: &str, pos: usize) -> usize {
     src[..pos].rfind('\n').map_or(0, |i| i + 1)

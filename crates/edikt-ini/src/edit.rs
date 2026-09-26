@@ -7,10 +7,9 @@
 //! INI values are scalars: setting an array or object errors (the format has no
 //! nesting or arrays; its `Feature` set says so).
 
-use crate::syntax::{Sk, SyntaxNode, sk};
+use crate::syntax::{Sk, SyntaxNode};
 use crate::{Ini, project};
 use edikt_core::{Document, EditError, Expr, Mutable, MutationKind, Step, Value, eval};
-use rowan::{GreenNode, GreenNodeBuilder};
 
 pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
     edikt_core::apply_mutation(doc, expr)
@@ -159,16 +158,6 @@ fn header_matches(line: &str, section: &str) -> bool {
     t.starts_with('[') && t[1..].split(']').next() == Some(section)
 }
 
-pub(crate) fn value_node_green(s: &str) -> GreenNode {
-    let mut b = GreenNodeBuilder::new();
-    b.start_node(sk(Sk::Value));
-    if !s.is_empty() {
-        b.token(sk(Sk::ValStr), s);
-    }
-    b.finish_node();
-    b.finish()
-}
-
 /// Refuse a value INI cannot hold: the scanner would read the line back
 /// differently. INI has no quoting (quotes are part of the value), so there
 /// is nothing to escape with.
@@ -232,15 +221,5 @@ pub(crate) fn check_section(name: &str) -> Result<(), EditError> {
             "INI can't hold the section name {name:?}: {why}, and INI has no quoting"
         ))),
         None => Ok(()),
-    }
-}
-
-/// The string form of a scalar value, or an error for arrays/objects.
-pub(crate) fn scalar_string(value: &Value) -> Result<String, EditError> {
-    match value {
-        Value::Array(_) | Value::Object(_) => Err(EditError::new(
-            "INI values are scalars; cannot store an array or object",
-        )),
-        other => Ok(other.to_raw_string()),
     }
 }

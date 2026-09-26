@@ -65,7 +65,7 @@ impl Env {
     /// whitespace, a key that would read as a comment or end early) errors:
     /// there is no quoting to fall back on.
     pub fn set(&mut self, key: &str, value: &Value) -> Result<(), EditError> {
-        let text = edit::scalar_string(value)?;
+        let text = edikt_core::convert::scalar_string(value, edit::format_name(self.dialect))?;
         edit::check_value(&text, self.dialect)?;
         match edit::find_entry(&self.root, key) {
             Some(entry) => {
@@ -73,7 +73,8 @@ impl Env {
                     .children()
                     .find(|n| n.kind() == Sk::Value)
                     .ok_or_else(|| EditError::new("entry has no value slot"))?;
-                let new_root = value_node.replace_with(edit::value_node_green(&text));
+                let new_root =
+                    value_node.replace_with(edikt_syntax::leaf_node(Sk::Value, Sk::ValStr, &text));
                 self.root = SyntaxNode::new_root(new_root);
             }
             None => {

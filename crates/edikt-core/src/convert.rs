@@ -6,7 +6,7 @@
 //! helpers are the shared machinery; the per-format emitters live in the format
 //! crates.
 
-use crate::{Feature, Value};
+use crate::{EditError, Feature, Value};
 
 /// Render a value as pretty (2-space) JSON with a trailing newline.
 pub fn to_pretty_json(value: &Value) -> String {
@@ -78,7 +78,7 @@ fn walk(prefix: &str, value: &Value, out: &mut Vec<(String, String)>) {
                 walk(&join_key(prefix, &i.to_string()), v, out);
             }
         }
-        scalar => out.push((prefix.to_string(), scalar_string(scalar))),
+        scalar => out.push((prefix.to_string(), scalar.to_raw_string())),
     }
 }
 
@@ -90,9 +90,16 @@ fn join_key(prefix: &str, key: &str) -> String {
     }
 }
 
-/// The string form of a scalar (`Str` without quotes; numbers/bools/null as text).
-pub fn scalar_string(value: &Value) -> String {
-    value.to_raw_string()
+/// The text a flat, string-valued format stores for a scalar (`Str` without
+/// quotes; numbers, bools and null as their text). An array or object has no
+/// such text: `format` names the format in the error.
+pub fn scalar_string(value: &Value, format: &str) -> Result<String, EditError> {
+    match value {
+        Value::Array(_) | Value::Object(_) => Err(EditError::new(format!(
+            "{format} values are scalars; cannot store an array or object"
+        ))),
+        other => Ok(other.to_raw_string()),
+    }
 }
 
 /// Does `value` contain nesting (an object/array inside an object/array)?
