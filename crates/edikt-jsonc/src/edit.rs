@@ -191,11 +191,17 @@ fn prev_member_comma(member: &SyntaxNode) -> Option<SyntaxToken> {
 pub(crate) fn delete_element(value: &SyntaxNode) {
     match value.next_sibling_or_token() {
         // Not the last element: drop this value + the following comma + its ws.
+        // A line break after the comma belongs to the line, so then the space
+        // before the element goes instead (`1, 2,\n` -> `1,\n`).
         Some(NodeOrToken::Token(comma)) if comma.kind() == Sk::Comma => {
-            let trailing_ws = leading_ws_of(&comma.next_sibling_or_token());
+            let mut ws = leading_ws_of(&comma.next_sibling_or_token());
+            if ws.as_ref().is_some_and(|t| t.text().contains('\n')) {
+                ws = leading_ws_of(&value.prev_sibling_or_token())
+                    .filter(|t| !t.text().contains('\n'));
+            }
             value.detach();
             comma.detach();
-            if let Some(ws) = trailing_ws {
+            if let Some(ws) = ws {
                 ws.detach();
             }
         }
@@ -216,6 +222,77 @@ pub(crate) fn delete_element(value: &SyntaxNode) {
             }
         }
     }
+}
+
+/// Delete `elem` (a `Member` of `container`'s object, or a `Value` of its
+/// array) together with its whole line, when it sits on lines of its own:
+/// nothing but indentation before it, and after it only its comma and a line
+/// comment beside it. The comment goes with it (it was about the element);
+/// own-line comments around it stay. A last element with no comma of its own
+/// also takes the comma the one before it no longer needs, so the
+/// collection keeps its trailing-comma style. Returns the collection's new
+/// text, or `None` when `elem` shares a line and the caller's separator-level
+/// delete applies.
+pub(crate) fn delete_line(collection: &SyntaxNode, elem: &SyntaxNode) -> Option<String> {
+    let text = collection.text().to_string();
+    let base = usize::from(collection.text_range().start());
+    let start = usize::from(elem.text_range().start()) - base;
+    let end = usize::from(elem.text_range().end()) - base;
+    let line_start = text[..start].rfind('\n')? + 1;
+    if !text[line_start..start]
+        .bytes()
+        .all(|b| b == b' ' || b == b'\t')
+    {
+        return None;
+    }
+    let is_array = elem.kind() == Sk::Value;
+    let blank = |s: &str| s.len() - s.trim_start_matches([' ', '\t']).len();
+    let mut at = end + blank(&text[end..]);
+    // An array element's comma is its next sibling; a member owns its own.
+    let own_comma = if is_array {
+        let comma = text[at..].starts_with(',');
+        if comma {
+            at += 1;
+            at += blank(&text[at..]);
+        }
+        comma
+    } else {
+        member_has_comma(elem)
+    };
+    if text[at..].starts_with("//") {
+        at += text[at..].find('\n').unwrap_or(text.len() - at);
+    }
+    let line_end = match &text[at..] {
+        t if t.starts_with("\r\n") => at + 2,
+        t if t.starts_with('\n') => at + 1,
+        _ => return None,
+    };
+    let last = if is_array {
+        elem.next_sibling().is_none()
+    } else {
+        is_last_member(elem)
+    };
+    // The comma before a comma-less last element: an array's is a sibling
+    // token, a member's is inside the member before it.
+    let prev_comma = if last && !own_comma {
+        if is_array {
+            std::iter::successors(elem.prev_sibling_or_token(), |e| e.prev_sibling_or_token())
+                .find(|e| !crate::syntax::is_trivia(e.kind()))
+                .and_then(|e| e.into_token())
+                .filter(|t| t.kind() == Sk::Comma)
+        } else {
+            prev_member_comma(elem)
+        }
+    } else {
+        None
+    };
+    let mut out = text;
+    out.replace_range(line_start..line_end, "");
+    if let Some(comma) = prev_comma {
+        let at = usize::from(comma.text_range().start()) - base;
+        out.replace_range(at..at + 1, "");
+    }
+    Some(out)
 }
 
 /// If the element is a whitespace token, return it.

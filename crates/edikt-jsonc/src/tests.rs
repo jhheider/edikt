@@ -866,11 +866,51 @@ fn del_dot_iterate_fans_out() {
     // Missing target or empty collection is a no-op.
     assert_eq!(edit_src("{\"a\":[]}", "del(.a[])"), "{\"a\":[]}");
     assert_eq!(edit_src("{\"a\":[1]}", "del(.nope[])"), "{\"a\":[1]}");
-    // Multi-line formatting: each deleted element's line disappears (the closing
-    // bracket keeps its own line's indent).
+    // Multi-line formatting: each deleted element's line disappears, and the
+    // closing bracket keeps its own line and indent.
     assert_eq!(
         edit_src("{\n  \"a\": [\n    1,\n    2,\n  ],\n}\n", "del(.a[])"),
-        "{\n  \"a\": [\n    ],\n}\n"
+        "{\n  \"a\": [\n  ],\n}\n"
+    );
+}
+
+#[test]
+fn del_takes_a_one_per_line_elements_line_and_comment() {
+    // The comment beside an element is about it, so it goes with its line;
+    // the neighbours' comments stay beside them (#117).
+    let arr = "{\n  \"k\": [\n    1, // one\n    2, // two\n    3\n  ]\n}\n";
+    let with = |body: &str| format!("{{\n  \"k\": [\n{body}  ]\n}}\n");
+    assert_eq!(edit_src(arr, "del(.k[1])"), with("    1, // one\n    3\n"));
+    assert_eq!(edit_src(arr, "del(.k[0])"), with("    2, // two\n    3\n"));
+    // The last element has no comma, so the one before gives up its own.
+    assert_eq!(
+        edit_src(arr, "del(.k[2])"),
+        with("    1, // one\n    2 // two\n")
+    );
+    // A trailing-comma list keeps its trailing comma.
+    assert_eq!(
+        edit_src("[\n  1, // one\n  2, // two\n]\n", "del(.[1])"),
+        "[\n  1, // one\n]\n"
+    );
+    // Members alike, and an own-line comment above the element stays.
+    let obj = "{\n  \"a\": 1, // one\n  // about b\n  \"b\": 2 // two\n}\n";
+    assert_eq!(
+        edit_src(obj, "del(.b)"),
+        "{\n  \"a\": 1 // one\n  // about b\n}\n"
+    );
+    assert_eq!(
+        edit_src(obj, "del(.a)"),
+        "{\n  // about b\n  \"b\": 2 // two\n}\n"
+    );
+    // CRLF lines go whole, ending included.
+    assert_eq!(
+        edit_src("[\r\n  1, // one\r\n  2 // two\r\n]\r\n", "del(.[1])"),
+        "[\r\n  1 // one\r\n]\r\n"
+    );
+    // Sharing a line with a neighbour, the separator-level delete applies.
+    assert_eq!(
+        edit_src("[\n  1, 2,\n  3\n]\n", "del(.[1])"),
+        "[\n  1,\n  3\n]\n"
     );
 }
 

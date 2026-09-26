@@ -176,6 +176,12 @@ impl Jsonc {
                     .find(|n| n.kind() == Sk::Object)
                     .and_then(|object| edit::find_member(&object, k));
                 if let Some(member) = member {
+                    let object = member.parent().expect("a member sits in an object");
+                    if let Some(text) = edit::delete_line(&object, &member) {
+                        let green = edit::object_green_from_text(&text);
+                        self.root = SyntaxNode::new_root(object.replace_with(green));
+                        return Ok(());
+                    }
                     edit::delete_member(&member);
                     self.root = SyntaxNode::new_root(root.green().into_owned());
                 }
@@ -192,6 +198,12 @@ impl Jsonc {
                         values.into_iter().nth(idx)
                     });
                 if let Some(value) = value {
+                    let array = value.parent().expect("an element sits in an array");
+                    if let Some(text) = edit::delete_line(&array, &value) {
+                        let green = edit::array_green_from_text(&text);
+                        self.root = SyntaxNode::new_root(array.replace_with(green));
+                        return Ok(());
+                    }
                     edit::delete_element(&value);
                     self.root = SyntaxNode::new_root(root.green().into_owned());
                 }
