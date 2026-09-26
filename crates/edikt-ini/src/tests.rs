@@ -426,6 +426,29 @@ fn three_step_path_is_not_a_valid_ini_target() {
 #[test]
 fn cannot_store_object() {
     assert!(edit_err(SAMPLE, ".global = {}").contains("cannot store an array or object"));
+    // A section that doesn't exist has nothing to diff against.
+    assert!(edit_err(SAMPLE, ".nope = {a: \"1\"}").contains("cannot store an array or object"));
+}
+
+#[test]
+fn an_object_over_a_section_is_set_key_by_key() {
+    // #117: the section's other lines, comments and spacing stay put.
+    assert_eq!(
+        edit_src(
+            SAMPLE,
+            r#".server = {host: "0.0.0.0", port: "9090", tls: "on"}"#
+        ),
+        SAMPLE
+            .replace("port=8080 ", "port=9090 ")
+            .replace("; inline text\n", "; inline text\ntls = on\n")
+    );
+    assert_eq!(
+        edit_src(SAMPLE, ".server |= del(.host)"),
+        SAMPLE.replace("host = 0.0.0.0\n", "")
+    );
+    assert_eq!(edit_src(SAMPLE, ".server = .server"), SAMPLE);
+    // Each key still goes through INI's quoting refusals.
+    assert!(edit_err(SAMPLE, r#".server = {port: " 1"}"#).contains("whitespace"));
 }
 
 #[test]

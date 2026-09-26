@@ -2595,6 +2595,12 @@ fn a_collection_over_a_collection_keeps_unchanged_elements() {
             "[\n  1, // one\n  3,\n  4\n]\n",
         ),
         (
+            "ini",
+            "[s]\na = 1 ; one\nb = 2\n",
+            r#".s = {a: "1", c: "3"}"#,
+            "[s]\na = 1 ; one\nc = 3\n",
+        ),
+        (
             "kdl",
             "bind 1 // one\nbind 2 // two\nbind 3\n",
             ".bind = [1, 3]",
