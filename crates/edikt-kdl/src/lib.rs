@@ -7,7 +7,7 @@
 //! KDL nodes carry positional **arguments**, `key=value` **properties**, and a
 //! **children** block, none of which the flat `Value` model has a slot for
 //! directly. The projection convention (documented in docs/design/contract.md and
-//! implemented in [`project`]) maps them: nodes group by name (repeats ->
+//! implemented in the `project` module) maps them: nodes group by name (repeats ->
 //! arrays), a node is its children object / lone scalar / argument array, and a
 //! node mixing arguments with props/children puts the arguments under the
 //! reserved key `"-"`.

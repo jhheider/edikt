@@ -6,8 +6,11 @@
 //! independent of any format-preserving CST; the format modules wire the same
 //! AST to their CSTs.
 //!
-//! The format-agnostic `Document` and `Convert` seams arrive with the JSONC
-//! slice, once there is a concrete CST to shape them against.
+//! The format-agnostic seams live here too: the [`Document`] trait every format
+//! implements, the mutation driver ([`apply_mutation`] over a format's
+//! [`Mutable`] primitives), comment editing ([`apply_comment_mutation`]), and the
+//! data-model helpers conversion shares ([`convert`]). There is no conversion
+//! trait; each format crate exports its own `emit` functions.
 
 mod ast;
 mod builtins;

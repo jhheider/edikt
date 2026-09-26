@@ -4,7 +4,7 @@
 //! YAML is driven by [`libyaml-safer`](https://crates.io/crates/libyaml-safer), a
 //! safe pure-Rust port of the reference parser (zero transitive deps). One parse
 //! pass feeds all three jobs: its event stream is composed into a **span tree**
-//! (see [`compose`]) that carries both the data model (fold to [`Value`] for
+//! (see the `compose` module) that carries both the data model (fold to [`Value`] for
 //! query/convert) and every node's byte marks (the lossless splice for edit).
 //!
 //! The moat holds: an edit replaces exactly the targeted node's bytes; comments,
