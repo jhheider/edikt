@@ -281,17 +281,6 @@ struct CommentedBlock<'a> {
     suffix: &'a str,
 }
 
-/// Length of `line`'s trailing newline (`\r\n`, `\n`, or none).
-fn term_len(line: &str) -> usize {
-    if line.ends_with("\r\n") {
-        2
-    } else if line.ends_with('\n') {
-        1
-    } else {
-        0
-    }
-}
-
 /// Detect a commented host-language frontmatter block (PEP 723: `# /// name`
 /// ... `# ///`), optionally after a shebang. Returns `Ok(None)` when there is
 /// no such opener (so the caller falls through to fenced detection), and an
@@ -329,8 +318,7 @@ fn detect_commented(src: &str) -> Result<Option<CommentedBlock<'_>>, ParseError>
             .map(|i| offset + i + 1)
             .unwrap_or(src.len());
         let line = &src[offset..line_end];
-        let split_at = line.len() - term_len(line);
-        let (content, term) = (&line[..split_at], &line[split_at..]);
+        let (content, term) = edikt_core::text::split_ending(line);
         if content.trim_end() == "# ///" {
             return Ok(Some(CommentedBlock {
                 prefix: &src[..opener_end],
@@ -363,8 +351,7 @@ fn detect_commented(src: &str) -> Result<Option<CommentedBlock<'_>>, ParseError>
 fn recomment(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + s.len() / 4 + 8);
     for line in s.split_inclusive('\n') {
-        let split_at = line.len() - term_len(line);
-        let (content, term) = (&line[..split_at], &line[split_at..]);
+        let (content, term) = edikt_core::text::split_ending(line);
         if content.is_empty() {
             out.push('#');
         } else {

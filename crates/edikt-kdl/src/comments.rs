@@ -8,7 +8,10 @@
 
 use crate::project;
 use edikt_core::wrap::{wrap_comment, wrap_width};
-use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value,
+    sanitize_comment_line as sanitize,
+};
 use kdl::{KdlDocument, KdlNode};
 
 // --- in-place comment write-back ---------------------------------------
@@ -101,12 +104,9 @@ fn resolve_node<'a>(doc: &'a mut KdlDocument, path: &[Step]) -> Result<&'a mut K
     }
     let (idx, rest) = match rest.split_first() {
         Some((Step::Index(i), r)) => {
-            let n = occ.len() as i64;
-            let resolved = if *i < 0 { n + i } else { *i };
-            if resolved < 0 || resolved >= n {
-                return Err(EditError::new(format!("`{name}` index out of range")));
-            }
-            (occ[resolved as usize], r)
+            let resolved = edikt_core::resolve_index(*i, occ.len())
+                .ok_or_else(|| EditError::new(format!("`{name}` index out of range")))?;
+            (occ[resolved], r)
         }
         _ => {
             if occ.len() != 1 {
@@ -347,11 +347,5 @@ fn decorate_node(node: &mut KdlNode, c: &Commented) {
 fn leading_indent(node: &KdlNode) -> String {
     let leading = node.format().map(|f| f.leading.as_str()).unwrap_or("");
     let tail = leading.rsplit('\n').next().unwrap_or("");
-    tail.chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect()
-}
-
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
+    edikt_core::text::leading_indent(tail).to_string()
 }

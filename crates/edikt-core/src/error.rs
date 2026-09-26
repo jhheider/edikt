@@ -13,3 +13,11 @@ impl EditError {
         EditError { msg: msg.into() }
     }
 }
+
+/// An evaluation failure inside an edit (a right side that errors, a path
+/// that steps into the wrong type) is an edit failure with the same message.
+impl From<crate::eval::EvalError> for EditError {
+    fn from(e: crate::eval::EvalError) -> EditError {
+        EditError::new(e.to_string())
+    }
+}

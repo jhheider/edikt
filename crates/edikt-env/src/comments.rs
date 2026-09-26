@@ -7,19 +7,19 @@
 use crate::parser::Dialect;
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
-use edikt_core::wrap::{wrap_comment, wrap_width};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, flatten_commented,
-    line_index, place_line_comment,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
+    flatten_commented, line_index, place_line_comment,
 };
 use rowan::NodeOrToken;
 
 // --- in-place comment write-back ---------------------------------------
 
-/// Is `line` a `.env`/`.properties` comment line (`#` or `!`, after indent)?
-fn is_comment_line(line: &str) -> bool {
-    matches!(line.trim_start().as_bytes().first(), Some(b'#' | b'!'))
-}
+/// A `.env`/`.properties` comment line: `#` or `!`, after indent.
+const STYLE: LineComment = LineComment {
+    markers: &["#", "!"],
+    delim: "# ",
+};
 
 /// Set the `kind` comment on the entry for `key` (`.env` has head/foot only -
 /// inline is refused, a `#` in a value is data). Returns warnings (none here).
@@ -36,16 +36,13 @@ pub(crate) fn set_key_comment(
     }
     let source = edikt_syntax::to_source(root);
     let (line, indent) = entry_line(root, key, &source)?;
-    let width = wrap_width(&source);
-    let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
     let out = place_line_comment(
         &source,
         line,
         matches!(kind, CommentKind::Head),
-        &indent,
-        "# ",
-        &is_comment_line,
-        Some(&wrapped),
+        indent,
+        &STYLE,
+        Some(text),
     );
     Ok((out, Vec::new()))
 }
@@ -67,22 +64,22 @@ pub(crate) fn delete_key_comment(
         &source,
         line,
         matches!(kind, CommentKind::Head),
-        &indent,
-        "# ",
-        &is_comment_line,
+        indent,
+        &STYLE,
         None,
     ))
 }
 
 /// The (line index, indent) of the entry for `key`.
-fn entry_line(root: &SyntaxNode, key: &str, source: &str) -> Result<(usize, String), EditError> {
+fn entry_line<'s>(
+    root: &SyntaxNode,
+    key: &str,
+    source: &'s str,
+) -> Result<(usize, &'s str), EditError> {
     let entry = crate::edit::find_entry(root, key)
         .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
     let start: usize = entry.text_range().start().into();
-    let indent: String = source[start..]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
+    let indent = edikt_core::text::leading_indent(&source[start..]);
     Ok((line_index(source, start), indent))
 }
 
@@ -122,7 +119,7 @@ pub(crate) fn to_commented(root: &SyntaxNode) -> Commented {
                 ));
             }
             NodeOrToken::Token(t) if t.kind() == Sk::Comment => {
-                pending.push(strip_marker(t.text()));
+                pending.push(STYLE.strip_marker(t.text()));
             }
             _ => {}
         }
@@ -139,11 +136,6 @@ pub(crate) fn to_commented(root: &SyntaxNode) -> Commented {
         comments,
         node: CommentedNode::Object(entries),
     }
-}
-
-/// `# text` / `! text` -> `text`.
-fn strip_marker(text: &str) -> String {
-    text.trim_start_matches(['#', '!']).trim().to_string()
 }
 
 // --- emission -----------------------------------------------------------
@@ -173,19 +165,22 @@ pub fn emit_commented_with(
     let mut out = String::new();
     for e in &flat {
         for l in &e.comments.head {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
         if let Some(inline) = &e.comments.inline {
             remapped_inline = true;
-            push_comment(&mut out, inline);
+            STYLE.push_line(&mut out, "", inline);
         }
+        // Refuse what would read back as something else, as `set` does.
+        crate::edit::check_key(&e.key, dialect)?;
+        crate::edit::check_value(&e.value, dialect)?;
         let sep = match dialect {
             Dialect::Punctuated => "=",
             Dialect::Spaced => " ",
         };
         out.push_str(&format!("{}{sep}{}\n", e.key, e.value));
         for l in &e.comments.foot {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
     }
 
@@ -197,10 +192,4 @@ pub fn emit_commented_with(
         warnings.push("inline comments moved to their own line (env has none)".to_string());
     }
     Ok((out, warnings))
-}
-
-fn push_comment(out: &mut String, line: &str) {
-    out.push_str("# ");
-    out.push_str(&line.replace(['\n', '\r'], " "));
-    out.push('\n');
 }

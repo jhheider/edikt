@@ -2,7 +2,8 @@
 //!
 //! The v1 query language desugars dotted/indexed paths into a `Path` of steps,
 //! so the evaluator only deals with a handful of node kinds. Mutation forms
-//! (`=`, `|=`, `+=`, `del`) are not parsed yet - they arrive with M2.
+//! (`=`, `|=`, `+=`, `del(...)`) are ordinary nodes; [`Expr::is_mutation`] tells
+//! the CLI to route one to a format's `Document::apply` rather than evaluate it.
 
 use crate::comment::CommentKind;
 use crate::value::Value;

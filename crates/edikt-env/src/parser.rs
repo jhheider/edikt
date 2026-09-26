@@ -10,8 +10,9 @@
 //! comments, the `Value` slot, deletion, round-trip - is shared, because the
 //! separator is the entire difference between `PORT=22` and `Port 22`.
 
-use crate::syntax::{Sk, sk};
-use rowan::{GreenNode, GreenNodeBuilder};
+use crate::syntax::Sk;
+use edikt_syntax::Builder;
+use rowan::GreenNode;
 
 /// Which separator spelling a document uses.
 ///
@@ -33,54 +34,44 @@ pub enum Dialect {
 }
 
 pub(crate) fn build(src: &str, dialect: Dialect) -> GreenNode {
-    let mut b = GreenNodeBuilder::new();
-    b.start_node(sk(Sk::Root));
+    let mut b = Builder::new();
+    b.start_node(Sk::Root);
     for line in src.split_inclusive('\n') {
-        let (content, term) = split_terminator(line);
+        let (content, term) = edikt_core::text::split_ending(line);
         process_line(&mut b, content, term, dialect);
     }
     b.finish_node(); // Root
     b.finish()
 }
 
-fn split_terminator(line: &str) -> (&str, &str) {
-    if let Some(rest) = line.strip_suffix("\r\n") {
-        (rest, &line[rest.len()..])
-    } else if let Some(rest) = line.strip_suffix('\n') {
-        (rest, &line[rest.len()..])
-    } else {
-        (line, "")
-    }
-}
-
-fn process_line(b: &mut GreenNodeBuilder<'static>, content: &str, term: &str, dialect: Dialect) {
+fn process_line(b: &mut Builder<Sk>, content: &str, term: &str, dialect: Dialect) {
     let rest = content.trim_start();
     let indent = &content[..content.len() - rest.len()];
 
     // Blank line.
     if rest.is_empty() {
-        emit_ws(b, indent);
-        emit_newline(b, term);
+        b.trivia(Sk::Ws, indent);
+        b.trivia(Sk::Newline, term);
         return;
     }
 
     // Comment line (`#` or `!`, the `.properties` comment chars; `.env` uses `#`).
     if matches!(rest.as_bytes()[0], b'#' | b'!') {
-        emit_ws(b, indent);
-        b.token(sk(Sk::Comment), rest);
-        emit_newline(b, term);
+        b.trivia(Sk::Ws, indent);
+        b.token(Sk::Comment, rest);
+        b.trivia(Sk::Newline, term);
         return;
     }
 
     // Entry line.
-    b.start_node(sk(Sk::Entry));
-    emit_ws(b, indent);
+    b.start_node(Sk::Entry);
+    b.trivia(Sk::Ws, indent);
     build_entry(b, rest, dialect);
-    emit_newline(b, term);
+    b.trivia(Sk::Newline, term);
     b.finish_node(); // Entry
 }
 
-fn build_entry(b: &mut GreenNodeBuilder<'static>, rest: &str, dialect: Dialect) {
+fn build_entry(b: &mut Builder<Sk>, rest: &str, dialect: Dialect) {
     // (start of separator, length). For the spaced dialect the separator IS the
     // whitespace run, so it has no leading gap of its own to emit.
     let found = match dialect {
@@ -94,40 +85,28 @@ fn build_entry(b: &mut GreenNodeBuilder<'static>, rest: &str, dialect: Dialect) 
     };
     let Some((sep_idx, sep_len)) = found else {
         // No separator: keep the bytes losslessly, but flag it as malformed.
-        b.token(sk(Sk::Error), rest);
+        b.token(Sk::Error, rest);
         return;
     };
 
     let key_region = &rest[..sep_idx];
     let key = key_region.trim_end();
     if !key.is_empty() {
-        b.token(sk(Sk::Key), key);
+        b.token(Sk::Key, key);
     }
-    emit_ws(b, &key_region[key.len()..]);
+    b.trivia(Sk::Ws, &key_region[key.len()..]);
 
-    b.token(sk(Sk::Sep), &rest[sep_idx..sep_idx + sep_len]);
+    b.token(Sk::Sep, &rest[sep_idx..sep_idx + sep_len]);
 
     // Everything after the separator is the value; no inline-comment parsing.
     let val_region = &rest[sep_idx + sep_len..];
     let core = val_region.trim();
     let lead_len = val_region.len() - val_region.trim_start().len();
-    emit_ws(b, &val_region[..lead_len]);
-    b.start_node(sk(Sk::Value));
+    b.trivia(Sk::Ws, &val_region[..lead_len]);
+    b.start_node(Sk::Value);
     if !core.is_empty() {
-        b.token(sk(Sk::ValStr), core);
+        b.token(Sk::ValStr, core);
     }
     b.finish_node(); // Value
-    emit_ws(b, &val_region[lead_len + core.len()..]);
-}
-
-fn emit_ws(b: &mut GreenNodeBuilder<'static>, ws: &str) {
-    if !ws.is_empty() {
-        b.token(sk(Sk::Ws), ws);
-    }
-}
-
-fn emit_newline(b: &mut GreenNodeBuilder<'static>, term: &str) {
-    if !term.is_empty() {
-        b.token(sk(Sk::Newline), term);
-    }
+    b.trivia(Sk::Ws, &val_region[lead_len + core.len()..]);
 }

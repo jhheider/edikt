@@ -5,15 +5,14 @@ use crate::{CommentKind, Commented, EditError, Expr, Feature, Step, Value};
 /// A parsed config document.
 ///
 /// Each format module implements this over its own lossless CST. It is the
-/// interface the CLI drives, uniform across JSONC/INI/env: serialize
-/// losslessly, project to the [`Value`] model for querying/conversion, and
-/// report the format's [`Feature`] set.
-///
-/// Mutation (`set`/`delete`/`append`) will extend this trait with M2; for now it
-/// covers the read/query path.
+/// interface the CLI drives, uniform across every format: serialize
+/// losslessly, project to the [`Value`] model for querying/conversion, report
+/// the format's [`Feature`] set, and apply mutations and comment edits in
+/// place. A format usually implements [`Document::apply`] by handing its
+/// [`crate::Mutable`] primitives to [`crate::apply_mutation`].
 pub trait Document {
-    /// Byte-identical serialization for an unedited document (the round-trip
-    /// invariant). Reflects in-place edits once mutation lands.
+    /// Serialize the document: byte-identical for an unedited one (the
+    /// round-trip invariant), and only the edited bytes differ after an edit.
     fn to_source(&self) -> String;
 
     /// Project to the value model for querying and conversion. Trivia (comments,
@@ -126,6 +125,19 @@ pub trait Document {
         let _ = doc;
         self.set_comment(path, kind, text)
     }
+}
+
+/// Check a `^dN` selector against a stream of `count` documents. `^dN` names one
+/// document by position, so it is strict: an index past the end is an error,
+/// not a no-op.
+pub fn check_doc_index(idx: usize, count: usize) -> Result<(), EditError> {
+    if idx < count {
+        return Ok(());
+    }
+    Err(EditError::new(format!(
+        "document `^d{idx}` is out of range ({count} document{})",
+        if count == 1 { "" } else { "s" }
+    )))
 }
 
 #[cfg(test)]

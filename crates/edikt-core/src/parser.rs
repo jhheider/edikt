@@ -81,7 +81,7 @@ fn with_hyphen_hint(err: ParseError, src: &str) -> ParseError {
 ///
 /// Closes the diagnostic gap in jhheider/edikt#63. `.dev-dependencies.serde`
 /// dies in the *parser* (at the `.` after the hyphenated key) and
-/// [`with_hyphen_hint`] catches it. Bare `.dev-dependencies` parses fine as
+/// `with_hyphen_hint` catches it. Bare `.dev-dependencies` parses fine as
 /// `.dev - dependencies()` and only fails at eval, where the source is no
 /// longer in scope - so the worse message landed on the form people type first.
 ///

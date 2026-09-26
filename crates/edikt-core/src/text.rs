@@ -69,6 +69,25 @@ pub fn ending_of(line: &str) -> &'static str {
     }
 }
 
+/// Split `line` into its content and its terminator (see [`ending_of`]).
+#[doc(hidden)]
+pub fn split_ending(line: &str) -> (&str, &str) {
+    line.split_at(line.len() - ending_of(line).len())
+}
+
+/// The byte offset of the start of the line containing `pos`.
+#[doc(hidden)]
+pub fn line_start(src: &str, pos: usize) -> usize {
+    src[..pos].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// The run of spaces and tabs `s` starts with: a line's indentation, when `s`
+/// starts at the line's first byte.
+#[doc(hidden)]
+pub fn leading_indent(s: &str) -> &str {
+    &s[..s.len() - s.trim_start_matches([' ', '\t']).len()]
+}
+
 /// Respell every bare `\n` in generated text as `eol`. A `\n` already preceded
 /// by `\r` is left alone, so the call is idempotent. Only for text an edit
 /// generates; never run it over a file's own bytes.

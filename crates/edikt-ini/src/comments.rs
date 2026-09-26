@@ -5,19 +5,19 @@
 
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
-use edikt_core::wrap::{wrap_comment, wrap_width};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, flatten_commented,
-    line_index, place_line_comment,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
+    flatten_commented, line_index, place_line_comment, sanitize_comment_line as sanitize,
 };
 use rowan::NodeOrToken;
 
 // --- in-place comment write-back ---------------------------------------
 
-/// Is `line` an INI comment line (`;` or `#`, after indent)?
-fn is_comment_line(line: &str) -> bool {
-    matches!(line.trim_start().as_bytes().first(), Some(b';' | b'#'))
-}
+/// An INI comment line: `;` or `#`, after indent.
+const STYLE: LineComment = LineComment {
+    markers: &[";", "#"],
+    delim: "; ",
+};
 
 /// Set the `kind` comment on the node (entry or section header) at `path`.
 pub(crate) fn set_target_comment(
@@ -29,25 +29,17 @@ pub(crate) fn set_target_comment(
     let target = resolve_target(root, path)?;
     let source = edikt_syntax::to_source(root);
     let start: usize = target.text_range().start().into();
-    let indent: String = source[start..]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
+    let indent = edikt_core::text::leading_indent(&source[start..]);
 
     let out = match kind {
-        CommentKind::Head | CommentKind::Foot => {
-            let width = wrap_width(&source);
-            let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
-            place_line_comment(
-                &source,
-                line_index(&source, start),
-                matches!(kind, CommentKind::Head),
-                &indent,
-                "; ",
-                &is_comment_line,
-                Some(&wrapped),
-            )
-        }
+        CommentKind::Head | CommentKind::Foot => place_line_comment(
+            &source,
+            line_index(&source, start),
+            matches!(kind, CommentKind::Head),
+            indent,
+            &STYLE,
+            Some(text),
+        ),
         CommentKind::Inline => rewrite_inline(&source, &target, Some(text)),
     };
     Ok((out, Vec::new()))
@@ -64,18 +56,14 @@ pub(crate) fn delete_target_comment(
         return Ok(source);
     };
     let start: usize = target.text_range().start().into();
-    let indent: String = source[start..]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
+    let indent = edikt_core::text::leading_indent(&source[start..]);
     let out = match kind {
         CommentKind::Head | CommentKind::Foot => place_line_comment(
             &source,
             line_index(&source, start),
             matches!(kind, CommentKind::Head),
-            &indent,
-            "; ",
-            &is_comment_line,
+            indent,
+            &STYLE,
             None,
         ),
         CommentKind::Inline => rewrite_inline(&source, &target, None),
@@ -208,7 +196,7 @@ fn walk_body(section: &SyntaxNode, out: &mut Vec<(String, Commented)>, pending: 
                 ));
             }
             NodeOrToken::Token(t) if t.kind() == Sk::Comment => {
-                pending.push(strip_marker(t.text()));
+                pending.push(STYLE.strip_marker(t.text()));
             }
             _ => {}
         }
@@ -220,12 +208,7 @@ fn node_inline(node: &SyntaxNode) -> Option<String> {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())
         .find(|t| t.kind() == Sk::Comment)
-        .map(|t| strip_marker(t.text()))
-}
-
-/// `; text` / `# text` -> `text`.
-fn strip_marker(text: &str) -> String {
-    text.trim_start_matches([';', '#']).trim().to_string()
+        .map(|t| STYLE.strip_marker(t.text()))
 }
 
 // --- emission -----------------------------------------------------------
@@ -243,7 +226,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
     let mut flattened = false;
 
     for l in &c.comments.head {
-        push_comment(&mut out, l);
+        STYLE.push_line(&mut out, "", l);
     }
 
     // Preamble: top-level scalars and arrays, in order.
@@ -259,7 +242,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
         });
         flattened |= flat.iter().any(|e| e.key.contains('.'));
         for e in &flat {
-            push_flat_entry(&mut out, e);
+            push_flat_entry(&mut out, e)?;
         }
     }
 
@@ -272,8 +255,9 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
             out.push('\n');
         }
         for l in &v.comments.head {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
+        crate::edit::check_section(name)?;
         out.push_str(&format!("[{name}]"));
         if let Some(inline) = &v.comments.inline {
             out.push_str(&format!("  ; {}", sanitize(inline)));
@@ -288,17 +272,17 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
         let flat = flatten_commented(&body);
         flattened |= flat.iter().any(|e| e.key.contains('.'));
         for e in &flat {
-            push_flat_entry(&mut out, e);
+            push_flat_entry(&mut out, e)?;
         }
         for l in &v.comments.foot {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
     }
 
     // A root inline comment has no line of its own here; it trails the document
     // with the root foot.
     for l in c.comments.inline.iter().chain(&c.comments.foot) {
-        push_comment(&mut out, l);
+        STYLE.push_line(&mut out, "", l);
     }
 
     let mut warnings = Vec::new();
@@ -308,9 +292,13 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
     Ok((out, warnings))
 }
 
-fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) {
+/// One `key = value` line with its comments; a key or value INI would read back
+/// as something else errors, as it does for `set`.
+fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) -> Result<(), EditError> {
+    crate::edit::check_key(&e.key)?;
+    crate::edit::check_value(&e.value)?;
     for l in &e.comments.head {
-        push_comment(out, l);
+        STYLE.push_line(out, "", l);
     }
     out.push_str(&format!("{} = {}", e.key, e.value));
     if let Some(inline) = &e.comments.inline {
@@ -318,17 +306,7 @@ fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) {
     }
     out.push('\n');
     for l in &e.comments.foot {
-        push_comment(out, l);
+        STYLE.push_line(out, "", l);
     }
-}
-
-fn push_comment(out: &mut String, line: &str) {
-    out.push_str("; ");
-    out.push_str(&sanitize(line));
-    out.push('\n');
-}
-
-/// A comment must stay on one line.
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
+    Ok(())
 }

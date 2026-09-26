@@ -129,8 +129,8 @@ file.
 **Format detection:** `-t` wins; otherwise the file name (`.env` and `.env.*`
 dotfiles), then the extension: `.json`, `.jsonc`/`.json5`, `.ini`/`.cfg`/`.conf`,
 `.env`/`.properties`/`.props`, `.toml`, `.yaml`/`.yml`, `.kdl`,
-`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd`, in any case (`up.YAML`). One alias
-table (`FORMAT_ALIASES` in `crates/edikt/src/main.rs`) feeds `-t`/`-T`,
+`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd`, both in any case (`up.YAML`, `.ENV`). One alias
+table (`FORMAT_ALIASES` in `crates/edikt/src/format.rs`) feeds `-t`/`-T`,
 extension detection, and the error listing, so every detected extension is
 also a `-t` name; `envspaced`/`spaced` and `frontmatter`/`fm` are `-t` names
 only. There is no content sniffing: **stdin without `-t`,
@@ -358,7 +358,9 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   start or after whitespace (read back as an inline comment); a new key that
   starts with `[`, `;` or `#` (a header or comment), or holds `=`, `:`, a
   line break, or surrounding whitespace; a new section name holding `]` or a
-  line break.
+  line break. `-T ini` output follows the same rules: a key, value or section
+  name it would have to write that way is an error naming the formats that
+  can hold it.
 - **`envspaced`** - the `.env` document model with a **whitespace separator**
   (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
   entirely; a `Dialect` picks only how the key ends, since the separator is the
@@ -382,7 +384,8 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   quotes. That is a value with a line break (it would inject another entry)
   or leading/trailing whitespace (read back trimmed), and a new key that is
   empty (`envspaced`), starts with `#`/`!`, holds the separator (`=`/`:`, or
-  whitespace in `envspaced`), a line break, or surrounding whitespace.
+  whitespace in `envspaced`), a line break, or surrounding whitespace. `-T env`
+  and `-T envspaced` output refuse the same keys and values.
 - **YAML** - a byte splice over the span tree (see Architecture). Assigning
   a **mapping or sequence** writes it in the file's own layout (#83): **flow
   under flow** (a slot inside `[...]`/`{...}`, or a value that already was a
@@ -542,17 +545,20 @@ Workspace; each format is an isolated module with no cross-coupling.
   Pratt parser + evaluator / value calculus / function registry); the
   **`Document` trait** (format-agnostic seam: resolve path -> node handle(s),
   read value/source-slice/commented projection, format-preserving replace,
-  delete, append). There is no conversion trait: each format crate exports
-  `emit` / `emit_commented` free functions, and shared data-model helpers
-  live in `edikt-core`'s `convert` module.
+  delete, append); the **mutation driver** (`apply_mutation` interprets
+  `=` / `|=` / `+=` / `del` / `|` and path-expression targets once, over the
+  `Mutable` primitives each format supplies: value-at, set, delete, add). There
+  is no conversion trait: each format crate exports `emit` / `emit_commented`
+  free functions, and shared data-model helpers live in `edikt-core`'s
+  `convert` module.
 - **`edikt-syntax`** (lib) - shared **rowan** substrate: green-tree helpers,
   generic lossless serialize (walk green tree -> concat token text), splice /
   structural-sharing edit utilities usable by any format's `SyntaxKind`.
 **Library surface (the crates are a public API, not just the binary's guts).**
 Every format crate re-exports the `edikt-core` types that appear in its own
 signatures - `Value`, `Step`, `Expr`, `Document`, `Feature`, `CommentKind`,
-`Commented`, `EditError`, the `json!` macro, and `parse as parse_expr` (aliased
-because each crate's own `parse` is its document parser). A dependent calls
+`Commented`, `EditError`, the `json!` macro, and `parse as parse_expr`
+(aliased because each crate's own `parse` is its document parser). A dependent calls
 `Jsonc::set` without also taking a direct `edikt-core` dependency. `json!` is
 the `serde_json`-shaped `Value` constructor; it builds a data-model value, never
 a document, since the CST is what round-trips bytes.

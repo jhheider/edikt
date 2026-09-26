@@ -13,18 +13,19 @@
 
 use crate::compose::{self, Entry, Node, NodeKind};
 use crate::emit::emit;
-use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::text::{leading_indent, line_start};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, line_index,
-    place_line_comment,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
+    line_index, place_line_comment, sanitize_comment_line as sanitize,
 };
 
 // --- in-place comment write-back ---------------------------------------
 
-/// Is `line` a YAML comment line (`#`, after indent)?
-fn is_comment_line(line: &str) -> bool {
-    line.trim_start().starts_with('#')
-}
+/// A YAML comment line: `#`, after indent.
+const STYLE: LineComment = LineComment {
+    markers: &["#"],
+    delim: "# ",
+};
 
 /// Set the `kind` comment on the node at `path` (a value prefix), format-
 /// preserving via a byte-splice over the source. Head/foot go on own lines
@@ -44,19 +45,14 @@ pub(crate) fn set_node_comment(
         )
     })?;
     let out = match kind {
-        CommentKind::Head | CommentKind::Foot => {
-            let width = wrap_width(source);
-            let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
-            place_line_comment(
-                source,
-                line_index(source, anchor),
-                matches!(kind, CommentKind::Head),
-                &indent,
-                "# ",
-                &is_comment_line,
-                Some(&wrapped),
-            )
-        }
+        CommentKind::Head | CommentKind::Foot => place_line_comment(
+            source,
+            line_index(source, anchor),
+            matches!(kind, CommentKind::Head),
+            &indent,
+            &STYLE,
+            Some(text),
+        ),
         CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, Some(text)),
     };
     Ok((out, Vec::new()))
@@ -81,8 +77,7 @@ pub(crate) fn delete_node_comment(
             line_index(source, anchor),
             matches!(kind, CommentKind::Head),
             &indent,
-            "# ",
-            &is_comment_line,
+            &STYLE,
             None,
         ),
         CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, None),
@@ -121,7 +116,7 @@ fn rewrite_inline(source: &str, anchor: usize, first_line_end: usize, set: Optio
 /// between the line start and the anchor holds more than whitespace and
 /// block-sequence `-` markers, e.g. `[`, `,`), which has no own line.
 fn block_indent(source: &str, anchor: usize) -> Option<String> {
-    let line_start = source[..anchor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_start = line_start(source, anchor);
     // Block context: only whitespace and sequence dashes precede the anchor.
     if !source[line_start..anchor]
         .chars()
@@ -129,12 +124,7 @@ fn block_indent(source: &str, anchor: usize) -> Option<String> {
     {
         return None;
     }
-    Some(
-        source[line_start..]
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect(),
-    )
+    Some(edikt_core::text::leading_indent(&source[line_start..]).to_string())
 }
 
 /// The byte index in `line` where an inline comment begins (a `#` at the start
@@ -170,11 +160,9 @@ fn resolve_anchor(source: &str, doc: &Node, path: &[Step]) -> Result<(usize, usi
             let NodeKind::Sequence(items) = &container.kind else {
                 return Err(EditError::new("comment target is not a sequence element"));
             };
-            let idx = if *i < 0 { items.len() as i64 + i } else { *i };
-            if idx < 0 || idx as usize >= items.len() {
-                return Err(EditError::new("sequence index out of range"));
-            }
-            items[idx as usize].span.start
+            let idx = edikt_core::resolve_index(*i, items.len())
+                .ok_or_else(|| EditError::new("sequence index out of range"))?;
+            items[idx].span.start
         }
         _ => {
             return Err(EditError::new(
@@ -201,9 +189,10 @@ fn descend<'a>(node: &'a Node, path: &[Step]) -> Result<&'a Node, EditError> {
                 .map(|e| &e.value)
                 .ok_or_else(|| EditError::new(format!("no key `{k}`")))?,
             (Step::Index(i), NodeKind::Sequence(items)) => {
-                let idx = if *i < 0 { items.len() as i64 + i } else { *i };
+                let idx = edikt_core::normalize_index(*i, items.len())
+                    .ok_or_else(|| EditError::new("negative index"))?;
                 items
-                    .get(usize::try_from(idx).map_err(|_| EditError::new("negative index"))?)
+                    .get(idx)
                     .ok_or_else(|| EditError::new("index out of range"))?
             }
             _ => return Err(EditError::new("comment path does not resolve to a node")),
@@ -356,11 +345,7 @@ fn comment_lines_between(src: &str, from: usize, to: usize) -> Vec<String> {
     };
     src[start..to]
         .lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            t.starts_with('#')
-                .then(|| t.trim_start_matches('#').trim().to_string())
-        })
+        .filter_map(|l| STYLE.comment_text(l))
         .collect()
 }
 
@@ -380,14 +365,14 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
 
     let mut inserts: Vec<(usize, String)> = Vec::new();
     if !c.comments.head.is_empty() {
-        inserts.push((0, comment_block(&c.comments.head, "")));
+        inserts.push((0, STYLE.block(&c.comments.head, "")));
     }
     plan(&text, c, &doc, &mut inserts);
     if let Some(inline) = &c.comments.inline {
         inserts.push((line_end(&text, content_end(&doc)), inline_text(inline)));
     }
     if !c.comments.foot.is_empty() {
-        inserts.push((text.len(), comment_block(&c.comments.foot, "")));
+        inserts.push((text.len(), STYLE.block(&c.comments.foot, "")));
     }
 
     // Apply back-to-front so positions stay valid; the stable sort keeps
@@ -407,9 +392,9 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
         (CommentedNode::Object(centries), NodeKind::Mapping(nentries)) => {
             for ((_, cv), ne) in centries.iter().zip(nentries) {
                 let key_line = line_start(text, ne.key_span.start);
-                let indent = indent_of(text, key_line);
+                let indent = leading_indent(&text[key_line..]);
                 if !cv.comments.head.is_empty() {
-                    inserts.push((key_line, comment_block(&cv.comments.head, indent)));
+                    inserts.push((key_line, STYLE.block(&cv.comments.head, indent)));
                 }
                 if let Some(inline) = &cv.comments.inline {
                     let same_line = !text
@@ -425,7 +410,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
                 if !cv.comments.foot.is_empty() {
                     let last = content_end(&ne.value).max(ne.key_span.end);
                     let after = (line_end(text, last) + 1).min(text.len());
-                    inserts.push((after, comment_block(&cv.comments.foot, indent)));
+                    inserts.push((after, STYLE.block(&cv.comments.foot, indent)));
                 }
                 plan(text, cv, &ne.value, inserts);
             }
@@ -433,7 +418,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
         (CommentedNode::Array(citems), NodeKind::Sequence(nitems)) => {
             for (cv, ni) in citems.iter().zip(nitems) {
                 let item_line = line_start(text, ni.span.start);
-                let indent = indent_of(text, item_line);
+                let indent = leading_indent(&text[item_line..]);
                 let mut head = cv.comments.head.clone();
                 // A container item has no single line to trail; its inline
                 // joins the head above it.
@@ -446,11 +431,11 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
                     }
                 }
                 if !head.is_empty() {
-                    inserts.push((item_line, comment_block(&head, indent)));
+                    inserts.push((item_line, STYLE.block(&head, indent)));
                 }
                 if !cv.comments.foot.is_empty() {
                     let after = (line_end(text, content_end(ni)) + 1).min(text.len());
-                    inserts.push((after, comment_block(&cv.comments.foot, indent)));
+                    inserts.push((after, STYLE.block(&cv.comments.foot, indent)));
                 }
                 plan(text, cv, ni, inserts);
             }
@@ -461,10 +446,6 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
 
 // --- shared line arithmetic ----------------------------------------------
 
-fn line_start(text: &str, pos: usize) -> usize {
-    text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
-}
-
 fn line_end(text: &str, pos: usize) -> usize {
     text[pos..]
         .find('\n')
@@ -472,26 +453,6 @@ fn line_end(text: &str, pos: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn indent_of(text: &str, line_start: usize) -> &str {
-    let line = &text[line_start..line_end(text, line_start)];
-    &line[..line.len() - line.trim_start().len()]
-}
-
-fn comment_block(lines: &[String], indent: &str) -> String {
-    let mut out = String::new();
-    for l in lines {
-        out.push_str(indent);
-        out.push_str("# ");
-        out.push_str(&sanitize(l));
-        out.push('\n');
-    }
-    out
-}
-
 fn inline_text(text: &str) -> String {
     format!(" # {}", sanitize(text))
-}
-
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
 }

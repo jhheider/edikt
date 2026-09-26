@@ -202,10 +202,7 @@ impl Commented {
                         next.extend(entries.iter().find(|(kk, _)| kk == k).map(|(_, v)| v));
                     }
                     (Step::Index(i), CommentedNode::Array(items)) => {
-                        let idx = if *i < 0 { items.len() as i64 + i } else { *i };
-                        if idx >= 0 && (idx as usize) < items.len() {
-                            next.push(&items[idx as usize]);
-                        }
+                        next.extend(crate::resolve_index(*i, items.len()).map(|n| &items[n]));
                     }
                     (Step::Iterate, CommentedNode::Array(items)) => next.extend(items.iter()),
                     (Step::Iterate, CommentedNode::Object(entries)) => {

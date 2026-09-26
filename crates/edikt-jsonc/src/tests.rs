@@ -1,0 +1,1270 @@
+use super::*;
+use edikt_core::eval;
+use edikt_core::parse as parse_expr;
+
+const TSCONFIG: &str = "{\n\t// compiler settings\n\t\"compilerOptions\": {\n\t\t\"target\": \"ES2020\",   /* bump me */\n\t\t\"module\": \"commonjs\",\n\t\t\"strict\": true,\n\t\t\"lib\": [\"ES2020\", \"DOM\"],\n\t\t\"paths\": {\n\t\t\t\"@/*\": [\"./src/*\"],\n\t\t},\n\t},\n\t\"include\": [\"src/**/*\"],   // globs\n\t\"exclude\": [\n\t\t\"node_modules\",\n\t],\n}\n";
+
+fn roundtrips(src: &str) {
+    let doc = parse(src).expect("parse");
+    assert_eq!(doc.to_source(), src, "round-trip must be byte-identical");
+}
+
+#[test]
+fn lossless_roundtrip_corpus() {
+    roundtrips(TSCONFIG);
+    roundtrips("{}\n");
+    roundtrips("[]");
+    roundtrips("  {  \"a\" : 1 , \"b\" : [ 2 , 3 , ] }  \n");
+    roundtrips("42");
+    roundtrips("\"just a string\"");
+    roundtrips("// leading comment\ntrue\n");
+    roundtrips("{\n  \"nested\": { \"deep\": { \"x\": null } },\n  \"nums\": [-1, 2.5, 1e3]\n}");
+    roundtrips("{ \"unicode\": \"\\u00e9\\tdone\" }");
+}
+
+#[test]
+fn source_slice_returns_exact_bytes() {
+    let doc = parse(TSCONFIG).unwrap();
+    let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+    // A structural result is its exact source, comment and all.
+    assert_eq!(slice(".compilerOptions.lib"), vec!["[\"ES2020\", \"DOM\"]"]);
+    // Iterate yields one slice per element, in order.
+    assert_eq!(slice(".exclude[]"), vec!["\"node_modules\""]);
+    // A nested object keeps its inner comment.
+    assert!(slice(".compilerOptions")[0].contains("/* bump me */"));
+}
+
+#[test]
+fn projects_to_value() {
+    let doc = parse(TSCONFIG).unwrap();
+    let value = doc.to_value();
+    // Drive it through the core evaluator to prove the projection is usable.
+    let got = eval(&parse_expr(".compilerOptions.target").unwrap(), &value).unwrap();
+    assert_eq!(got, vec![Value::Str("ES2020".into())]);
+    let strict = eval(&parse_expr(".compilerOptions.strict").unwrap(), &value).unwrap();
+    assert_eq!(strict, vec![Value::Bool(true)]);
+    let lib = eval(&parse_expr(".compilerOptions.lib[]").unwrap(), &value).unwrap();
+    assert_eq!(
+        lib,
+        vec![Value::Str("ES2020".into()), Value::Str("DOM".into())]
+    );
+}
+
+#[test]
+fn number_and_null_projection() {
+    let doc = parse("{ \"n\": -3, \"f\": 2.5, \"z\": null, \"on\": false }").unwrap();
+    let v = doc.to_value();
+    assert_eq!(
+        eval(&parse_expr(".n").unwrap(), &v).unwrap(),
+        vec![Value::Int(-3)]
+    );
+    assert_eq!(
+        eval(&parse_expr(".f").unwrap(), &v).unwrap(),
+        vec![Value::Float(2.5)]
+    );
+    assert_eq!(
+        eval(&parse_expr(".z").unwrap(), &v).unwrap(),
+        vec![Value::Null]
+    );
+    assert_eq!(
+        eval(&parse_expr(".on").unwrap(), &v).unwrap(),
+        vec![Value::Bool(false)]
+    );
+}
+
+#[test]
+fn rejects_garbage() {
+    assert!(parse("@nope").is_err());
+    assert!(parse("   \n  ").is_err()); // no value
+    assert!(parse("// only a comment\n").is_err());
+}
+
+fn parse_err(src: &str) -> String {
+    match parse(src) {
+        Ok(_) => panic!("{src:?} parsed, but is malformed"),
+        Err(e) => e.msg,
+    }
+}
+
+#[test]
+fn rejects_structural_errors_with_a_location() {
+    // Each of these used to parse, and an edit then spliced garbage (or
+    // panicked). The message names the first problem's line and column.
+    let cases = [
+        ("{\"a\":}", "line 1, column 6: expected a value, found `}`"),
+        (
+            "{\"a\": 1",
+            "line 1, column 8: expected `}`, found end of input \
+                 (unclosed `{` at line 1, column 1)",
+        ),
+        (
+            "{\"a\": 1 // café",
+            "line 1, column 16: expected `}`, found end of input",
+        ),
+        (
+            "{\"a\": 1 \"b\": 2}",
+            "line 1, column 9: expected `,` or `}`, found `\"b\"`",
+        ),
+        (
+            "{\n  \"a\": 1\n  \"b\": 2\n}",
+            "line 3, column 3: expected `,` or `}`, found `\"b\"`",
+        ),
+        (
+            "{\"a\" 1}",
+            "line 1, column 6: expected `:` after an object key, found `1`",
+        ),
+        (
+            "{} {\"z\":1}",
+            "line 1, column 4: unexpected `{` after the top-level value",
+        ),
+        ("true false", "unexpected `false` after the top-level value"),
+        ("{\"a\": foo}", "expected a value, found `foo`"),
+        ("[1 2]", "line 1, column 4: expected `,` or `]`, found `2`"),
+        ("[1,,2]", "line 1, column 4: expected a value, found `,`"),
+        ("[1, 2", "expected `]`, found end of input"),
+        ("[}", "expected a value, found `}`"),
+        ("{]", "expected an object key, found `]`"),
+        ("{,}", "expected an object key, found `,`"),
+        ("{1: 2}", "expected an object key, found `1`"),
+        ("{\"a\"::1}", "expected a value, found `:`"),
+        (
+            "{\"a\": 1} @",
+            "line 1, column 10: unexpected character `@`",
+        ),
+        ("@nope", "line 1, column 1: unexpected character `@`"),
+    ];
+    for (src, want) in cases {
+        let msg = parse_err(src);
+        assert!(msg.contains(want), "{src:?}: {msg}");
+        assert!(msg.starts_with("invalid JSONC at line "), "{src:?}: {msg}");
+    }
+}
+
+#[test]
+fn structural_check_accepts_the_lenient_family() {
+    // Trailing commas, comments anywhere, and every JSON5 spelling stay
+    // valid; only structure is checked.
+    for src in [
+        "[1, 2,]",
+        "{\"a\": 1,}",
+        "{}",
+        "[]",
+        "{ }",
+        "// c\n{\"a\": /* x */ 1 /* y */, } // tail\n",
+        "{a: 1, 'b': +.5, null: NaN, true: 0x1F, $c: Infinity,}",
+        "[\n  1 /* one */,\n  2\n  // foot\n]\n",
+        "\"just a string\"",
+        "  42  // trailing comment\n",
+    ] {
+        assert!(parse(src).is_ok(), "{src:?}: {:?}", parse(src).err());
+    }
+}
+
+// --- fixture corpus (roundtrip anything in our test space) -------------
+
+fn fixtures_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/jsonc")
+}
+
+fn jsonc_fixtures() -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(fixtures_dir())
+        .expect("fixtures/jsonc directory")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|x| x.to_str()),
+                Some("jsonc") | Some("json") | Some("json5")
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn roundtrips_every_fixture() {
+    let files = jsonc_fixtures();
+    assert!(
+        files.len() >= 5,
+        "expected several fixtures, found {}",
+        files.len()
+    );
+    for path in files {
+        let src = std::fs::read_to_string(&path).unwrap();
+        let doc = parse(&src).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+        assert_eq!(
+            doc.to_source(),
+            src,
+            "round-trip must be byte-identical: {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn every_fixture_projects() {
+    for path in jsonc_fixtures() {
+        let src = std::fs::read_to_string(&path).unwrap();
+        let value = parse(&src).unwrap().to_value();
+        assert_eq!(eval(&parse_expr(".").unwrap(), &value).unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn tsconfig_queries_match_expected() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let v = parse(&src).unwrap().to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    assert_eq!(
+        q(".compilerOptions.target"),
+        vec![Value::Str("ES2020".into())]
+    );
+    assert_eq!(q(".compilerOptions.strict"), vec![Value::Bool(true)]);
+    assert_eq!(q(".include[0]"), vec![Value::Str("src/**/*".into())]);
+    assert_eq!(
+        q(".exclude[]"),
+        vec![Value::Str("node_modules".into()), Value::Str("dist".into())]
+    );
+    assert_eq!(q(".compilerOptions.lib | length"), vec![Value::Int(2)]);
+}
+
+// --- format-preserving edits (surgical, anti-parity) ------------------
+
+fn edit_src(src: &str, expr: &str) -> String {
+    let mut doc = parse(src).unwrap();
+    apply(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+    doc.to_source()
+}
+
+fn cedit(src: &str, expr: &str) -> String {
+    let mut doc = parse(src).unwrap();
+    edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
+    doc.to_source()
+}
+
+#[test]
+fn inserted_lines_take_the_files_crlf() {
+    // New members and elements used to arrive with bare `\n`s.
+    let src = "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n";
+    assert_eq!(
+        edit_src(src, ".b = 2"),
+        "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"b\": 2\r\n}\r\n"
+    );
+    assert_eq!(
+        edit_src(src, ".o.p = [1]"),
+        "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"o\": {\r\n    \"p\": [\r\n      1\r\n    ]\r\n  }\r\n}\r\n"
+    );
+    assert_eq!(
+        edit_src(src, ".l += [2]"),
+        "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1,\r\n    2\r\n  ]\r\n}\r\n"
+    );
+    assert_eq!(
+        cedit(src, ".l.# = \"n\""),
+        "{\r\n  \"a\": 1,\r\n  // n\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n"
+    );
+    // An LF file is untouched by any of this.
+    assert_eq!(
+        edit_src("{\n  \"a\": 1\n}\n", ".b = 2"),
+        "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+    );
+}
+
+#[test]
+fn a_bom_is_not_json_and_survives_edits() {
+    // The lexer used to reject the BOM as an unexpected character.
+    let src = "\u{FEFF}{\"a\": 1}\n";
+    let doc = parse(src).unwrap();
+    assert_eq!(doc.to_source(), src);
+    assert_eq!(doc.to_value(), json!({"a": 1}));
+    assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}{\"a\": 2}\n");
+}
+
+#[test]
+fn comment_mutation_head_inline_and_element() {
+    // Head above a member (only that region changes).
+    assert_eq!(
+        cedit(
+            "{\n  \"strict\": true,\n  \"target\": \"ES2020\"\n}\n",
+            ".target.# = \"level\""
+        ),
+        "{\n  \"strict\": true,\n  // level\n  \"target\": \"ES2020\"\n}\n"
+    );
+    // Inline after the value (past the comma).
+    assert_eq!(
+        cedit(
+            "{\n  \"strict\": true,\n  \"x\": 1\n}\n",
+            ".strict.#.inline = \"checks\""
+        ),
+        "{\n  \"strict\": true, // checks\n  \"x\": 1\n}\n"
+    );
+    // Head on an array element.
+    assert_eq!(
+        cedit(
+            "{\n  \"xs\": [\n    \"a\",\n    \"b\"\n  ]\n}\n",
+            ".xs[1].# = \"second\""
+        ),
+        "{\n  \"xs\": [\n    \"a\",\n    // second\n    \"b\"\n  ]\n}\n"
+    );
+    // Replace one member's head, keep a sibling's comment.
+    assert_eq!(
+        cedit(
+            "{\n  // keep\n  \"a\": 1,\n  // old\n  \"b\": 2\n}\n",
+            ".b.# |= ascii_upcase"
+        ),
+        "{\n  // keep\n  \"a\": 1,\n  // OLD\n  \"b\": 2\n}\n"
+    );
+    // Delete a head comment.
+    assert_eq!(
+        cedit("{\n  // drop\n  \"a\": 1\n}\n", "del(.a.#)"),
+        "{\n  \"a\": 1\n}\n"
+    );
+}
+
+#[test]
+fn comment_on_compact_object_defers_to_reflow() {
+    let mut doc = parse("{ \"a\": 1, \"b\": 2 }").unwrap();
+    let err = edikt_core::apply_comment_mutation(&mut doc, &parse_expr(".b.# = \"x\"").unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("layout expansion"), "got: {err}");
+}
+
+fn changed_lines(a: &str, b: &str) -> Vec<usize> {
+    let la: Vec<_> = a.lines().collect();
+    let lb: Vec<_> = b.lines().collect();
+    (0..la.len().max(lb.len()))
+        .filter(|&i| la.get(i) != lb.get(i))
+        .collect()
+}
+
+#[test]
+fn set_touches_exactly_one_line_and_keeps_comments() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let out = edit_src(&src, r#".compilerOptions.target = "ES2022""#);
+    assert_eq!(
+        changed_lines(&src, &out),
+        vec![3],
+        "only the target line should change"
+    );
+    assert!(out.contains(r#""target": "ES2022""#));
+    // comments and trailing commas survive the edit
+    assert!(out.contains("// TypeScript compiler configuration"));
+    assert!(out.contains("/* language level */"));
+    assert!(out.contains("\"dist\",\n\t],"));
+    assert!(parse(&out).is_ok(), "edited output must re-parse");
+}
+
+#[test]
+fn set_scalars() {
+    assert_eq!(
+        edit_src("{ \"a\": true }", ".a = false"),
+        "{ \"a\": false }"
+    );
+    assert_eq!(edit_src("{ \"a\": 1 }", ".a = 42"), "{ \"a\": 42 }");
+    assert_eq!(edit_src("{ \"a\": 1 }", ".a = null"), "{ \"a\": null }");
+    assert_eq!(
+        edit_src("{ \"a\": \"x\" }", r#".a = "y""#),
+        "{ \"a\": \"y\" }"
+    );
+}
+
+#[test]
+fn set_into_array_index() {
+    assert_eq!(edit_src("[10, 20, 30]", ".[1] = 99"), "[10, 99, 30]");
+    assert_eq!(edit_src("[10, 20, 30]", ".[-1] = 99"), "[10, 20, 99]");
+}
+
+#[test]
+fn update_assign_over_cst() {
+    assert_eq!(
+        edit_src("{ \"count\": 5 }", ".count |= . + 1"),
+        "{ \"count\": 6 }"
+    );
+    assert_eq!(
+        edit_src("{ \"n\": \"edikt\" }", ".n |= ascii_upcase"),
+        "{ \"n\": \"EDIKT\" }"
+    );
+}
+
+#[test]
+fn piped_assignments() {
+    assert_eq!(
+        edit_src("{ \"a\": 1, \"b\": 2 }", ".a = 9 | .b = 8"),
+        "{ \"a\": 9, \"b\": 8 }"
+    );
+}
+
+#[test]
+fn adding_a_key_on_each_fixture_keeps_it_valid() {
+    // Every fixture is a top-level object; adding a fresh key must keep the
+    // doc valid JSONC and preserve the unrelated bytes.
+    for path in jsonc_fixtures() {
+        let src = std::fs::read_to_string(&path).unwrap();
+        let mut doc = parse(&src).unwrap();
+        apply(&mut doc, &parse_expr(r#".__added__ = "x""#).unwrap()).unwrap();
+        let out = doc.to_source();
+        assert!(out.contains("__added__"));
+        assert!(
+            parse(&out).is_ok(),
+            "{}: edited output must re-parse",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn non_assignment_and_bad_create_error() {
+    let mut doc = parse("{ \"a\": 1 }").unwrap();
+    assert!(apply(&mut doc, &parse_expr(".a").unwrap()).is_err()); // not an assignment
+    assert!(apply(&mut doc, &parse_expr(".a.b = 2").unwrap()).is_err()); // create in scalar
+}
+
+#[test]
+fn del_object_members() {
+    let src = "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n";
+    assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n  \"c\": 3\n}\n");
+    assert_eq!(edit_src(src, "del(.a)"), "{\n  \"b\": 2,\n  \"c\": 3\n}\n");
+    // Deleting the last member must NOT leave the previous member's separator
+    // comma dangling before `}`; that is invalid strict JSON. This source is
+    // strict (no trailing comma), so the result stays strict.
+    assert_eq!(edit_src(src, "del(.c)"), "{\n  \"a\": 1,\n  \"b\": 2\n}\n");
+}
+
+#[test]
+fn del_last_member_preserves_trailing_comma_style() {
+    // When the object is already trailing-comma style (JSON5/JSONC), deleting
+    // the last member leaves the previous member's trailing comma; that is
+    // the file's own style, preserved, and still valid JSON5/JSONC.
+    let src = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
+    assert_eq!(edit_src(src, "del(.b)"), "{\n  \"a\": 1,\n}\n");
+}
+
+#[test]
+fn del_only_member() {
+    assert_eq!(edit_src("{\n  \"a\": 1\n}\n", "del(.a)"), "{\n}\n");
+}
+
+#[test]
+fn del_object_members_in_pipeline() {
+    let src = "{\n  \"remote\": {\n    \"a\": 1,\n    \"b\": 2,\n    \"c\": 3\n  }\n}\n";
+    assert_eq!(
+        edit_src(src, "del(.remote.a) | del(.remote.b)"),
+        "{\n  \"remote\": {\n    \"c\": 3\n  }\n}\n"
+    );
+}
+
+#[test]
+fn del_array_elements() {
+    assert_eq!(edit_src("[10, 20, 30]", "del(.[1])"), "[10, 30]");
+    assert_eq!(edit_src("[10, 20, 30]", "del(.[0])"), "[20, 30]");
+    assert_eq!(edit_src("[10, 20, 30]", "del(.[-1])"), "[10, 20]");
+    assert_eq!(edit_src("[10]", "del(.[0])"), "[]");
+}
+
+#[test]
+fn del_array_elements_in_pipeline() {
+    assert_eq!(edit_src("[10, 20, 30]", "del(.[0]) | del(.[0])"), "[30]");
+}
+
+#[test]
+fn del_missing_is_noop() {
+    let src = "{ \"a\": 1 }";
+    assert_eq!(edit_src(src, "del(.nope)"), src);
+    assert_eq!(edit_src("[1, 2]", "del(.[9])"), "[1, 2]");
+}
+
+#[test]
+fn del_removes_one_line_and_keeps_comments() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let out = edit_src(&src, "del(.compilerOptions.module)");
+    assert!(!out.contains("\"module\""));
+    assert_eq!(src.lines().count() - out.lines().count(), 1);
+    assert!(out.contains("// TypeScript compiler configuration"));
+    assert!(out.contains("/* language level */"));
+    assert!(parse(&out).is_ok(), "edited output must re-parse");
+}
+
+#[test]
+fn add_assign_scalar_reduces_to_set() {
+    assert_eq!(
+        edit_src("{ \"count\": 5 }", ".count += 3"),
+        "{ \"count\": 8 }"
+    );
+    assert_eq!(
+        edit_src("{ \"s\": \"a\" }", r#".s += "b""#),
+        "{ \"s\": \"ab\" }"
+    );
+}
+
+#[test]
+fn append_single_line_array() {
+    assert_eq!(
+        edit_src(r#"["a", "b"]"#, r#". += ["c"]"#),
+        r#"["a", "b", "c"]"#
+    );
+    assert_eq!(edit_src("[]", ". += [1, 2]"), "[1, 2]");
+}
+
+#[test]
+fn append_multiline_array_matches_indent_and_trailing_comma() {
+    let src = "{\n  \"exclude\": [\n    \"node_modules\",\n    \"dist\",\n  ]\n}\n";
+    let out = edit_src(src, r#".exclude += ["coverage"]"#);
+    assert_eq!(
+        out,
+        "{\n  \"exclude\": [\n    \"node_modules\",\n    \"dist\",\n    \"coverage\",\n  ]\n}\n"
+    );
+}
+
+#[test]
+fn append_to_fixture_lib_keeps_comments() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let out = edit_src(&src, r#".compilerOptions.lib += ["WebWorker"]"#);
+    assert!(out.contains(r#"["ES2020", "DOM", "WebWorker"]"#));
+    assert!(out.contains("// TypeScript compiler configuration"));
+    assert!(parse(&out).is_ok());
+}
+
+// --- new-key creation -------------------------------------------------
+
+#[test]
+fn creates_new_key_single_line() {
+    assert_eq!(edit_src("{ \"a\": 1 }", ".b = 2"), "{ \"a\": 1, \"b\": 2 }");
+    assert_eq!(edit_src("{}", ".a = 1"), "{\"a\": 1}");
+}
+
+#[test]
+fn creates_new_key_multiline_matches_style() {
+    let src = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
+    assert_eq!(
+        edit_src(src, ".c = 3"),
+        "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3,\n}\n"
+    );
+}
+
+#[test]
+fn creates_new_key_multiline_strict_stays_strict() {
+    // The reported bug (claude_desktop_config.json): appending a new last key
+    // to a strict-JSON object (no trailing comma) must not manufacture one.
+    let src = "{\n  \"a\": 1,\n  \"b\": 2\n}\n";
+    assert_eq!(
+        edit_src(src, ".c = 3"),
+        "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n"
+    );
+}
+
+#[test]
+fn append_multiline_array_strict_stays_strict() {
+    let src = "{\n  \"xs\": [\n    1,\n    2\n  ]\n}\n";
+    assert_eq!(
+        edit_src(src, ".xs += [3]"),
+        "{\n  \"xs\": [\n    1,\n    2,\n    3\n  ]\n}\n"
+    );
+}
+
+#[test]
+fn creates_intermediate_objects() {
+    assert_eq!(
+        edit_src("{ \"x\": {} }", ".x.y.z = 1"),
+        "{ \"x\": {\"y\": {\"z\":1}} }"
+    );
+}
+
+#[test]
+fn creates_key_in_fixture_keeps_comments() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let out = edit_src(&src, ".compilerOptions.noEmit = true");
+    assert!(out.contains("\"noEmit\": true"));
+    assert!(out.contains("// TypeScript compiler configuration"));
+    assert!(out.contains("/* language level */"));
+    assert!(parse(&out).is_ok());
+}
+
+#[test]
+fn cannot_create_key_in_a_scalar() {
+    let mut doc = parse("{ \"a\": 1 }").unwrap();
+    assert!(apply(&mut doc, &parse_expr(".a.b = 2").unwrap()).is_err());
+}
+
+// --- comment model (extraction + commented emit) -----------------------
+
+#[test]
+fn extracts_head_inline_and_foot_comments() {
+    let src = "{\n  // section\n  \"a\": 1, // why\n  \"b\": {\n    \"c\": 2, /* note */\n    // trailing\n  },\n}\n";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    let edikt_core::CommentedNode::Object(entries) = &c.node else {
+        panic!("expected object");
+    };
+    assert_eq!(entries[0].0, "a");
+    assert_eq!(entries[0].1.comments.head, vec!["section"]);
+    assert_eq!(entries[0].1.comments.inline.as_deref(), Some("why"));
+    let edikt_core::CommentedNode::Object(inner) = &entries[1].1.node else {
+        panic!("expected nested object");
+    };
+    assert_eq!(inner[0].1.comments.inline.as_deref(), Some("note"));
+    assert_eq!(inner[0].1.comments.foot, vec!["trailing"]);
+    // Shape matches to_value exactly.
+    assert_eq!(c.to_value(), parse(src).unwrap().to_value());
+}
+
+#[test]
+fn extracts_document_banner_and_trailer() {
+    let src = "// banner\n{ \"a\": 1 }\n// trailer\n";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    assert_eq!(c.comments.head, vec!["banner"]);
+    assert_eq!(c.comments.foot, vec!["trailer"]);
+}
+
+#[test]
+fn extracts_multiline_block_comment_as_head_lines() {
+    let src = "{\n  /* one\n   * two */\n  \"a\": 1\n}";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    let edikt_core::CommentedNode::Object(entries) = &c.node else {
+        panic!("expected object");
+    };
+    assert_eq!(entries[0].1.comments.head, vec!["one", "two"]);
+}
+
+#[test]
+fn commented_emit_places_all_kinds() {
+    let src =
+        "{\n  // section\n  \"a\": 1, // why\n  \"xs\": [\n    2,\n    // last\n    3,\n  ],\n}\n";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    let out = emit_commented(&c);
+    assert_eq!(
+        out,
+        "{\n  // section\n  \"a\": 1, // why\n  \"xs\": [\n    2,\n    // last\n    3\n  ]\n}\n"
+    );
+    // The output re-parses, and the comments survive another round.
+    let again = parse(&out).unwrap().to_commented().unwrap();
+    assert_eq!(again, c);
+}
+
+#[test]
+fn tsconfig_fixture_comments_survive_extraction_and_emit() {
+    let src = std::fs::read_to_string(fixtures_dir().join("tsconfig.jsonc")).unwrap();
+    let doc = parse(&src).unwrap();
+    let c = doc.to_commented().unwrap();
+    assert!(c.has_comments());
+    assert_eq!(c.to_value(), doc.to_value(), "shapes must match");
+    let out = emit_commented(&c);
+    assert!(out.contains("// TypeScript compiler configuration"));
+    // The `/* language level */` block comment re-emits as a line comment.
+    assert!(out.contains("// language level"), "got: {out}");
+    assert!(parse(&out).is_ok(), "commented emit must re-parse");
+}
+
+// --- projection edge cases (numbers, escapes, absent values) -----------
+
+#[test]
+fn projects_big_int_as_float_and_unescapes_every_escape() {
+    // A magnitude past i64 falls back to float instead of clamping to 0.
+    let doc = parse("{ \"big\": 99999999999999999999 }").unwrap();
+    assert_eq!(
+        eval(&parse_expr(".big").unwrap(), &doc.to_value()).unwrap(),
+        vec![Value::Float(99999999999999999999.0)]
+    );
+    // Every string escape the unescaper handles, including an unknown escape
+    // (kept verbatim as `\q`) and an invalid `\u` (dropped).
+    let doc = parse("{ \"s\": \"a\\/b\\n\\r\\b\\f\\tz\\q\\u00e9\\uzzzz\" }").unwrap();
+    assert_eq!(
+        eval(&parse_expr(".s").unwrap(), &doc.to_value()).unwrap(),
+        vec![Value::Str("a/b\n\r\u{8}\u{c}\tz\\q\u{e9}".into())]
+    );
+}
+
+#[test]
+fn projects_absent_member_value_as_null() {
+    // `parse` rejects a member with no value, but the tree under it is still
+    // built: it must round-trip byte-for-byte and project the hole to null
+    // rather than panic (the moat holds even on garbage input).
+    assert!(parse("{\"a\":}").is_err());
+    let root = SyntaxNode::new_root(parser::build("{\"a\":}"));
+    assert_eq!(edikt_syntax::to_source(&root), "{\"a\":}");
+    assert_eq!(
+        eval(&parse_expr(".a").unwrap(), &project::to_value(&root)).unwrap(),
+        vec![Value::Null]
+    );
+}
+
+#[test]
+fn unescape_guards_a_lone_trailing_backslash() {
+    // Defensive: the lexer never yields this, but the unescaper must not
+    // panic on a token whose content ends in a bare backslash.
+    assert_eq!(crate::project::unescape("\"a\\\""), "a\\");
+}
+
+// --- source_slice / resolve edge cases --------------------------------
+
+#[test]
+fn source_slice_iterates_objects_and_skips_scalars() {
+    let doc = parse(TSCONFIG).unwrap();
+    let slice = |p: &str| doc.source_slice(parse_expr(p).unwrap().as_path().unwrap());
+    // Iterating an object yields each member's value source, in order.
+    assert_eq!(slice(".compilerOptions.paths[]"), vec!["[\"./src/*\"]"]);
+    // Iterating a scalar yields nothing (not an error).
+    assert!(slice(".compilerOptions.strict[]").is_empty());
+    // An index that lands below the start of the array resolves to nothing.
+    assert!(slice(".exclude[-5]").is_empty());
+}
+
+#[test]
+fn value_at_rejects_iterate_and_comment_steps() {
+    let doc = parse(TSCONFIG).unwrap();
+    let at = |p: &str| doc.value_at(parse_expr(p).unwrap().as_path().unwrap());
+    // `[]` is not a single navigable value node.
+    assert!(at(".compilerOptions.lib[]").is_none());
+    // A `#` comment step never resolves to a value.
+    assert!(at(".compilerOptions.strict.#").is_none());
+}
+
+// --- append / create edge cases ---------------------------------------
+
+#[test]
+fn append_single_line_array_with_trailing_comma() {
+    // A single-line array that already carries a trailing comma keeps it.
+    assert_eq!(edit_src("[1, 2,]", ". += [3]"), "[1, 2, 3,]");
+}
+
+#[test]
+fn insert_after_trailing_comment_puts_the_comma_before_it() {
+    // The separator comma goes after the last element, never inside the
+    // comment that follows it.
+    assert_eq!(
+        edit_src("{\n  \"a\": 1 // note\n}\n", ".b = 2"),
+        "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n"
+    );
+    assert_eq!(
+        edit_src("{\"xs\": [\n  1 // one\n]}", ".xs += [2, 3]"),
+        "{\"xs\": [\n  1, // one\n  2,\n  3\n]}"
+    );
+    // An own-line comment after the last member stays where it is.
+    assert_eq!(
+        edit_src("{\n  \"a\": 1\n  // tail\n}", ".b = 2"),
+        "{\n  \"a\": 1,\n  // tail\n  \"b\": 2\n}"
+    );
+    // Block comments, single-line.
+    assert_eq!(edit_src("[1 /* c */]", ". += [2]"), "[1, /* c */ 2]");
+    assert_eq!(
+        edit_src("{ \"a\": 1 /* c */ }", ".b = 2"),
+        "{ \"a\": 1, /* c */ \"b\": 2 }"
+    );
+}
+
+#[test]
+fn insert_after_comment_keeps_trailing_comma_style() {
+    // A trailing comma followed by a comment is still trailing-comma style:
+    // no second comma, and the new last element carries one.
+    assert_eq!(
+        edit_src("[\n  1, // one\n]", ". += [2]"),
+        "[\n  1, // one\n  2,\n]"
+    );
+    assert_eq!(
+        edit_src("{\n  \"a\": 1, // note\n}", ".b = 2"),
+        "{\n  \"a\": 1, // note\n  \"b\": 2,\n}"
+    );
+    // `1 /* c */,`: the member owns a comma after a comment.
+    assert_eq!(
+        edit_src("[\n  1 /* c */,\n]", ". += [2]"),
+        "[\n  1 /* c */,\n  2,\n]"
+    );
+}
+
+#[test]
+fn insert_into_comment_only_container_adds_no_separator() {
+    // No element to separate from: the comment is not followed by a comma.
+    assert_eq!(
+        edit_src("{\n  // c\n}", ".b = 2"),
+        "{\n  // c\n  \"b\": 2\n}"
+    );
+    assert_eq!(edit_src("{ /* c */ }", ".b = 2"), "{ /* c */ \"b\": 2 }");
+    assert_eq!(edit_src("[ /* c */ ]", ". += [1, 2]"), "[ /* c */ 1, 2 ]");
+}
+
+fn edit_err(src: &str, expr: &str) -> String {
+    let mut doc = parse(src).unwrap();
+    apply(&mut doc, &parse_expr(expr).unwrap())
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn creating_through_index_iterate_or_comment_errors() {
+    assert!(
+        edit_err("{}", ".a[0] = 1").contains("cannot create array elements by index"),
+        "index create"
+    );
+    assert!(
+        edit_err("{}", ".a[] = 1").contains("cannot create through `[]`"),
+        "iterate create"
+    );
+    assert!(
+        edit_err("{}", ".a.# = 1").contains("editing comments"),
+        "comment create"
+    );
+    assert!(
+        !edit_err("{}", ".a.# = 1").contains("planned"),
+        "comment editing shipped; no stale roadmap promise"
+    );
+}
+
+#[test]
+fn iterate_assignment_maps_over_elements() {
+    // `.a[] |= f` maps `f` over each element, touching only element bytes.
+    assert_eq!(
+        edit_src("{\"a\":[1,2,3]}", ".a[] |= . * 2"),
+        "{\"a\":[2,4,6]}"
+    );
+    // `.a[] += x` is jq's `.a[] |= . + x`.
+    assert_eq!(edit_src("{\"a\":[1,2]}", ".a[] += 10"), "{\"a\":[11,12]}");
+    // `.a[] = x` sets every element to the same value.
+    assert_eq!(edit_src("{\"a\":[1,2]}", ".a[] = 9"), "{\"a\":[9,9]}");
+    // An object iterate fans out over values.
+    assert_eq!(
+        edit_src("{\"o\":{\"x\":1,\"y\":2}}", ".o[] += 5"),
+        "{\"o\":{\"x\":6,\"y\":7}}"
+    );
+    // A nested iterate (`.[].b`) works, not just a trailing one.
+    assert_eq!(
+        edit_src("{\"a\":[{\"b\":1},{\"b\":2}]}", ".a[].b |= . * 10"),
+        "{\"a\":[{\"b\":10},{\"b\":20}]}"
+    );
+    // Empty/absent iterates are a no-op for update forms (`|=`/`+=`).
+    assert_eq!(edit_src("{\"a\":[]}", ".a[] |= . + 1"), "{\"a\":[]}");
+    assert_eq!(edit_src("{}", ".a[] |= . + 1"), "{}");
+    // Creating through `[]` is still refused.
+    assert!(
+        edit_err("{}", ".a[] = 1").contains("cannot create through `[]`"),
+        "iterate create"
+    );
+}
+
+#[test]
+fn del_with_extra_arguments_errors() {
+    assert!(
+        edit_err("{ \"a\": 1 }", "del(.a; .b)").contains("one path argument"),
+        "del arity"
+    );
+}
+
+#[test]
+fn del_dot_iterate_fans_out() {
+    // `del(.a[])` empties an array/object (jq), one clean line removed
+    // each; comments and layout between elements survive.
+    assert_eq!(edit_src("{\"a\":[1,2,3]}", "del(.a[])"), "{\"a\":[]}");
+    assert_eq!(
+        edit_src("{\"o\":{\"x\":1,\"y\":2}}", "del(.o[])"),
+        "{\"o\":{}}"
+    );
+    assert_eq!(edit_src("{\"a\": [1, 2, 3]}", "del(.a[])"), "{\"a\": []}");
+    // Nested fan-out deletes the target under each element.
+    assert_eq!(
+        edit_src("{\"a\":[{\"b\":1},{\"b\":2}]}", "del(.a[].b)"),
+        "{\"a\":[{},{}]}"
+    );
+    // Root-level iterate empties the whole document array.
+    assert_eq!(edit_src("[1, 2]", "del(.[])"), "[]");
+    // Missing target or empty collection is a no-op.
+    assert_eq!(edit_src("{\"a\":[]}", "del(.a[])"), "{\"a\":[]}");
+    assert_eq!(edit_src("{\"a\":[1]}", "del(.nope[])"), "{\"a\":[1]}");
+    // Multi-line formatting: each deleted element's line disappears (the closing
+    // bracket keeps its own line's indent).
+    assert_eq!(
+        edit_src("{\n  \"a\": [\n    1,\n    2,\n  ],\n}\n", "del(.a[])"),
+        "{\n  \"a\": [\n    ],\n}\n"
+    );
+}
+
+#[test]
+fn del_dot_iterate_and_comment_are_rejected_or_noop() {
+    // del(.) is refused outright.
+    assert!(
+        edit_err("{ \"a\": 1 }", "del(.)").contains("del(.) is not allowed"),
+        "del(.)"
+    );
+    // del of a comment through the plain edit path is refused (comment edits
+    // route elsewhere).
+    assert!(
+        edit_err("{ \"a\": 1 }", "del(.a.#)").contains("deleting comments"),
+        "del(.a.#)"
+    );
+    assert!(
+        !edit_err("{ \"a\": 1 }", "del(.a.#)").contains("planned"),
+        "comment editing shipped; no stale roadmap promise"
+    );
+    // Deleting through an absent parent is a silent no-op.
+    assert_eq!(edit_src("{ \"a\": 1 }", "del(.nope.deep)"), "{ \"a\": 1 }");
+}
+
+// --- comment write-back edge cases ------------------------------------
+
+fn cedit_err(src: &str, expr: &str) -> String {
+    let mut doc = parse(src).unwrap();
+    edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap())
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn comment_delete_edge_cases() {
+    // Deleting a comment at a missing key is a no-op.
+    assert_eq!(
+        cedit("{\n  \"a\": 1\n}\n", "del(.nope.#)"),
+        "{\n  \"a\": 1\n}\n"
+    );
+    // Deleting a head/foot on a compact object has nothing to drop.
+    assert_eq!(
+        cedit("{ \"a\": 1, \"b\": 2 }", "del(.b.#)"),
+        "{ \"a\": 1, \"b\": 2 }"
+    );
+    // Deleting an inline comment removes exactly its bytes.
+    assert_eq!(
+        cedit(
+            "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n",
+            "del(.a.#.inline)"
+        ),
+        "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+    );
+}
+
+#[test]
+fn inline_comment_layout_errors() {
+    // A compact object leaves no room for a trailing inline comment.
+    assert!(
+        cedit_err("{ \"a\": 1 }", ".a.#.inline = \"x\"").contains("layout expansion"),
+        "compact inline"
+    );
+    // An inline comment on a value that spans lines is not yet supported.
+    assert!(
+        cedit_err(
+            "{\n  \"obj\": {\n    \"x\": 1\n  }\n}\n",
+            ".obj.#.inline = \"n\""
+        )
+        .contains("multi-line"),
+        "multi-line inline"
+    );
+}
+
+#[test]
+fn comment_target_resolution_errors() {
+    // The document banner `.#` is not editable for JSONC yet.
+    assert!(
+        cedit_err("{ \"a\": 1 }", ".# = \"x\"").contains("document-level"),
+        "banner"
+    );
+    // An out-of-range array index is a clean error.
+    assert!(
+        cedit_err("{\n  \"xs\": [1, 2]\n}\n", ".xs[9].# = \"x\"").contains("out of range"),
+        "index range"
+    );
+    // A `[]` before `#` addresses no single element.
+    assert!(
+        cedit_err("{\n  \"xs\": [1, 2]\n}\n", ".xs[].# = \"x\"")
+            .contains("object keys or array elements"),
+        "iterate comment"
+    );
+}
+
+// --- comment extraction edge cases ------------------------------------
+
+#[test]
+fn extracts_member_internal_head_and_inline_comments() {
+    // Comments *inside* a member: before the value (head), and after it but
+    // before the comma (inline), the latter joined across two lines.
+    let src = "{\"x\": /* h */ 1 /* i\nj */, \"y\": 2}";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    let edikt_core::CommentedNode::Object(entries) = &c.node else {
+        panic!("expected object");
+    };
+    assert_eq!(entries[0].0, "x");
+    assert_eq!(entries[0].1.comments.head, vec!["h"]);
+    assert_eq!(entries[0].1.comments.inline.as_deref(), Some("i j"));
+}
+
+#[test]
+fn empty_inline_comment_contributes_nothing() {
+    let src = "{\n  \"a\": 1, //\n  \"b\": 2\n}\n";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    let edikt_core::CommentedNode::Object(entries) = &c.node else {
+        panic!("expected object");
+    };
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].1.comments.inline, None);
+}
+
+#[test]
+fn empty_container_keeps_its_own_foot_comment() {
+    let src = "{\n  // note\n}\n";
+    let c = parse(src).unwrap().to_commented().unwrap();
+    assert_eq!(c.comments.foot, vec!["note"]);
+    let edikt_core::CommentedNode::Object(entries) = &c.node else {
+        panic!("expected object");
+    };
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn extracts_top_level_inline_and_multiline_trailer() {
+    // An inline comment on the top-level value.
+    let c = parse("true // yes\n").unwrap().to_commented().unwrap();
+    assert_eq!(c.comments.inline.as_deref(), Some("yes"));
+    // A multi-line block comment after the value becomes a multi-line foot.
+    let c = parse("{}\n/* a\nb */\n").unwrap().to_commented().unwrap();
+    assert_eq!(c.comments.foot, vec!["a", "b"]);
+}
+
+#[test]
+fn stray_trailing_token_does_not_break_the_commented_projection() {
+    // `parse` rejects trailing garbage past the top value, but the tree is
+    // still built losslessly and the commented projection of it reflects
+    // the leading value rather than panicking.
+    assert!(parse("true false").is_err());
+    let root = SyntaxNode::new_root(parser::build("true false"));
+    let c = comments::to_commented(&root);
+    assert_eq!(c.to_value(), Value::Bool(true));
+}
+
+// --- commented emit edge cases ----------------------------------------
+
+#[test]
+fn emits_document_level_head_inline_and_foot() {
+    let c = parse("// banner\ntrue // yes\n// trailer\n")
+        .unwrap()
+        .to_commented()
+        .unwrap();
+    assert_eq!(emit_commented(&c), "// banner\ntrue // yes\n// trailer\n");
+}
+
+#[test]
+fn emits_array_element_inline_and_foot() {
+    let c = parse("[\n  1 /* one */,\n  2\n  // foot\n]\n")
+        .unwrap()
+        .to_commented()
+        .unwrap();
+    assert_eq!(emit_commented(&c), "[\n  1, // one\n  2\n  // foot\n]\n");
+}
+
+#[test]
+fn emits_object_member_foot() {
+    let c = parse("{\n  \"a\": 1\n  // foot\n}\n")
+        .unwrap()
+        .to_commented()
+        .unwrap();
+    assert_eq!(emit_commented(&c), "{\n  \"a\": 1\n  // foot\n}\n");
+}
+
+// --- public API surface ------------------------------------------------
+
+#[test]
+fn document_trait_and_public_accessors() {
+    use edikt_core::Document;
+    let mut doc = parse(TSCONFIG).unwrap();
+    // syntax() exposes the lossless root node.
+    assert_eq!(doc.syntax().text().to_string(), TSCONFIG);
+    // Capability + comment probes.
+    assert!(doc.features().contains(&Feature::Comments));
+    assert!(doc.has_comments());
+    // A mutation driven through the trait method (not the free `apply`).
+    Document::apply(
+        &mut doc,
+        &parse_expr(".compilerOptions.strict = false").unwrap(),
+    )
+    .unwrap();
+    assert!(doc.to_source().contains("\"strict\": false"));
+    // emit(): the pretty-JSON conversion target.
+    let json = emit(&doc.to_value());
+    assert!(json.contains("\"compilerOptions\""));
+}
+
+// ---- JSON5 input (edikt-087 BUG-1) ----
+
+const JSON5_DOC: &str = "{\n  unquoted: 'single',\n  \"quoted\": 0xff,\n}\n";
+
+#[test]
+fn json5_unquoted_keys_and_single_quotes_parse_and_project() {
+    let v = parse(JSON5_DOC).unwrap().to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    // The bare key is addressable by its plain name...
+    assert_eq!(q(".unquoted"), vec![Value::Str("single".into())]);
+    // ...and a single-quoted string decodes like a double-quoted one.
+    assert_eq!(q(".quoted"), vec![Value::Int(255)]);
+}
+
+#[test]
+fn json5_roundtrips_byte_identically() {
+    // The moat: parsing a JSON5 document and serializing it back changes
+    // nothing, which is what makes an in-place edit safe.
+    assert_eq!(parse(JSON5_DOC).unwrap().to_source(), JSON5_DOC);
+}
+
+#[test]
+fn json5_edit_touches_only_the_target_and_keeps_key_spelling() {
+    let mut doc = parse(JSON5_DOC).unwrap();
+    apply(&mut doc, &parse_expr(".unquoted = \"changed\"").unwrap()).unwrap();
+    // The bare key stays bare (its bytes were never targeted); only the
+    // value is rewritten, keeping its single quotes (#81), and the hex
+    // sibling and trailing comma survive.
+    assert_eq!(
+        doc.to_source(),
+        "{\n  unquoted: 'changed',\n  \"quoted\": 0xff,\n}\n"
+    );
+}
+
+#[test]
+fn json5_reserved_words_are_legal_keys() {
+    // IdentifierName, not Identifier: `null`/`true` name keys here and must
+    // not be read as the scalar values they spell.
+    let src = "{ null: 1, true: 2, $x: 3, _y: 4 }";
+    let v = parse(src).unwrap().to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    assert_eq!(q(".null"), vec![Value::Int(1)]);
+    assert_eq!(q(".true"), vec![Value::Int(2)]);
+    // `$` is not a bare-key character in edikt's own path grammar, so the
+    // query quotes it; the document side accepts it either way.
+    assert_eq!(q(".\"$x\""), vec![Value::Int(3)]);
+    assert_eq!(q("._y"), vec![Value::Int(4)]);
+}
+
+#[test]
+fn json5_number_forms_project() {
+    let src = "{ hex: 0xdecaf, upper: 0XBEEF, neg: -0x10, lead: .5, trail: 5.,                    plus: +7, exp: 1e3 }";
+    let v = parse(src).unwrap().to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    // Hex stays an integer rather than degrading through f64.
+    assert_eq!(q(".hex"), vec![Value::Int(912_559)]);
+    assert_eq!(q(".upper"), vec![Value::Int(48_879)]);
+    assert_eq!(q(".neg"), vec![Value::Int(-16)]);
+    assert_eq!(q(".lead"), vec![Value::Float(0.5)]);
+    assert_eq!(q(".trail"), vec![Value::Float(5.0)]);
+    // A leading `+` is JSON5-only; Rust's parser rejects it, so the sign is
+    // stripped and reapplied.
+    assert_eq!(q(".plus"), vec![Value::Int(7)]);
+    assert_eq!(q(".exp"), vec![Value::Float(1000.0)]);
+}
+
+#[test]
+fn ident_does_not_swallow_infinity_or_nan() {
+    // Pins the logos priority the lexer comment relies on: `Infinity` and
+    // `NaN` must lex as numbers, not as bare identifiers. A logos upgrade
+    // that reordered priority would otherwise silently turn these into keys.
+    let v = parse("{ a: Infinity, b: -Infinity, c: NaN }")
+        .unwrap()
+        .to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    assert_eq!(q(".a | type"), vec![Value::Str("number".into())]);
+    match q(".a").as_slice() {
+        [Value::Float(f)] => assert!(f.is_infinite() && *f > 0.0),
+        other => panic!("expected +inf, got {other:?}"),
+    }
+    match q(".b").as_slice() {
+        [Value::Float(f)] => assert!(f.is_infinite() && *f < 0.0),
+        other => panic!("expected -inf, got {other:?}"),
+    }
+    match q(".c").as_slice() {
+        [Value::Float(f)] => assert!(f.is_nan()),
+        other => panic!("expected NaN, got {other:?}"),
+    }
+}
+
+#[test]
+fn detect_json5_classifies_spellings() {
+    let is_json5 = |src: &str| parse(src).unwrap().json5;
+    // Strict JSON and JSONC-only features (comments, trailing commas) are
+    // NOT json5: they cannot carry a non-finite literal a strict consumer
+    // would reject.
+    assert!(!is_json5("{\"a\": 1}"));
+    assert!(!is_json5("// comment\n{\"a\": 1,}"));
+    assert!(!is_json5("{\"a\": [1, 2],}"));
+    // Every JSON5-only spelling flips the flag.
+    assert!(is_json5("{a: 1}")); // unquoted key
+    assert!(is_json5("{'a': 1}")); // single-quoted string
+    assert!(is_json5("{\"a\": 0x1f}")); // hex number
+    assert!(is_json5("{\"a\": .5}")); // leading-dot number
+    assert!(is_json5("{\"a\": 5.}")); // trailing-dot number
+    assert!(is_json5("{\"a\": +1}")); // +-signed number
+    assert!(is_json5("{\"a\": Infinity}")); // non-finite literals
+    assert!(is_json5("{\"a\": -Infinity}"));
+    assert!(is_json5("{\"a\": NaN}"));
+    assert!(is_json5("{\"a\": \"one \\\ntwo\"}")); // line continuation
+}
+
+#[test]
+fn non_finite_insertion_keeps_json5_literal() {
+    // A JSON5 document inserting a non-finite value writes the literal,
+    // not `null` (a fresh node uses the document's dialect).
+    assert_eq!(
+        edit_src("{a: 1}", ".\"b\" = Infinity"),
+        "{a: 1, \"b\": Infinity}"
+    );
+    assert_eq!(edit_src("{a: 1}", ".\"a\" = NaN"), "{a: NaN}");
+    assert_eq!(
+        edit_src("{a: 1}", ".\"c\" = {n: -Infinity}"),
+        "{a: 1, \"c\": {\"n\":-Infinity}}"
+    );
+    assert_eq!(
+        edit_src("{a: [1]}", ".\"a\" += [Infinity, NaN]"),
+        "{a: [1, Infinity, NaN]}"
+    );
+    // Copying a non-finite from one key to another keeps the literal.
+    assert_eq!(
+        edit_src("{a: Infinity, b: 1}", ".\"b\" = .a"),
+        "{a: Infinity, b: Infinity}"
+    );
+}
+
+#[test]
+fn non_finite_insertion_into_strict_json_errors() {
+    // A strict-JSON document (or a JSONC one that only uses comments) has no
+    // spelling for the literal: refuse rather than silently writing `null`.
+    let e = |src: &str, expr: &str| edit_err(src, expr);
+    assert!(e("{\"a\": 1}", ".\"a\" = Infinity").contains("strict JSON"));
+    assert!(e("{\"a\": 1}", ".\"b\" = NaN").contains("strict JSON"));
+    assert!(e("{\"a\": 1}", ".\"c\" = {n: Infinity}").contains("strict JSON"));
+    assert!(e("{\"a\": [1]}", ".\"a\" += [Infinity]").contains("strict JSON"));
+    // Comments alone don't make it JSON5.
+    assert!(e("// keep\n{\"a\": 1}", ".\"b\" = Infinity").contains("strict JSON"));
+    // The document is untouched on failure.
+    let mut doc = parse("{\"a\": 1}").unwrap();
+    assert!(
+        doc.apply(&parse_expr(".\"a\" = Infinity").unwrap())
+            .is_err()
+    );
+    assert_eq!(doc.to_source(), "{\"a\": 1}");
+}
+
+#[test]
+fn non_finite_document_round_trips_byte_identically() {
+    roundtrips("{ a: Infinity, b: -Infinity, c: NaN }");
+}
+
+#[test]
+fn json5_line_continuation_and_escaped_quotes_decode() {
+    let src = "{ a: \"one \\\ntwo\", b: 'it\\'s', c: \"say \\\"hi\\\"\" }";
+    let v = parse(src).unwrap().to_value();
+    let q = |e: &str| eval(&parse_expr(e).unwrap(), &v).unwrap();
+    // A backslash-newline continuation contributes nothing to the value.
+    assert_eq!(q(".a"), vec![Value::Str("one two".into())]);
+    assert_eq!(q(".b"), vec![Value::Str("it's".into())]);
+    assert_eq!(q(".c"), vec![Value::Str("say \"hi\"".into())]);
+}
+
+#[test]
+fn a_bare_word_is_still_not_a_document() {
+    // `Ident` is a key spelling, never a value: garbage must keep failing
+    // rather than parsing as a one-word document now that words lex.
+    assert!(parse("foo").is_err());
+    assert!(parse("  bar  ").is_err());
+}
+
+#[test]
+fn json5_comments_are_still_addressable() {
+    // The comment model keys off members, so JSON5 key spellings must not
+    // break comment reads.
+    let src = "{\n  // head\n  bare: 1,\n}\n";
+    let doc = parse(src).unwrap();
+    let v = doc.to_commented().expect("commented projection");
+    let flat = edikt_core::flatten_commented(&v);
+    assert!(
+        flat.iter().any(|e| e.key == "bare"),
+        "expected the bare key in the comment projection: {flat:?}"
+    );
+}

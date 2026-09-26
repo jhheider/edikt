@@ -8,82 +8,31 @@
 use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
 use crate::spell::spell_like;
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{Document, EditError, Expr, Mutable, Step, Value, resolve_index};
 use kdl::{
     FormatConfig, KdlDocument, KdlDocumentFormat, KdlEntry, KdlEntryFormat, KdlNode, KdlValue,
 };
 
 pub fn apply(doc: &mut Kdl, expr: &Expr) -> Result<(), EditError> {
-    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
-    // resolves to concrete paths first; each is then an ordinary edit.
-    if let Some(each) = edikt_core::lower_mutation(expr, || doc.to_value())
-        .map_err(|e| EditError::new(e.to_string()))?
-    {
-        for e in &each {
-            apply(doc, e)?;
-        }
-        return Ok(());
-    }
-    match expr {
-        Expr::Assign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let value = eval_one(rhs, &doc.to_value())?;
-            doc.set(steps, &value)
-        }
-        Expr::UpdateAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            let value = eval_one(rhs, &current)?;
-            doc.set(steps, &value)
-        }
-        Expr::AddAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            let addend = eval_one(rhs, &doc.to_value())?;
-            let sum = eval_one(
-                &Expr::Binary(
-                    BinOp::Add,
-                    Box::new(Expr::Path(Vec::new())),
-                    Box::new(Expr::Literal(addend)),
-                ),
-                &current,
-            )?;
-            doc.set(steps, &sum)
-        }
-        Expr::Pipe(a, b) => {
-            apply(doc, a)?;
-            apply(doc, b)
-        }
-        Expr::Call(name, args) if name == "del" => {
-            if args.len() != 1 {
-                return Err(EditError::new("del(...) takes one path argument"));
-            }
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            doc.delete(steps)
-        }
-        _ => Err(EditError::new(
-            "expected an assignment (`path = value`) or `del(path)`",
-        )),
-    }
+    edikt_core::apply_mutation(doc, expr)
 }
 
-fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
-    lhs.as_path()
-        .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
-}
+impl Mutable for Kdl {
+    /// A `[]` target reaches `set`/`value_at` as-is; KDL answers for it there.
+    const FANS_OUT: bool = false;
 
-fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
-    eval(expr, input)
-        .map_err(|e| EditError::new(e.to_string()))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EditError::new("right side of the assignment produced no value"))
+    fn whole(&self) -> Value {
+        self.to_value()
+    }
+    fn value_at(&self, path: &[Step]) -> Option<Value> {
+        Kdl::value_at(self, path)
+    }
+    fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        Kdl::set(self, path, value)
+    }
+    fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        Kdl::delete(self, path)
+    }
 }
 
 // --- set ------------------------------------------------------------------
@@ -345,8 +294,7 @@ pub(crate) fn delete_in_doc(
                 return delete_in_doc(doc, &path[..1], in_children);
             }
         }
-        let paths = edikt_core::expand_delete_paths(path, &whole)
-            .map_err(|e| EditError::new(e.to_string()))?;
+        let paths = edikt_core::expand_delete_paths(path, &whole)?;
         for p in &paths {
             delete_in_doc(doc, p, in_children)?;
         }
@@ -730,9 +678,4 @@ fn arg_entry(value: KdlValue) -> KdlEntry {
         ..Default::default()
     });
     e
-}
-
-fn resolve_index(i: i64, len: usize) -> Option<usize> {
-    let idx = if i < 0 { len as i64 + i } else { i };
-    (0..len as i64).contains(&idx).then_some(idx as usize)
 }

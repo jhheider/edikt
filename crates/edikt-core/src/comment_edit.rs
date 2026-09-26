@@ -159,8 +159,7 @@ fn split_comment(steps: &[Step]) -> Result<(&[Step], CommentKind), EditError> {
 
 /// Evaluate an RHS to comment text (a scalar rendered as its raw string).
 fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
-    let v = eval(rhs, input)
-        .map_err(|e| EditError::new(e.to_string()))?
+    let v = eval(rhs, input)?
         .into_iter()
         .next()
         .ok_or_else(|| EditError::new("the comment text expression produced no value"))?;
@@ -172,12 +171,72 @@ fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
     }
 }
 
+/// How a format spells an own-line comment, for [`place_line_comment`] and
+/// the extractors that read one back.
+#[derive(Debug, Clone, Copy)]
+pub struct LineComment {
+    /// What opens a comment line after its indentation (`#`, `;`, `//`, ...).
+    pub markers: &'static [&'static str],
+    /// The prefix a new comment line is written with (`"# "`); its width is
+    /// what wrapping budgets for.
+    pub delim: &'static str,
+}
+
+impl LineComment {
+    /// Is `line` a comment line (a marker after any indentation)?
+    pub fn is_comment_line(&self, line: &str) -> bool {
+        let t = line.trim_start();
+        self.markers.iter().any(|m| t.starts_with(m))
+    }
+
+    /// A comment's text without its markers (`## x` -> `x`) and the space
+    /// around it.
+    pub fn strip_marker(&self, text: &str) -> String {
+        let mut t = text;
+        while let Some(rest) = self.markers.iter().find_map(|m| t.strip_prefix(m)) {
+            t = rest;
+        }
+        t.trim().to_string()
+    }
+
+    /// The text of `line` if it is a comment line, markers stripped.
+    pub fn comment_text(&self, line: &str) -> Option<String> {
+        let t = line.trim();
+        self.is_comment_line(t).then(|| self.strip_marker(t))
+    }
+
+    /// Write one own-line comment, `{indent}{delim}{text}\n`, with the text
+    /// kept to one line.
+    pub fn push_line(&self, out: &mut String, indent: &str, text: &str) {
+        out.push_str(indent);
+        out.push_str(self.delim);
+        out.push_str(&sanitize_comment_line(text));
+        out.push('\n');
+    }
+
+    /// Render comment lines as an own-line block at `indent`.
+    pub fn block(&self, lines: &[String], indent: &str) -> String {
+        let mut out = String::new();
+        for l in lines {
+            self.push_line(&mut out, indent, l);
+        }
+        out
+    }
+}
+
+/// A comment's text as one line: a line break inside it would end the comment
+/// and spill the rest into the document, so each becomes a space.
+pub fn sanitize_comment_line(line: &str) -> String {
+    line.replace(['\n', '\r'], " ")
+}
+
 /// Place (or clear) an own-line comment block around a node's line, on the
-/// source text, for the line-oriented formats (`.env`, INI). `target_line` is
-/// the 0-based index of the node's own line; `is_head` puts the block above
+/// source text, for the formats whose comments are whole lines. `target_line`
+/// is the 0-based index of the node's own line; `is_head` puts the block above
 /// (else below, for foot). Contiguous existing comment lines on that side
-/// (detected by `is_comment_line`) are replaced; `wrapped == None` deletes.
-/// Untouched lines are preserved verbatim, so the moat holds.
+/// (as `style` recognizes them) are replaced; `text == None` deletes. The
+/// text wraps to the document's width envelope at `indent`. Untouched lines
+/// are preserved verbatim, so the moat holds.
 ///
 /// The block's lines end the way the target line does (the file's dominant
 /// ending if the target is an unterminated last line). A foot block below an
@@ -189,9 +248,8 @@ pub fn place_line_comment(
     target_line: usize,
     is_head: bool,
     indent: &str,
-    delim: &str,
-    is_comment_line: &dyn Fn(&str) -> bool,
-    wrapped: Option<&[String]>,
+    style: &LineComment,
+    text: Option<&str>,
 ) -> String {
     let mut lines: Vec<String> = source.split_inclusive('\n').map(str::to_string).collect();
     if target_line >= lines.len() {
@@ -201,7 +259,12 @@ pub fn place_line_comment(
         "" => crate::text::dominant(source),
         e => e,
     };
-    let bare = |s: &str| s.trim_end_matches(['\n', '\r']).to_string();
+    let is_comment_line = |l: &str| style.is_comment_line(l.trim_end_matches(['\n', '\r']));
+    let wrapped = text.map(|t| {
+        let width = crate::wrap::wrap_width(source);
+        crate::wrap::wrap_comment(t, width, indent.chars().count(), style.delim.len())
+    });
+    let delim = style.delim;
     let mut block: Vec<String> = wrapped
         .into_iter()
         .flatten()
@@ -210,13 +273,13 @@ pub fn place_line_comment(
 
     if is_head {
         let mut start = target_line;
-        while start > 0 && is_comment_line(&bare(&lines[start - 1])) {
+        while start > 0 && is_comment_line(&lines[start - 1]) {
             start -= 1;
         }
         lines.splice(start..target_line, block);
     } else {
         let mut end = target_line + 1;
-        while end < lines.len() && is_comment_line(&bare(&lines[end])) {
+        while end < lines.len() && is_comment_line(&lines[end]) {
             end += 1;
         }
         // The replaced run reached an unterminated EOF: the file had no final
@@ -259,12 +322,31 @@ fn current_comment(doc: &dyn Document, prefix: &[Step], kind: CommentKind) -> Op
 
 #[cfg(test)]
 mod tests {
-    use super::place_line_comment;
+    use super::*;
+
+    const HASH: LineComment = LineComment {
+        markers: &["#"],
+        delim: "# ",
+    };
 
     fn place(src: &str, line: usize, head: bool, text: Option<&str>) -> String {
-        let block: Option<Vec<String>> = text.map(|t| vec![format!(" {t}")]);
-        let is_comment = |l: &str| l.trim_start().starts_with('#');
-        place_line_comment(src, line, head, "", "#", &is_comment, block.as_deref())
+        place_line_comment(src, line, head, "", &HASH, text)
+    }
+
+    #[test]
+    fn line_comment_style() {
+        let s = LineComment {
+            markers: &["#", "!"],
+            delim: "# ",
+        };
+        assert!(s.is_comment_line("  ! x"));
+        assert!(!s.is_comment_line("a # x"));
+        assert_eq!(s.strip_marker("#!# text "), "text");
+        assert_eq!(sanitize_comment_line("a\r\nb"), "a  b");
+        assert_eq!(s.comment_text("  ## hi  "), Some("hi".to_string()));
+        assert_eq!(s.comment_text("a = 1"), None);
+        let lines = ["one".to_string(), "two\nthree".to_string()];
+        assert_eq!(s.block(&lines, "  "), "  # one\n  # two three\n");
     }
 
     #[test]

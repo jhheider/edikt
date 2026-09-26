@@ -14,8 +14,8 @@ use crate::value::Value;
 use std::cmp::Ordering;
 
 /// A concrete path plus the value found there (`None` when the path names a
-/// key or index that doesn't exist yet).
-type Resolved = (Vec<Step>, Option<Value>);
+/// key or index that doesn't exist yet), borrowed from the input.
+type Resolved<'v> = (Vec<Step>, Option<&'v Value>);
 
 /// Resolve `expr`, a path expression, against `input` into the concrete,
 /// iterate-free paths it selects, in document order.
@@ -47,14 +47,14 @@ pub(crate) fn path_to_value(steps: &[Step]) -> Value {
     )
 }
 
-fn resolve(expr: &Expr, input: Option<&Value>) -> Result<Vec<Resolved>, EvalError> {
+fn resolve<'v>(expr: &Expr, input: Option<&'v Value>) -> Result<Vec<Resolved<'v>>, EvalError> {
     match expr {
         Expr::Path(steps) => {
-            let mut stream: Vec<Resolved> = vec![(Vec::new(), input.cloned())];
+            let mut stream: Vec<Resolved> = vec![(Vec::new(), input)];
             for step in steps {
                 let mut next = Vec::new();
                 for (path, v) in stream {
-                    step_paths(step, path, v.as_ref(), &mut next)?;
+                    step_paths(step, path, v, &mut next)?;
                 }
                 stream = next;
             }
@@ -63,7 +63,7 @@ fn resolve(expr: &Expr, input: Option<&Value>) -> Result<Vec<Resolved>, EvalErro
         Expr::Pipe(a, b) => {
             let mut out = Vec::new();
             for (prefix, v) in resolve(a, input)? {
-                for (rest, w) in resolve(b, v.as_ref())? {
+                for (rest, w) in resolve(b, v)? {
                     let mut path = prefix.clone();
                     path.extend(rest);
                     out.push((path, w));
@@ -80,10 +80,11 @@ fn resolve(expr: &Expr, input: Option<&Value>) -> Result<Vec<Resolved>, EvalErro
         }
         Expr::Call(name, args) if name == "select" && args.len() == 1 => {
             // The predicate sees `null` at a path that doesn't exist, as in jq.
-            let here = input.cloned().unwrap_or(Value::Null);
-            let keep = eval(&args[0], &here)?.iter().any(Value::is_truthy);
+            let keep = eval(&args[0], input.unwrap_or(&Value::Null))?
+                .iter()
+                .any(Value::is_truthy);
             Ok(if keep {
-                vec![(Vec::new(), input.cloned())]
+                vec![(Vec::new(), input)]
             } else {
                 Vec::new()
             })
@@ -96,13 +97,13 @@ fn resolve(expr: &Expr, input: Option<&Value>) -> Result<Vec<Resolved>, EvalErro
 }
 
 /// Apply one navigation step to a resolved path, pushing each continuation.
-fn step_paths(
+fn step_paths<'v>(
     step: &Step,
     path: Vec<Step>,
-    v: Option<&Value>,
-    out: &mut Vec<Resolved>,
+    v: Option<&'v Value>,
+    out: &mut Vec<Resolved<'v>>,
 ) -> Result<(), EvalError> {
-    let push = |out: &mut Vec<Resolved>, s: Step, child: Option<Value>| {
+    let push = |out: &mut Vec<Resolved<'v>>, s: Step, child: Option<&'v Value>| {
         let mut p = path.clone();
         p.push(s);
         out.push((p, child));
@@ -110,7 +111,7 @@ fn step_paths(
     match step {
         Step::Field(k) => match v {
             Some(Value::Object(m)) => {
-                let child = m.iter().find(|(kk, _)| kk == k).map(|(_, x)| x.clone());
+                let child = m.iter().find(|(kk, _)| kk == k).map(|(_, x)| x);
                 push(out, step.clone(), child);
             }
             Some(Value::Null) | None => push(out, step.clone(), None),
@@ -125,9 +126,8 @@ fn step_paths(
             Some(Value::Array(a)) => {
                 // Normalize a negative index against the array, so the path
                 // names the element it resolved to (and `path(.a[-1])` is useful).
-                let idx = if *i < 0 { a.len() as i64 + i } else { *i };
-                match usize::try_from(idx).ok().and_then(|n| a.get(n)) {
-                    Some(x) => push(out, Step::Index(idx), Some(x.clone())),
+                match crate::resolve_index(*i, a.len()) {
+                    Some(n) => push(out, Step::Index(n as i64), Some(&a[n])),
                     None => push(out, step.clone(), None),
                 }
             }
@@ -142,12 +142,12 @@ fn step_paths(
         Step::Iterate => match v {
             Some(Value::Array(a)) => {
                 for (n, x) in a.iter().enumerate() {
-                    push(out, Step::Index(n as i64), Some(x.clone()));
+                    push(out, Step::Index(n as i64), Some(x));
                 }
             }
             Some(Value::Object(m)) => {
                 for (k, x) in m {
-                    push(out, Step::Field(k.clone()), Some(x.clone()));
+                    push(out, Step::Field(k.clone()), Some(x));
                 }
             }
             // Nothing there: nothing to iterate, a miss like a query's.
