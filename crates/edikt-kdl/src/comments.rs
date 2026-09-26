@@ -28,21 +28,23 @@ pub(crate) fn set_node_comment(
             "setting a foot comment isn't supported for KDL yet",
         ));
     }
-    let width = wrap_width(&doc.to_string());
+    let source = doc.to_string();
+    let width = wrap_width(&source);
+    let eol = edikt_core::text::dominant(&source);
     let node = resolve_node(doc, path)?;
     let indent = leading_indent(node);
     match kind {
         CommentKind::Head => {
             let wrapped = wrap_comment(text, width, indent.chars().count(), 3);
             let existing = node.format().map(|f| f.leading.clone()).unwrap_or_default();
-            let leading = rebuild_leading(&existing, &wrapped, &indent);
+            let leading = rebuild_leading(&existing, &wrapped, &indent, eol);
             ensure_format(node).leading = leading;
         }
         CommentKind::Inline => {
             let ending = node
                 .format()
                 .map(|f| line_ending(&f.terminator))
-                .unwrap_or("\n");
+                .unwrap_or(eol);
             ensure_format(node).terminator = format!(" // {}{ending}", sanitize(text));
         }
         CommentKind::Foot => unreachable!(),
@@ -66,7 +68,7 @@ pub(crate) fn delete_node_comment(
     match kind {
         CommentKind::Head => {
             let existing = node.format().map(|f| f.leading.clone()).unwrap_or_default();
-            let leading = rebuild_leading(&existing, &[], &indent);
+            let leading = rebuild_leading(&existing, &[], &indent, "\n");
             ensure_format(node).leading = leading;
         }
         CommentKind::Inline => {
@@ -138,8 +140,9 @@ fn ensure_format(node: &mut KdlNode) -> &mut kdl::KdlNodeFormat {
 
 /// Rebuild a `leading` decor with `wrapped` as its comment block: keep leading
 /// blank lines and the trailing indent, drop old comments. Empty `wrapped`
-/// clears the comment while preserving spacing and indent.
-fn rebuild_leading(existing: &str, wrapped: &[String], indent: &str) -> String {
+/// clears the comment while preserving spacing and indent. New comment lines
+/// end with `eol`, the file's dominant line ending.
+fn rebuild_leading(existing: &str, wrapped: &[String], indent: &str, eol: &str) -> String {
     let mut out = String::new();
     for line in existing.split_inclusive('\n') {
         if line.ends_with('\n') && line.trim().is_empty() {
@@ -149,7 +152,7 @@ fn rebuild_leading(existing: &str, wrapped: &[String], indent: &str) -> String {
         }
     }
     for w in wrapped {
-        out.push_str(&format!("{indent}// {w}\n"));
+        out.push_str(&format!("{indent}// {w}{eol}"));
     }
     out.push_str(indent);
     out

@@ -1,0 +1,17 @@
+# Checked out on Windows: every line ends in CRLF.
+title = "crlf"
+
+[server]
+host = "localhost"  # inline comment
+ports = [
+  8080,
+  8081,
+]
+
+[text]
+basic = """
+line one
+line two"""
+literal = '''
+raw \ line
+'''

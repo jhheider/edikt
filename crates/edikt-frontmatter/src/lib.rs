@@ -27,9 +27,10 @@
 //!   host-language file (Python for uv, shell for scriptbox), optionally after a
 //!   shebang. The block is TOML once each line's `# ` prefix is stripped; the
 //!   prefix is re-applied on serialize. v1 requires the canonical `# `/bare-`#`
-//!   prefix and the block at the head of the file. Line endings inside a
-//!   commented block follow the inner TOML engine, which normalizes to `\n`;
-//!   the fenced containers preserve CRLF.
+//!   prefix and the block at the head of the file.
+//!
+//! Line endings (CRLF, LF, or mixed) round-trip in every container; lines an edit adds take the block's
+//! dominant ending, as in the inner engines.
 
 // The edikt-core types that appear in this crate's own public API, re-exported
 // so a dependent can call these methods without also taking a direct
@@ -495,6 +496,22 @@ mod tests {
     }
 
     #[test]
+    fn crlf_toml_blocks_keep_crlf_on_edit() {
+        // The inner TOML engine used to write the whole block back LF.
+        let md = "+++\r\na = 1\r\n+++\r\nbody\r\n";
+        assert_eq!(src_of(md, ".a = 2"), "+++\r\na = 2\r\n+++\r\nbody\r\n");
+        assert_eq!(
+            src_of(md, ".b = 2"),
+            "+++\r\na = 1\r\nb = 2\r\n+++\r\nbody\r\n"
+        );
+        let py = "# /// script\r\n# a = 1\r\n# ///\r\nprint(1)\r\n";
+        assert_eq!(
+            src_of(py, ".t.k = 2"),
+            "# /// script\r\n# a = 1\r\n#\r\n# [t]\r\n# k = 2\r\n# ///\r\nprint(1)\r\n"
+        );
+    }
+
+    #[test]
     fn no_frontmatter_errors() {
         let e = parse("# Just a heading\n\nno block here\n").err().unwrap();
         assert!(e.to_string().contains("no frontmatter block"), "{e}");
@@ -546,7 +563,8 @@ mod tests {
         let mut count = 0;
         for entry in std::fs::read_dir(&dir).expect("fixtures/markdown directory") {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            // `.py` holds PEP 723 blocks, which the CLI reads with `-t markdown`.
+            if !matches!(path.extension().and_then(|e| e.to_str()), Some("md" | "py")) {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();

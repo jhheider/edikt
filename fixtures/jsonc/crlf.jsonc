@@ -1,0 +1,10 @@
+{
+  // CRLF throughout
+  "name": "crlf",
+  "nested": {
+    "list": [
+      1,
+      2
+    ]
+  }
+}

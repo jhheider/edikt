@@ -341,20 +341,25 @@ pub(crate) fn insert_into_array(
     array: &SyntaxNode,
     items: &[Value],
     json5: bool,
+    eol: &str,
 ) -> Result<String, EditError> {
     let mut elems = Vec::new();
     for v in items {
         elems.push(spell(v, json5)?);
     }
-    Ok(insert_elements(array, &elems))
+    let orig = array.text().to_string();
+    let out = insert_elements(array, &elems);
+    Ok(edikt_core::text::eol_inserted(&orig, &out, eol))
 }
 
-/// Insert `"key": value` as a new member of an object's source text.
+/// Insert `"key": value` as a new member of an object's source text. New
+/// lines end with `eol`, the file's dominant line ending.
 pub(crate) fn insert_into_object(
     object: &SyntaxNode,
     key: &str,
     value: &Value,
     json5: bool,
+    eol: &str,
 ) -> Result<String, EditError> {
     // A composite value inserted into a multi-line object is laid out in the
     // file's own style rather than emitted compact. `to_json()` produced
@@ -367,7 +372,9 @@ pub(crate) fn insert_into_object(
         None => spell(value, json5)?,
     };
     let member = format!("{}: {rendered}", json_string(key));
-    Ok(insert_elements(object, &[member]))
+    let orig = object.text().to_string();
+    let out = insert_elements(object, &[member]);
+    Ok(edikt_core::text::eol_inserted(&orig, &out, eol))
 }
 
 /// The byte spelling of a fresh value in this document. A JSON5 document can

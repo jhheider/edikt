@@ -828,13 +828,10 @@ fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
 }
 
 /// The newline style the document uses, so inserted lines match it (a lone `\n`
-/// spliced into a CRLF file would leave observably mixed line endings).
+/// spliced into a CRLF file would leave observably mixed line endings): the
+/// dominant one, so a mostly-LF file with one stray CRLF stays LF.
 pub(crate) fn newline(source: &str) -> &'static str {
-    if source.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
+    edikt_core::text::dominant(source)
 }
 
 /// Whether the source already ends with a line break (`\n`, hence also `\r\n`).

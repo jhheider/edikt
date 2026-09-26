@@ -46,6 +46,9 @@ pub struct ParseError {
 pub struct Toml {
     doc: DocumentMut,
     had_comments: bool,
+    /// The parsed source. `toml_edit` writes every line ending as `\n`, so
+    /// serializing restores the original's endings from it.
+    original: String,
 }
 
 impl Toml {
@@ -275,7 +278,11 @@ pub fn parse(src: &str) -> Result<Toml, ParseError> {
         .parse::<DocumentMut>()
         .map_err(|e| ParseError { msg: e.to_string() })?;
     let had_comments = has_comment_decor(&doc);
-    Ok(Toml { doc, had_comments })
+    Ok(Toml {
+        doc,
+        had_comments,
+        original: src.to_string(),
+    })
 }
 
 /// Whether any decor in the document holds a comment. `toml_edit` keeps
@@ -325,7 +332,9 @@ fn has_comment_decor(doc: &DocumentMut) -> bool {
 
 impl Document for Toml {
     fn to_source(&self) -> String {
-        self.doc.to_string()
+        // `toml_edit` drops every `\r` it writes (decor and string reprs
+        // alike), so put the original's line endings back, line by line.
+        edikt_core::text::restore_endings(&self.original, &self.doc.to_string())
     }
     fn to_value(&self) -> Value {
         project::table_to_value(self.doc.as_table())
@@ -676,6 +685,35 @@ mod tests {
             count += 1;
         }
         assert!(count >= 2, "expected toml fixtures, found {count}");
+    }
+
+    #[test]
+    fn crlf_survives_edits_and_new_lines_match_it() {
+        // toml_edit writes every `\r` away; any edit used to turn the whole
+        // file LF.
+        let src = "a = 1\r\nb = [\r\n  1,\r\n]\r\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, ".a = 2"), "a = 2\r\nb = [\r\n  1,\r\n]\r\n");
+        assert_eq!(
+            edit_src(src, ".t.x = 1"),
+            "a = 1\r\nb = [\r\n  1,\r\n]\r\n\r\n[t]\r\nx = 1\r\n"
+        );
+        assert_eq!(
+            cedit(src, ".b.# = \"note\""),
+            "a = 1\r\n# note\r\nb = [\r\n  1,\r\n]\r\n"
+        );
+    }
+
+    #[test]
+    fn mixed_endings_survive_even_inside_multi_line_strings() {
+        let src = "s = \"\"\"\r\nx\ny\r\n\"\"\"\nk = 1\r\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(
+            edit_src(src, ".k = 2"),
+            "s = \"\"\"\r\nx\ny\r\n\"\"\"\nk = 2\r\n"
+        );
+        // The string's value is untouched by the ending bookkeeping.
+        assert_eq!(q(src, ".s"), vec![Value::Str("x\ny\n".into())]);
     }
 
     #[test]

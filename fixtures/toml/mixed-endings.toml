@@ -1,0 +1,9 @@
+# mostly CRLF
+a = 1
+b = 2
+s = """
+x
+y
+"""
+[t]
+k = "v"

@@ -79,7 +79,8 @@ impl Ini {
         if let Some(s) = section {
             edit::check_section(s)?;
         }
-        let new_src = edit::insert_entry(&self.to_source(), section, key, &text);
+        let src = edikt_syntax::to_source(&self.root);
+        let new_src = edit::insert_entry(&src, section, key, &text);
         self.root = SyntaxNode::new_root(parser::build(&new_src));
         Ok(())
     }
@@ -256,6 +257,30 @@ mod tests {
         ] {
             set_round_trip(src, path, value).unwrap();
         }
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        let src = "[s]\r\na = 1\r\n";
+        assert_eq!(edit_src(src, ".s.b = 2"), "[s]\r\na = 1\r\nb = 2\r\n");
+        assert_eq!(
+            edit_src(src, ".t.b = 2"),
+            "[s]\r\na = 1\r\n\r\n[t]\r\nb = 2\r\n"
+        );
+        assert_eq!(cedit(src, ".s.a.# = \"n\""), "[s]\r\n; n\r\na = 1\r\n");
+        // Terminating an unterminated last line uses the file's ending too.
+        assert_eq!(
+            edit_src("[s]\r\na = 1", ".s.b = 2"),
+            "[s]\r\na = 1\r\nb = 2\r\n"
+        );
+    }
+
+    #[test]
+    fn a_foot_comment_below_an_unterminated_last_line_gets_its_own_line() {
+        // Used to glue on: `k = v; x`, which reads back as the value `v; x`.
+        let out = cedit("k = v", ".k.#.foot = \"x\"");
+        assert_eq!(out, "k = v\n; x");
+        assert_eq!(q(&out, ".k"), vec![Value::Str("v".into())]);
     }
 
     #[test]

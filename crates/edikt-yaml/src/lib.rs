@@ -848,6 +848,39 @@ mod tests {
             "a: []\r\nb: 2\r\n"
         );
         assert_eq!(edit("o:\r\n  x: 1\r\n", "del(.o[])"), "o: {}\r\n");
+        // A head comment's new line ends in CRLF too (it was a bare `\n`).
+        assert_eq!(cedit(src, ".b.# = \"note\""), "a: 1\r\n# note\r\nb: 2\r\n");
+        // Inserted lines follow the dominant ending, not a stray CRLF.
+        assert_eq!(
+            edit("a: 1\nb: 2\r\nc: 3\n", ".d = 4"),
+            "a: 1\nb: 2\r\nc: 3\nd: 4\n"
+        );
+    }
+
+    #[test]
+    fn foot_comment_on_an_unterminated_last_line() {
+        // Used to glue onto the value (`a: 1# x`), which reads back as `1# x`.
+        let out = cedit("a: 1", ".a.#.foot = \"x\"");
+        assert_eq!(out, "a: 1\n# x");
+        assert_eq!(q(&out, ".a"), vec![json!(1)]);
+    }
+
+    #[test]
+    fn roundtrips_every_fixture() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
+        let mut count = 0;
+        for entry in std::fs::read_dir(&dir).expect("fixtures/yaml directory") {
+            let path = entry.unwrap().path();
+            let src = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                parse(&src).unwrap().to_source(),
+                src,
+                "round-trip must be byte-identical: {}",
+                path.display()
+            );
+            count += 1;
+        }
+        assert!(count >= 3, "expected yaml fixtures, found {count}");
     }
 
     #[test]

@@ -18,8 +18,9 @@ byte including whitespace and comments -> serialize is byte-identical. An edit
 touches only the nodes it targets; every untouched region is re-emitted
 byte-for-byte. This is the entire reason the tool exists. Guard it:
 
-- No format-preserving edit may alter indentation, comma style, quote style,
-  comment placement, or trailing newline of any region it did not target.
+- No format-preserving edit may alter indentation, line endings, comma style,
+  quote style, comment placement, or trailing newline of any region it did
+  not target.
 - `parse ∘ serialize == identity` is a hard invariant, tested per format.
 - We do **not** format, lint, or normalize. taplo and prettier own that.
 - **An assigned string keeps the quote style of the string it replaces**, and
@@ -69,6 +70,15 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
     assignment writes exactly the string it is given. With no quoting to fall
     back on, a string these formats can't read back as itself **errors**
     rather than being written (see Per-format semantics).
+- **Line endings are the file's.** An untouched line keeps its own ending,
+  CRLF or LF, in a file that mixes them too (a multi-line string's lines
+  included). A line an edit adds (a key, element, node, section, or comment)
+  takes the file's **dominant** ending: CRLF when CRLF lines outnumber LF
+  ones, else LF. This holds in every format and through the frontmatter lens.
+  `toml_edit` writes every line LF, so the TOML crate restores each line's
+  ending on output by matching lines against the source; the other formats
+  splice, and spell only the new text with the dominant ending. The shared
+  helpers are `edikt_core::text`.
 
 ---
 

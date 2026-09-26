@@ -83,6 +83,11 @@ impl Jsonc {
         &self.root
     }
 
+    /// The file's dominant line ending, for lines an insertion adds.
+    fn eol(&self) -> &'static str {
+        edikt_core::text::dominant(&edikt_syntax::to_source(&self.root))
+    }
+
     /// Set the value at `path` to `value`, format-preserving. If the path
     /// already resolves, only that value node's bytes change. If a trailing part
     /// of the path is missing, a new member is inserted into the deepest existing
@@ -108,7 +113,8 @@ impl Jsonc {
                 .find(|n| n.kind() == Sk::Object)
                 .ok_or_else(|| EditError::new("cannot create a key inside a non-object"))?;
             let member_value = edit::nest_value(&remaining[1..], value)?;
-            let text = edit::insert_into_object(&object, key, &member_value, self.json5)?;
+            let text =
+                edit::insert_into_object(&object, key, &member_value, self.json5, self.eol())?;
             object.replace_with(edit::object_green_from_text(&text))
         };
         self.root = SyntaxNode::new_root(new_root);
@@ -130,7 +136,7 @@ impl Jsonc {
             .children()
             .find(|n| n.kind() == Sk::Array)
             .ok_or_else(|| EditError::new("`+= [..]` target is not an array"))?;
-        let new_text = edit::insert_into_array(&array, items, self.json5)?;
+        let new_text = edit::insert_into_array(&array, items, self.json5, self.eol())?;
         let new_root = array.replace_with(edit::array_green_from_text(&new_text));
         self.root = SyntaxNode::new_root(new_root);
         Ok(())
@@ -585,6 +591,33 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        // New members and elements used to arrive with bare `\n`s.
+        let src = "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n";
+        assert_eq!(
+            edit_src(src, ".b = 2"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"b\": 2\r\n}\r\n"
+        );
+        assert_eq!(
+            edit_src(src, ".o.p = [1]"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"o\": {\r\n    \"p\": [\r\n      1\r\n    ]\r\n  }\r\n}\r\n"
+        );
+        assert_eq!(
+            edit_src(src, ".l += [2]"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1,\r\n    2\r\n  ]\r\n}\r\n"
+        );
+        assert_eq!(
+            cedit(src, ".l.# = \"n\""),
+            "{\r\n  \"a\": 1,\r\n  // n\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n"
+        );
+        // An LF file is untouched by any of this.
+        assert_eq!(
+            edit_src("{\n  \"a\": 1\n}\n", ".b = 2"),
+            "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+        );
     }
 
     #[test]

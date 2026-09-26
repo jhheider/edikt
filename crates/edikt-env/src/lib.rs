@@ -75,9 +75,11 @@ impl Env {
             }
             None => {
                 edit::check_key(key, self.dialect)?;
-                let mut src = self.to_source();
+                let mut src = edikt_syntax::to_source(&self.root);
+                // The new line ends the way most of the file's lines do.
+                let eol = edikt_core::text::dominant(&src);
                 if !src.is_empty() && !src.ends_with('\n') {
-                    src.push('\n');
+                    src.push_str(eol);
                 }
                 // An appended key must be spelled the way the rest of the
                 // file is, or the document stops parsing as itself.
@@ -85,7 +87,7 @@ impl Env {
                     parser::Dialect::Punctuated => "=",
                     parser::Dialect::Spaced => " ",
                 };
-                src.push_str(&format!("{key}{sep}{text}\n"));
+                src.push_str(&format!("{key}{sep}{text}{eol}"));
                 self.root = SyntaxNode::new_root(parser::build(&src, self.dialect));
             }
         }
@@ -271,6 +273,28 @@ mod tests {
         }
         set_round_trip("A 1\n", S, "Subsystem", "sftp /usr/lib/sftp-server").unwrap();
         set_round_trip("A 1\n", S, "K=V", "x").unwrap();
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        let src = "A=1\r\nB=2\r\n";
+        assert_eq!(edit_src(src, r#".C = "3""#), "A=1\r\nB=2\r\nC=3\r\n");
+        assert_eq!(
+            edit_src("A=1\r\nB=2", r#".C = "3""#),
+            "A=1\r\nB=2\r\nC=3\r\n"
+        );
+        assert_eq!(cedit(src, ".B.# = \"n\""), "A=1\r\n# n\r\nB=2\r\n");
+        let mut sp = parse_spaced("Port 22\r\n").unwrap();
+        sp.set("X", &Value::Str("y".into())).unwrap();
+        assert_eq!(sp.to_source(), "Port 22\r\nX y\r\n");
+    }
+
+    #[test]
+    fn a_foot_comment_below_an_unterminated_last_line_gets_its_own_line() {
+        // Used to glue on: `A=1# x`, which reads back as the value `1# x`.
+        let out = cedit("A=1", ".A.#.foot = \"x\"");
+        assert_eq!(out, "A=1\n# x");
+        assert_eq!(q(&out, ".A"), vec![Value::Str("1".into())]);
     }
 
     #[test]
