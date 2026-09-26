@@ -1,7 +1,7 @@
-//! Line endings, end to end over the fixture corpus.
+//! Line endings and the byte-order mark, end to end over the fixture corpus.
 //!
 //! The contract: an untouched line keeps its own line ending, a line an edit
-//! adds takes the file's dominant one.
+//! adds takes the file's dominant one, and a leading BOM survives any edit.
 //! Each CRLF fixture is edited twice through the binary: once with a no-op
 //! assignment (the output must be the input, byte for byte), and once with
 //! edits that insert lines (no bare `\n` may appear).
@@ -169,4 +169,49 @@ fn mixed_endings_keep_each_lines_own_ending() {
         out,
         "# mostly CRLF\r\na = 1\nb = 3\r\ns = \"\"\"\r\nx\ny\r\n\"\"\"\r\n[t]\r\nk = \"v\"\nn = 1\r\n"
     );
+}
+
+#[test]
+fn bom_and_missing_final_newline_survive_toml_edits() {
+    let rel = "toml/bom-no-final-newline.toml";
+    let (out, _, code) = run(&[".a = 1"], rel);
+    assert_eq!(code, 0);
+    assert_eq!(out, read(rel));
+    let (out, _, _) = run(&[".b = 5 | .c = 6"], rel);
+    assert_eq!(
+        out,
+        "\u{FEFF}# BOM, and no newline at EOF\r\na = 1\r\nb = 5\r\nc = 6"
+    );
+}
+
+/// (fixture, leading args, a query for the first key, its value).
+const BOM_CASES: &[(&str, &[&str], &str, &str)] = &[
+    ("jsonc/bom.json", &[], ".a", "1"),
+    ("ini/bom.ini", &[], ".first", "1"),
+    ("env/bom.env", &[], ".FIRST", "1"),
+    ("yaml/bom.yaml", &[], ".first", "1"),
+    ("markdown/bom.md", &[], ".title", "BOM post"),
+    ("toml/bom-no-final-newline.toml", &[], ".a", "1"),
+];
+
+#[test]
+fn a_bom_is_not_part_of_the_first_key_and_survives_an_edit() {
+    for (rel, pre, key, value) in BOM_CASES {
+        let mut args = pre.to_vec();
+        args.push(key);
+        let (out, err, code) = run(&args, rel);
+        assert_eq!(code, 0, "{rel}: {err}");
+        assert_eq!(out, format!("{value}\n"), "{rel}: `{key}` must hit");
+
+        // Setting the first key edits it in place: no duplicate appended,
+        // no created note, and the BOM stays first.
+        let set = format!("{key} = \"z\"");
+        let mut args = pre.to_vec();
+        args.push(&set);
+        let (out, err, code) = run(&args, rel);
+        assert_eq!(code, 0, "{rel}: {err}");
+        assert!(!err.contains("created"), "{rel}: {err}");
+        assert!(out.starts_with('\u{FEFF}'), "{rel}: BOM lost:\n{out}");
+        assert_eq!(out.matches('z').count(), 1, "{rel}: {out}");
+    }
 }

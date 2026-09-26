@@ -60,12 +60,27 @@ pub struct ParseError {
 /// A single-document stream (the common case) has one entry in `docs`; a
 /// `---`-separated stream has one per document.
 pub struct Yaml {
+    /// The source after any byte-order mark; every span indexes into it.
     pub(crate) source: String,
     pub(crate) docs: Vec<Node>,
+    /// The source opened with a UTF-8 byte-order mark (restored on output).
+    bom: bool,
+}
+
+impl Yaml {
+    /// Re-read `source` after a comment write, keeping the BOM flag.
+    fn reload(&mut self, source: &str) -> Result<(), EditError> {
+        let bom = self.bom;
+        *self = parse(source).map_err(|e| EditError::new(e.msg))?;
+        self.bom = bom;
+        Ok(())
+    }
 }
 
 /// Parse YAML `src` into a [`Yaml`] stream.
 pub fn parse(src: &str) -> Result<Yaml, ParseError> {
+    // libyaml would otherwise mark spans past the BOM's one char as bytes.
+    let (bom, src) = edikt_core::text::split_bom(src);
     let mut docs = compose::compose_all(src)
         .map_err(|msg| ParseError { msg })?
         .into_vec();
@@ -77,12 +92,13 @@ pub fn parse(src: &str) -> Result<Yaml, ParseError> {
     Ok(Yaml {
         source: src.to_string(),
         docs,
+        bom,
     })
 }
 
 impl Document for Yaml {
     fn to_source(&self) -> String {
-        self.source.clone()
+        edikt_core::text::with_bom(self.bom, self.source.clone())
     }
     fn to_value(&self) -> Value {
         match self.docs.first() {
@@ -134,7 +150,7 @@ impl Document for Yaml {
             match comments::set_node_comment(&self.source, &self.docs[idx], path, kind, text) {
                 Ok((source, warns)) => {
                     warnings.extend(warns);
-                    *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+                    self.reload(&source)?;
                 }
                 Err(_) if multi => {} // path absent in this document: skip
                 Err(e) => return Err(e),
@@ -151,7 +167,7 @@ impl Document for Yaml {
         // no-op in `delete_node_comment`.
         for idx in 0..self.docs.len() {
             let source = comments::delete_node_comment(&self.source, &self.docs[idx], path, kind)?;
-            *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+            self.reload(&source)?;
         }
         Ok(())
     }
@@ -169,7 +185,7 @@ impl Document for Yaml {
             .get(doc)
             .ok_or_else(|| EditError::new("document index out of range"))?;
         let (source, warnings) = comments::set_node_comment(&self.source, node, path, kind, text)?;
-        *self = parse(&source).map_err(|e| EditError::new(e.msg))?;
+        self.reload(&source)?;
         Ok(warnings)
     }
     fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
@@ -863,6 +879,17 @@ mod tests {
         let out = cedit("a: 1", ".a.#.foot = \"x\"");
         assert_eq!(out, "a: 1\n# x");
         assert_eq!(q(&out, ".a"), vec![json!(1)]);
+    }
+
+    #[test]
+    fn bom_is_kept_out_of_the_parse_and_restored() {
+        // libyaml used to report spans past the BOM that didn't fit the
+        // source ("out-of-range span 0..1"), so a BOM file couldn't be read.
+        let src = "\u{FEFF}a: 1\nb: 2\n";
+        assert_eq!(q(src, ".a"), vec![json!(1)]);
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit(src, ".a = 5"), "\u{FEFF}a: 5\nb: 2\n");
+        assert_eq!(cedit(src, ".a.# = \"n\""), "\u{FEFF}# n\na: 1\nb: 2\n");
     }
 
     #[test]

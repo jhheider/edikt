@@ -43,6 +43,9 @@ pub struct ParseError {
 /// A parsed INI document, backed by a lossless CST.
 pub struct Ini {
     root: SyntaxNode,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it would read as part of the first key) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Ini {
@@ -104,6 +107,7 @@ impl Ini {
 
 /// Parse INI source into an [`Ini`] document.
 pub fn parse(src: &str) -> Result<Ini, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src));
     let malformed = root
         .descendants_with_tokens()
@@ -114,12 +118,12 @@ pub fn parse(src: &str) -> Result<Ini, ParseError> {
             msg: "invalid INI: a line is neither a comment, section, nor key=value".to_string(),
         });
     }
-    Ok(Ini { root })
+    Ok(Ini { root, bom })
 }
 
 impl Document for Ini {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -281,6 +285,20 @@ mod tests {
         let out = cedit("k = v", ".k.#.foot = \"x\"");
         assert_eq!(out, "k = v\n; x");
         assert_eq!(q(&out, ".k"), vec![Value::Str("v".into())]);
+    }
+
+    #[test]
+    fn a_bom_is_not_part_of_the_first_key() {
+        // `.a` used to miss (the key read as "\u{FEFF}a"), and `.a = 2`
+        // appended a duplicate.
+        let src = "\u{FEFF}a = 1\n[s]\nk = v\n";
+        assert_eq!(q(src, ".a"), vec![Value::Str("1".into())]);
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}a = 2\n[s]\nk = v\n");
+        assert_eq!(
+            edit_src(src, ".b = 3"),
+            "\u{FEFF}a = 1\nb = 3\n[s]\nk = v\n"
+        );
     }
 
     #[test]

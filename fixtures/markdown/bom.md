@@ -1,0 +1,4 @@
+﻿---
+title: BOM post
+---
+body

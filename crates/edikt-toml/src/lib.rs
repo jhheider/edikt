@@ -46,10 +46,12 @@ pub struct ParseError {
 pub struct Toml {
     doc: DocumentMut,
     had_comments: bool,
-    /// The parsed source. `toml_edit` writes every line ending as `\n` and
-    /// always ends the file with one, so serializing restores the original's
-    /// endings and missing final newline from it.
+    /// The parsed source (after any BOM). `toml_edit` writes every line
+    /// ending as `\n` and always ends the file with one, so serializing
+    /// restores the original's endings and missing final newline from it.
     original: String,
+    /// The source opened with a UTF-8 byte-order mark (restored on output).
+    bom: bool,
 }
 
 impl Toml {
@@ -275,6 +277,7 @@ fn walk_tables<'a>(root: &'a mut dyn TableLike, steps: &[Step]) -> Option<&'a mu
 
 /// Parse TOML source into a [`Toml`] document.
 pub fn parse(src: &str) -> Result<Toml, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let doc = src
         .parse::<DocumentMut>()
         .map_err(|e| ParseError { msg: e.to_string() })?;
@@ -283,6 +286,7 @@ pub fn parse(src: &str) -> Result<Toml, ParseError> {
         doc,
         had_comments,
         original: src.to_string(),
+        bom,
     })
 }
 
@@ -341,7 +345,8 @@ impl Document for Toml {
         }
         // `toml_edit` also drops every `\r` it writes (decor and string reprs
         // alike), so put the original's line endings back, line by line.
-        edikt_core::text::restore_endings(&self.original, &out)
+        let out = edikt_core::text::restore_endings(&self.original, &out);
+        edikt_core::text::with_bom(self.bom, out)
     }
     fn to_value(&self) -> Value {
         project::table_to_value(self.doc.as_table())
@@ -730,6 +735,14 @@ mod tests {
         assert_eq!(edit_src("a = 1\r\n# end", ".a = 2"), "a = 2\r\n# end");
         // An empty file gains a terminated line, as before.
         assert_eq!(edit_src("", ".a = 1"), "a = 1\n");
+    }
+
+    #[test]
+    fn a_bom_survives_edits() {
+        let src = "\u{FEFF}a = 1\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(q(src, ".a"), vec![Value::Int(1)]);
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}a = 2\n");
     }
 
     #[test]

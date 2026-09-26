@@ -75,6 +75,9 @@ pub struct Jsonc {
     /// `null`). Untouched regions round-trip regardless - this only decides the
     /// spelling of new nodes.
     json5: bool,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it is not JSON) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Jsonc {
@@ -216,6 +219,7 @@ impl Jsonc {
 /// comments after the top-level value. Editing a structurally broken document
 /// would splice into a tree that does not mean what the bytes say.
 pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let (green, errors) = parser::build_checked(src);
     let root = SyntaxNode::new_root(green);
 
@@ -237,7 +241,7 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
     }
 
     let json5 = detect_json5(&root);
-    Ok(Jsonc { root, json5 })
+    Ok(Jsonc { root, json5, bom })
 }
 
 /// Does the source use a spelling that strict JSON forbids? That is the JSON5
@@ -295,7 +299,7 @@ fn top_value_present(root: &SyntaxNode) -> bool {
 
 impl Document for Jsonc {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -618,6 +622,16 @@ mod tests {
             edit_src("{\n  \"a\": 1\n}\n", ".b = 2"),
             "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
         );
+    }
+
+    #[test]
+    fn a_bom_is_not_json_and_survives_edits() {
+        // The lexer used to reject the BOM as an unexpected character.
+        let src = "\u{FEFF}{\"a\": 1}\n";
+        let doc = parse(src).unwrap();
+        assert_eq!(doc.to_source(), src);
+        assert_eq!(doc.to_value(), json!({"a": 1}));
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}{\"a\": 2}\n");
     }
 
     #[test]

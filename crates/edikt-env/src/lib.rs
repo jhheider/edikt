@@ -48,6 +48,9 @@ pub struct Env {
     /// existing ones; a `key=value` line inside an envspaced file would not
     /// parse back as the same document.
     dialect: Dialect,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it would read as part of the first key) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Env {
@@ -128,6 +131,7 @@ pub fn parse_spaced(src: &str) -> Result<Env, ParseError> {
 
 /// Parse with an explicit [`Dialect`].
 pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src, dialect));
     let malformed = root
         .descendants_with_tokens()
@@ -138,12 +142,12 @@ pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
             msg: "invalid: a line is neither a comment nor key=value".to_string(),
         });
     }
-    Ok(Env { root, dialect })
+    Ok(Env { root, dialect, bom })
 }
 
 impl Document for Env {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -295,6 +299,16 @@ mod tests {
         let out = cedit("A=1", ".A.#.foot = \"x\"");
         assert_eq!(out, "A=1\n# x");
         assert_eq!(q(&out, ".A"), vec![Value::Str("1".into())]);
+    }
+
+    #[test]
+    fn a_bom_is_not_part_of_the_first_key() {
+        // `.A` used to miss, and `.A = 2` appended a duplicate `A=2`.
+        let src = "\u{FEFF}A=1\nB=2\n";
+        assert_eq!(q(src, ".A"), vec![Value::Str("1".into())]);
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, r#".A = "2""#), "\u{FEFF}A=2\nB=2\n");
+        assert_eq!(edit_src(src, r#".C = "3""#), "\u{FEFF}A=1\nB=2\nC=3\n");
     }
 
     #[test]

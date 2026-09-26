@@ -29,7 +29,8 @@
 //!   prefix is re-applied on serialize. v1 requires the canonical `# `/bare-`#`
 //!   prefix and the block at the head of the file.
 //!
-//! Line endings (CRLF, LF, or mixed) round-trip in every container; lines an edit adds take the block's
+//! Line endings (CRLF, LF, or mixed) and a leading UTF-8 byte-order mark
+//! round-trip in every container; lines an edit adds take the block's
 //! dominant ending, as in the inner engines.
 
 // The edikt-core types that appear in this crate's own public API, re-exported
@@ -101,6 +102,10 @@ pub struct Frontmatter {
 /// Parse `src` as a frontmatter-bearing document: split off the block, parse it
 /// with the matching engine, keep the rest opaque.
 pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
+    // A byte-order mark sits before the fence: detect past it, and keep it as
+    // the first byte of the opaque prefix so it round-trips.
+    let (bom, src) = edikt_core::text::split_bom(src);
+    let with_bom = |prefix: &str| edikt_core::text::with_bom(bom, prefix.to_string());
     // A commented host-language block (`# /// name` ... `# ///`) is detected
     // first, so a shebang-led script isn't mistaken for a fence-less document.
     // Its inner is always TOML, once de-commented.
@@ -108,7 +113,7 @@ pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
         let inner =
             Box::new(edikt_toml::parse(&c.block).map_err(|e| ParseError::new(e.to_string()))?);
         return Ok(Frontmatter {
-            prefix: c.prefix.to_string(),
+            prefix: with_bom(c.prefix),
             inner,
             suffix: c.suffix.to_string(),
             inner_fmt: Lang::Toml.name(),
@@ -134,7 +139,7 @@ pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
         }
     };
     Ok(Frontmatter {
-        prefix: prefix.to_string(),
+        prefix: with_bom(prefix),
         inner,
         suffix: suffix.to_string(),
         inner_fmt: lang.name(),
@@ -508,6 +513,18 @@ mod tests {
         assert_eq!(
             src_of(py, ".t.k = 2"),
             "# /// script\r\n# a = 1\r\n#\r\n# [t]\r\n# k = 2\r\n# ///\r\nprint(1)\r\n"
+        );
+    }
+
+    #[test]
+    fn a_bom_before_the_fence_survives() {
+        // The BOM hid the opening fence ("no frontmatter block").
+        let md = "\u{FEFF}---\ntitle: X\n---\nbody\n";
+        assert_eq!(parse(md).unwrap().to_source(), md);
+        assert_eq!(query(md, ".title"), vec![Value::Str("X".into())]);
+        assert_eq!(
+            src_of(md, r#".title = "Z""#),
+            "\u{FEFF}---\ntitle: Z\n---\nbody\n"
         );
     }
 
