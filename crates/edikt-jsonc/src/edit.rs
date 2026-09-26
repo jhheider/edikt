@@ -598,7 +598,8 @@ pub(crate) fn nest_value(steps: &[Step], value: &Value) -> Result<Value, EditErr
         Some((Step::Index(_), _)) => Err(EditError::new("cannot create array elements by index")),
         Some((Step::Iterate, _)) => Err(EditError::new("cannot create through `[]`")),
         Some((Step::Comment(_), _)) => Err(EditError::new(
-            "editing comments (`#`) is not supported yet (planned for v0.2)",
+            "setting a comment (`#`) is a comment edit, not a value edit: use \
+             `Document::set_comment` (the CLI routes `.path.# = ...` there)",
         )),
     }
 }

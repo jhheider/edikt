@@ -195,7 +195,8 @@ impl Jsonc {
             }
             Step::Iterate => unreachable!("`[]` fanned out above"),
             Step::Comment(_) => Err(EditError::new(
-                "deleting comments (`#`) is not supported yet (planned for v0.2)",
+                "deleting a comment (`#`) is a comment edit, not a value edit: use \
+                 `Document::delete_comment` (the CLI routes `del(.path.#)` there)",
             )),
         }
     }
@@ -1105,7 +1106,7 @@ mod tests {
             "iterate create"
         );
         assert!(
-            edit_err("{}", ".a.# = 1").contains("editing comments"),
+            edit_err("{}", ".a.# = 1").contains("use `Document::set_comment`"),
             "comment create"
         );
     }
@@ -1187,7 +1188,7 @@ mod tests {
         // del of a comment through the plain edit path is refused (comment edits
         // route elsewhere).
         assert!(
-            edit_err("{ \"a\": 1 }", "del(.a.#)").contains("deleting comments"),
+            edit_err("{ \"a\": 1 }", "del(.a.#)").contains("use `Document::delete_comment`"),
             "del(.a.#)"
         );
         // Deleting through an absent parent is a silent no-op.
