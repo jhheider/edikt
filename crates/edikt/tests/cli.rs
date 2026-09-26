@@ -2023,6 +2023,29 @@ fn path_builtin_shows_what_an_edit_will_touch() {
 }
 
 #[test]
+fn env_and_ini_refuse_a_value_they_cannot_read_back() {
+    // A line break in a `.env` value would inject a second entry.
+    let (out, err, code) = run(&["-t", "env", r#".A = "x\nB=evil""#], "A=1\n");
+    assert_eq!(code, 2, "{out}");
+    assert!(out.is_empty(), "{out}");
+    assert!(
+        err.contains(".env can't hold a value with a line break"),
+        "{err}"
+    );
+    // A key starting with `#` would read back as a comment.
+    let (_o, err, code) = run(&["-t", "env", r##".["#A"] = "1""##], "A=1\n");
+    assert_eq!(code, 2);
+    assert!(err.contains("can't hold the key"), "{err}");
+    // INI: ` ; y` would read back as an inline comment, `[x` as a header.
+    let (_o, err, code) = run(&["-t", "ini", r#".k = "x ; y""#], "k = v\n");
+    assert_eq!(code, 2);
+    assert!(err.contains("inline comment"), "{err}");
+    let (_o, err, code) = run(&["-t", "ini", r#".["[x"] = "1""#], "k = v\n");
+    assert_eq!(code, 2);
+    assert!(err.contains("section header"), "{err}");
+}
+
+#[test]
 fn strict_conversion_of_a_comment_free_file_with_a_hash_in_a_string() {
     // A `#` or `//` inside a string is data, not a comment, so `--strict`
     // has nothing to refuse. A computed result (`{k}`) is where the

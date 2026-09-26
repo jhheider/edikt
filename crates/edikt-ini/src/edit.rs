@@ -219,6 +219,72 @@ pub(crate) fn value_node_green(s: &str) -> GreenNode {
     b.finish()
 }
 
+/// Refuse a value INI cannot hold: the scanner would read the line back
+/// differently. INI has no quoting (quotes are part of the value), so there
+/// is nothing to escape with.
+pub(crate) fn check_value(text: &str) -> Result<(), EditError> {
+    let why = if text.contains(['\n', '\r']) {
+        Some("a line break would split the line")
+    } else if text.trim() != text {
+        Some("leading or trailing whitespace reads back trimmed")
+    } else if text.starts_with([';', '#'])
+        || text
+            .as_bytes()
+            .windows(2)
+            .any(|w| w[0].is_ascii_whitespace() && matches!(w[1], b';' | b'#'))
+    {
+        Some("a `;` or `#` at the start or after whitespace starts an inline comment")
+    } else {
+        None
+    };
+    match why {
+        Some(why) => Err(EditError::new(format!(
+            "INI can't hold the value {text:?}: {why}, and INI has no quoting"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a new key (or section name) INI cannot hold; an existing one is
+/// already known to read back as itself.
+pub(crate) fn check_key(key: &str) -> Result<(), EditError> {
+    let why = if key.contains(['\n', '\r']) {
+        Some("a line break would split the line")
+    } else if key.trim() != key {
+        Some("leading or trailing whitespace reads back trimmed")
+    } else if key.starts_with([';', '#']) {
+        Some("a line starting with `;` or `#` is a comment")
+    } else if key.starts_with('[') {
+        Some("a line starting with `[` is a section header")
+    } else if key.contains(['=', ':']) {
+        Some("`=` or `:` would end the key early")
+    } else {
+        None
+    };
+    match why {
+        Some(why) => Err(EditError::new(format!(
+            "INI can't hold the key {key:?}: {why}, and INI has no quoting"
+        ))),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn check_section(name: &str) -> Result<(), EditError> {
+    let why = if name.contains(['\n', '\r']) {
+        Some("a line break would split the header")
+    } else if name.contains(']') {
+        Some("`]` would close the header early")
+    } else {
+        None
+    };
+    match why {
+        Some(why) => Err(EditError::new(format!(
+            "INI can't hold the section name {name:?}: {why}, and INI has no quoting"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// The string form of a scalar value, or an error for arrays/objects.
 pub(crate) fn scalar_string(value: &Value) -> Result<String, EditError> {
     match value {

@@ -254,7 +254,10 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   ```
 
   Everything edikt did not target keeps its bytes, so setting a value to exactly
-  its current text is a no-op on the file.
+  its current text is a no-op on the file. Since there is no quoting, a value
+  that wouldn't read back as written (a line break, surrounding whitespace, and
+  in INI a ` ;` or ` #` that would start an inline comment) is an error rather
+  than a silently different file.
 
 ## License
 

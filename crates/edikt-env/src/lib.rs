@@ -57,9 +57,13 @@ impl Env {
     }
 
     /// Set the entry `key` to a scalar, format-preserving. If `key` doesn't
-    /// exist, a new `key=value` line is appended.
+    /// exist, a new `key=value` line is appended. A key or value the line
+    /// format can't read back as itself (a line break, surrounding
+    /// whitespace, a key that would read as a comment or end early) errors:
+    /// there is no quoting to fall back on.
     pub fn set(&mut self, key: &str, value: &Value) -> Result<(), EditError> {
         let text = edit::scalar_string(value)?;
+        edit::check_value(&text, self.dialect)?;
         match edit::find_entry(&self.root, key) {
             Some(entry) => {
                 let value_node = entry
@@ -70,6 +74,7 @@ impl Env {
                 self.root = SyntaxNode::new_root(new_root);
             }
             None => {
+                edit::check_key(key, self.dialect)?;
                 let mut src = self.to_source();
                 if !src.is_empty() && !src.ends_with('\n') {
                     src.push('\n');
@@ -209,6 +214,63 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    /// Set `key` to `value` on `src` in `dialect`; on success, assert the
+    /// written file reads back with exactly that key and value.
+    fn set_round_trip(src: &str, dialect: Dialect, key: &str, value: &str) -> Result<(), String> {
+        let mut doc = parse_with(src, dialect).unwrap();
+        doc.set(key, &Value::Str(value.into()))
+            .map_err(|e| e.to_string())?;
+        let back = parse_with(&doc.to_source(), dialect).unwrap();
+        assert_eq!(
+            back.value_at(key),
+            Some(Value::Str(value.into())),
+            "{key:?} = {value:?} wrote {:?}",
+            doc.to_source()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_value_or_key_that_cannot_read_back_errors() {
+        use Dialect::{Punctuated as P, Spaced as S};
+        // Values: a line break would inject an entry (`B=evil`); surrounding
+        // whitespace reads back trimmed. Both for existing and new keys.
+        for (d, src) in [(P, "A=1\n"), (S, "A 1\n")] {
+            for key in ["A", "NEW"] {
+                for bad in ["x\nB=evil", "x\rB=evil", " x", "x\t"] {
+                    let err = set_round_trip(src, d, key, bad).unwrap_err();
+                    assert!(err.contains("no quoting"), "{err}");
+                }
+            }
+            // No injected entry survives the refused edit.
+            let mut doc = parse_with(src, d).unwrap();
+            assert!(doc.set("A", &Value::Str("x\nB=evil".into())).is_err());
+            assert_eq!(doc.to_source(), src);
+        }
+        // Keys: a comment marker, a separator, or surrounding whitespace.
+        for bad in ["#A", "!A", "A=B", "A:B", " A", "A ", "A\nB"] {
+            let err = set_round_trip("A=1\n", P, bad, "v").unwrap_err();
+            assert!(err.contains("can't hold the key"), "{bad:?}: {err}");
+        }
+        for bad in ["#A", "A B", "A\tB", ""] {
+            let err = set_round_trip("A 1\n", S, bad, "v").unwrap_err();
+            assert!(err.contains("can't hold the key"), "{bad:?}: {err}");
+        }
+        // What the formats can hold still writes, and reads back as itself.
+        for (key, value) in [
+            ("B", "a#b"),
+            ("B", "x = y"),
+            ("B", "\"quoted\""),
+            ("B", ""),
+            ("A B", "v"),
+            ("B!", "v"),
+        ] {
+            set_round_trip("A=1\n", P, key, value).unwrap();
+        }
+        set_round_trip("A 1\n", S, "Subsystem", "sftp /usr/lib/sftp-server").unwrap();
+        set_round_trip("A 1\n", S, "K=V", "x").unwrap();
     }
 
     #[test]

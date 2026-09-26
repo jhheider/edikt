@@ -66,7 +66,9 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
     form, so it becomes quoted.
   - **INI, `.env`, `envspaced`**: not applicable. A value is its bytes, and
     any quotes in them are part of the value (`a = "x"` reads as `"x"`), so an
-    assignment writes exactly the string it is given.
+    assignment writes exactly the string it is given. With no quoting to fall
+    back on, a string these formats can't read back as itself **errors**
+    rather than being written (see Per-format semantics).
 
 ---
 
@@ -325,7 +327,14 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   mutation time).
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
-  error (exit 2). Iteration over a section's keys is allowed.
+  error (exit 2). Iteration over a section's keys is allowed. INI has no
+  quoting, so an assignment it can't read back as written **errors** (exit
+  2) instead of silently writing something else: a value with a line break,
+  leading or trailing whitespace (read back trimmed), or a `;`/`#` at its
+  start or after whitespace (read back as an inline comment); a new key that
+  starts with `[`, `;` or `#` (a header or comment), or holds `=`, `:`, a
+  line break, or surrounding whitespace; a new section name holding `]` or a
+  line break.
 - **`envspaced`** - the `.env` document model with a **whitespace separator**
   (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
   entirely; a `Dialect` picks only how the key ends, since the separator is the
@@ -344,7 +353,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   coercion in storage. Set the bytes after the separator; preserve everything
   else. (There is no single `.env` grammar: docker-compose, dotenv libs, and
   shell `source` disagree, so "correctly" parsing it is a bottomless bug queue.
-  We don't.)
+  We don't.) The flip side of no quoting: a value or key the line scanner
+  would read back differently **errors** (exit 2), never gets invented
+  quotes. That is a value with a line break (it would inject another entry)
+  or leading/trailing whitespace (read back trimmed), and a new key that is
+  empty (`envspaced`), starts with `#`/`!`, holds the separator (`=`/`:`, or
+  whitespace in `envspaced`), a line break, or surrounding whitespace.
 - **YAML** - a byte splice over the span tree (see Architecture). Assigning
   a **mapping or sequence** writes it in the file's own layout (#83): **flow
   under flow** (a slot inside `[...]`/`{...}`, or a value that already was a
