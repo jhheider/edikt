@@ -46,8 +46,9 @@ pub struct ParseError {
 pub struct Toml {
     doc: DocumentMut,
     had_comments: bool,
-    /// The parsed source. `toml_edit` writes every line ending as `\n`, so
-    /// serializing restores the original's endings from it.
+    /// The parsed source. `toml_edit` writes every line ending as `\n` and
+    /// always ends the file with one, so serializing restores the original's
+    /// endings and missing final newline from it.
     original: String,
 }
 
@@ -332,9 +333,15 @@ fn has_comment_decor(doc: &DocumentMut) -> bool {
 
 impl Document for Toml {
     fn to_source(&self) -> String {
-        // `toml_edit` drops every `\r` it writes (decor and string reprs
+        let mut out = self.doc.to_string();
+        // `toml_edit` terminates the last line unconditionally; a file that
+        // didn't end with a newline keeps not ending with one.
+        if !self.original.is_empty() && !self.original.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        // `toml_edit` also drops every `\r` it writes (decor and string reprs
         // alike), so put the original's line endings back, line by line.
-        edikt_core::text::restore_endings(&self.original, &self.doc.to_string())
+        edikt_core::text::restore_endings(&self.original, &out)
     }
     fn to_value(&self) -> Value {
         project::table_to_value(self.doc.as_table())
@@ -714,6 +721,15 @@ mod tests {
         );
         // The string's value is untouched by the ending bookkeeping.
         assert_eq!(q(src, ".s"), vec![Value::Str("x\ny\n".into())]);
+    }
+
+    #[test]
+    fn a_missing_final_newline_stays_missing() {
+        assert_eq!(edit_src("a = 1", ".a = 2"), "a = 2");
+        assert_eq!(edit_src("a = 1", ".b = 2"), "a = 1\nb = 2");
+        assert_eq!(edit_src("a = 1\r\n# end", ".a = 2"), "a = 2\r\n# end");
+        // An empty file gains a terminated line, as before.
+        assert_eq!(edit_src("", ".a = 1"), "a = 1\n");
     }
 
     #[test]

@@ -79,6 +79,12 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
   ending on output by matching lines against the source; the other formats
   splice, and spell only the new text with the dominant ending. The shared
   helpers are `edikt_core::text`.
+- **A missing final newline stays missing** where an edit rewrites or extends
+  the end of the file: TOML, YAML and KDL value edits, and a foot comment
+  below the last line in any format. A foot comment added below an
+  unterminated last line first ends that line, so it never lands on the
+  value's own line (`A=1# x` would read back as the value `1# x`). Appending
+  a whole `.env` or INI entry writes it as a terminated line.
 
 ---
 
