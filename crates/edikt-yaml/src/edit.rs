@@ -18,8 +18,9 @@ use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, r
 use std::ops::Range;
 
 use crate::Yaml;
+use crate::block::BlockScalar;
 use crate::compose::{Node, NodeKind, collect_merge, node_to_value};
-use crate::layout::{Indent, flow_text, inline_text, is_flow, line_start};
+use crate::layout::{Indent, column, flow_text, inline_text, is_flow, line_start};
 use crate::scalar::{QuoteStyle, emit_scalar_styled, kept_properties, split_properties};
 use crate::splice::{Slot, append_items, block_replace, new_key, scalar_to_block};
 
@@ -411,13 +412,16 @@ impl Yaml {
             return self.apply_plan(idx, path, plan, strict);
         }
         let scalar = matches!(node.kind, NodeKind::Scalar(_));
+        if let Some(block) = BlockScalar::of(source, node) {
+            return self.replace_block(idx, path, &block, value, strict);
+        }
         let token = &source[node.span.clone()];
-        // A multi-line scalar (block `|`/`>`, or a wrapped quoted scalar)
-        // can't be replaced without reflowing the lines around it; refuse
-        // cleanly rather than emit something that fails to re-parse.
+        // A quoted or plain scalar wrapped over several lines can't be
+        // replaced without reflowing the lines around it; refuse cleanly
+        // rather than emit something that fails to re-parse.
         if scalar && token.contains('\n') {
             return Err(EditError::new(
-                "cannot set a multi-line (block `|`/`>`) scalar in place yet",
+                "cannot set a multi-line quoted or plain scalar in place yet",
             ));
         }
         // Replace the body, not its properties: an anchor may be named by an
@@ -452,6 +456,68 @@ impl Yaml {
             }
         };
         self.commit(range, &text)
+    }
+
+    /// Replace the block scalar (`|`/`>`) at `path` with `value` (#89). A
+    /// string stays a block scalar, respelled in place by
+    /// [`BlockScalar::respell`]; it must read back as `value`, or the edit
+    /// is undone and taken the other way. Anything else (and a string a
+    /// block scalar can't hold) first collapses the block onto its header
+    /// line as a plain placeholder, then replaces that one-line scalar the
+    /// usual way, so it lands as it would over `key: old`.
+    fn replace_block(
+        &mut self,
+        idx: usize,
+        path: &[Step],
+        block: &BlockScalar,
+        value: &Value,
+        strict: Strictness,
+    ) -> Result<(), EditError> {
+        let before = self.source.clone();
+        if let Value::Str(s) = value {
+            let root = self.root(idx);
+            let parent = match slot_of(root, path) {
+                Slot::Root => Some(0),
+                Slot::Value { key: (start, _) } => Some(column(&before, start)),
+                Slot::Item => {
+                    // The dash precedes the node, anchor and tag included.
+                    let at = match resolve(root, path) {
+                        Resolved::Found(node) => node.span.start,
+                        _ => block.header.start,
+                    };
+                    let dash = before[..at].trim_end_matches([' ', '\t']);
+                    dash.ends_with('-').then(|| column(&before, dash.len() - 1))
+                }
+            };
+            let offset = Indent::infer(&before, &self.docs).unit;
+            if let Some((range, text)) = block.respell(&before, s, parent, offset, newline(&before))
+                && self.commit(range, &text).is_ok()
+            {
+                if self
+                    .value_at(idx, path)
+                    .is_some_and(|v| identical(&v, value))
+                {
+                    return Ok(());
+                }
+                self.restore(before.clone())?;
+            }
+        }
+        let range = block.header.start..trim_newline(&before, block.content.end);
+        let text = format!("~{}", block.header_rest(&before));
+        self.commit(range, &text)?;
+        match self.replace(idx, path, value, strict) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.restore(before)?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Put back `source`, a state this document held before (so it parses).
+    fn restore(&mut self, source: String) -> Result<(), EditError> {
+        let end = self.source.len();
+        self.commit(0..end, &source)
     }
 
     /// Run an [`elementwise`] plan against the collection at `path`.
@@ -804,6 +870,24 @@ pub(crate) fn block_end(source: &str, node: &Node) -> usize {
             Some(last) => block_end(source, &last.value),
             None => line_after(source, node.span.end),
         },
+    }
+}
+
+/// Where a key or item added after `node` goes: [`block_end`], except that a
+/// block scalar ending the node leaves its trailing blank lines after the
+/// insertion, where they keep separating it from what follows (#90). Only a
+/// keep-chomped (`+`) scalar owns those lines, so an insertion goes past them.
+pub(crate) fn insert_end(source: &str, node: &Node) -> usize {
+    match &node.kind {
+        NodeKind::Scalar(_) => {
+            BlockScalar::of(source, node).map_or_else(|| block_end(source, node), |b| b.insert_at())
+        }
+        NodeKind::Sequence(items) => items
+            .last()
+            .map_or_else(|| block_end(source, node), |n| insert_end(source, n)),
+        NodeKind::Mapping(entries) => entries
+            .last()
+            .map_or_else(|| block_end(source, node), |e| insert_end(source, &e.value)),
     }
 }
 

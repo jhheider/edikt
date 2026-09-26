@@ -766,6 +766,20 @@ fn yaml_edit_is_lossless() {
 }
 
 #[test]
+fn yaml_block_scalar_set_in_place() {
+    // jhheider/edikt#89: a `>-` field takes new text, keeping its style.
+    let (out, err, code) = run(
+        &["-t", "yaml", r#".npcs[0].fate = "new text""#],
+        "npcs:\n  - id: a\n    fate: >-\n      old\n      text\n\n  - id: b\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "npcs:\n  - id: a\n    fate: >-\n      new text\n\n  - id: b\n"
+    );
+}
+
+#[test]
 fn comments_stream_query_and_bulk_edit() {
     // comment -> key: which keys carry a TODO?
     let y =
