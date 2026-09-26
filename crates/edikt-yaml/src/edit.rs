@@ -40,12 +40,7 @@ pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<Vec<String>, EditError> {
     // `^dN` names one document by position; the edit is strict there (you asked
     // for that specific document).
     if let Expr::DocSelect(idx, body) = expr {
-        if *idx >= n {
-            return Err(EditError::new(format!(
-                "document `^d{idx}` is out of range ({n} document{})",
-                if n == 1 { "" } else { "s" }
-            )));
-        }
+        edikt_core::check_doc_index(*idx, n)?;
         apply_one(doc, *idx, body, Strictness::Strict)?;
         return Ok(warnings);
     }

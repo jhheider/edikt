@@ -382,7 +382,6 @@ fn format_from_name(name: &str) -> Result<Format> {
     })
 }
 
-/// Parse `src` in the given format into a boxed, format-agnostic document.
 /// Resolve a leading `^dN` document selector for a mutation. Errors if the
 /// index is out of range; on a single-document input returns the unwrapped body
 /// (so `^d0` works on any format, not just multi-document YAML); on a genuine
@@ -396,12 +395,7 @@ fn resolve_doc_select(
         return Ok(None);
     };
     let count = doc.to_values().len();
-    if *idx >= count {
-        bail!(
-            "document `^d{idx}` is out of range ({count} document{})",
-            if count == 1 { "" } else { "s" }
-        );
-    }
+    edikt_core::check_doc_index(*idx, count)?;
     if count == 1 {
         Ok(Some((**body).clone()))
     } else {
@@ -409,6 +403,7 @@ fn resolve_doc_select(
     }
 }
 
+/// Parse `src` in the given format into a boxed, format-agnostic document.
 fn parse_document(format: Format, src: &str) -> Result<Box<dyn Document>> {
     Ok(match format {
         // JSON is read by the JSONC parser (it's a subset with no comments).
@@ -591,12 +586,7 @@ fn run(args: Args) -> Result<ExitCode> {
             if mexpr.has_comment() {
                 let warnings = edikt_core::apply_comment_mutation(doc.as_mut(), mexpr)
                     .with_context(|| loc.clone())?;
-                if args.strict && !warnings.is_empty() {
-                    bail!("{loc}: {} (--strict)", warnings.join("; "));
-                }
-                for w in &warnings {
-                    eprintln!("edikt: warning: {loc}: {w}");
-                }
+                warn(args.strict, &loc, &warnings)?;
             } else {
                 // `=` auto-vivifies missing paths (jq-style). Surface every
                 // path a plain assignment would create - a mistyped or wrongly
@@ -631,12 +621,7 @@ fn run(args: Args) -> Result<ExitCode> {
                     eprintln!("edikt: note: {loc}: `{lhs}` matched nothing; no change");
                 }
                 unmatched_edit |= !unmatched.is_empty();
-                if args.strict && !warnings.is_empty() {
-                    bail!("{loc}: {} (--strict)", warnings.join("; "));
-                }
-                for w in &warnings {
-                    eprintln!("edikt: warning: {loc}: {w}");
-                }
+                warn(args.strict, &loc, &warnings)?;
             }
             let out = doc.to_source();
             if args.in_place.is_some() {
@@ -671,13 +656,7 @@ fn run(args: Args) -> Result<ExitCode> {
             }
             let (selected, body): (Vec<&edikt_core::Commented>, &edikt_core::Expr) = match &expr {
                 edikt_core::Expr::DocSelect(idx, body) => {
-                    if *idx >= all.len() {
-                        bail!(
-                            "{loc}: document `^d{idx}` is out of range ({} document{})",
-                            all.len(),
-                            if all.len() == 1 { "" } else { "s" }
-                        );
-                    }
+                    edikt_core::check_doc_index(*idx, all.len()).with_context(|| loc.clone())?;
                     (vec![&all[*idx]], body)
                 }
                 _ => (all.iter().collect(), &expr),
@@ -698,13 +677,7 @@ fn run(args: Args) -> Result<ExitCode> {
                 edikt_core::Expr::DocSelect(idx, body) => {
                     // An explicitly-named document out of range is an error (like
                     // an out-of-range edit), not a silent empty read.
-                    if *idx >= values.len() {
-                        bail!(
-                            "{loc}: document `^d{idx}` is out of range ({} document{})",
-                            values.len(),
-                            if values.len() == 1 { "" } else { "s" }
-                        );
-                    }
+                    edikt_core::check_doc_index(*idx, values.len()).with_context(|| loc.clone())?;
                     (values.into_iter().nth(*idx).into_iter().collect(), body)
                 }
                 _ => (values, &expr),
@@ -763,11 +736,7 @@ fn run(args: Args) -> Result<ExitCode> {
                 .iter()
                 .any(|r| matches!(r, Value::Array(_) | Value::Object(_)))
         {
-            let w = "comments were dropped";
-            if args.strict {
-                bail!("{loc}: {w} (--strict)");
-            }
-            eprintln!("edikt: warning: {loc}: {w}");
+            warn(args.strict, &loc, &["comments were dropped"])?;
         }
 
         let mut outputs: Vec<String> = Vec::new();
@@ -835,6 +804,22 @@ fn run(args: Args) -> Result<ExitCode> {
     })
 }
 
+/// Surface non-fatal warnings (a lossy conversion, a remapped comment): one
+/// stderr line each, or, under `--strict`, all of them as the error.
+fn warn(strict: bool, loc: &str, warnings: &[impl AsRef<str>]) -> Result<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+    if strict {
+        let all: Vec<&str> = warnings.iter().map(AsRef::as_ref).collect();
+        bail!("{loc}: {} (--strict)", all.join("; "));
+    }
+    for w in warnings {
+        eprintln!("edikt: warning: {loc}: {}", w.as_ref());
+    }
+    Ok(())
+}
+
 /// Render one query result in `target`: scalars raw (JSON-encoded only when
 /// JSON was explicitly requested); structural values via the target's emitter,
 /// carrying comments when `annotated` selected them, with lossy warnings
@@ -857,10 +842,7 @@ fn render_value(
     if nonfinite {
         let w =
             "non-finite numbers (Infinity/NaN) were encoded as null; JSON has no literal for them";
-        if args.strict {
-            bail!("{loc}: {w} (--strict)");
-        }
-        eprintln!("edikt: warning: {loc}: {w}");
+        warn(args.strict, loc, &[w])?;
     }
     if !matches!(value, Value::Array(_) | Value::Object(_)) {
         // Scalars are raw text, except an explicitly-requested JSON-family
@@ -900,10 +882,7 @@ fn render_value(
         && let Some(key) = edikt_core::convert::duplicate_key(value)
     {
         let w = format!("duplicate key `{key}` collapsed (kept the first)");
-        if args.strict {
-            bail!("{loc}: {w} (--strict)");
-        }
-        eprintln!("edikt: warning: {loc}: {w}");
+        warn(args.strict, loc, &[w])?;
         deduped = commented.dedupe_keys();
         commented = &deduped;
     }
@@ -912,11 +891,7 @@ fn render_value(
     // drops them: warn (or error under --strict), then emit comment-free.
     let stripped;
     if commented.has_comments() && !target.features().contains(&edikt_core::Feature::Comments) {
-        let w = "comments were dropped";
-        if args.strict {
-            bail!("{loc}: {w} (--strict)");
-        }
-        eprintln!("edikt: warning: {loc}: {w}");
+        warn(args.strict, loc, &["comments were dropped"])?;
         stripped = Commented::from_value(value);
         commented = &stripped;
     }
@@ -961,12 +936,7 @@ fn render_value(
             );
         }
     };
-    if args.strict && !warnings.is_empty() {
-        bail!("{loc}: {} (--strict)", warnings.join("; "));
-    }
-    for w in &warnings {
-        eprintln!("edikt: warning: {loc}: {w}");
-    }
+    warn(args.strict, loc, &warnings)?;
     Ok(text)
 }
 

@@ -128,6 +128,19 @@ pub trait Document {
     }
 }
 
+/// Check a `^dN` selector against a stream of `count` documents. `^dN` names one
+/// document by position, so it is strict: an index past the end is an error,
+/// not a no-op.
+pub fn check_doc_index(idx: usize, count: usize) -> Result<(), EditError> {
+    if idx < count {
+        return Ok(());
+    }
+    Err(EditError::new(format!(
+        "document `^d{idx}` is out of range ({count} document{})",
+        if count == 1 { "" } else { "s" }
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
