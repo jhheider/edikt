@@ -683,6 +683,26 @@ fn ini_creates_new_section() {
 }
 
 #[test]
+fn toml_append_in_place_keeps_one_item_per_line() {
+    // #91: both append spellings add a line, in place, at the siblings' indent.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    for (name, expr) in [
+        ("plus", r#".full += ["c"]"#),
+        ("index", r#".full[2] = "c""#),
+    ] {
+        let path = format!("{dir}/append-{name}.toml");
+        std::fs::write(&path, "full = [\n    \"a\",\n    \"b\",\n]\n").unwrap();
+        let (_o, err, code) = run(&["-i", expr, &path], "");
+        assert_eq!(code, 0, "{expr}: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "full = [\n    \"a\",\n    \"b\",\n    \"c\",\n]\n",
+            "{expr}"
+        );
+    }
+}
+
+#[test]
 fn toml_query_and_edit_keeps_comment() {
     let (out, _e, code) = run(
         &["-t", "toml", ".package.version"],

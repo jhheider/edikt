@@ -219,6 +219,9 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   `[a, b]` inside a flow collection. A comment beside the replaced value stays
   on its line, and a list or map that only changes or grows keeps its
   untouched entries byte for byte, so `.tags |= . + ["x"]` adds one line.
+  TOML arrays grow the same way: `edikt -i '.features.full += ["x"]'
+  Cargo.toml` puts `"x"` on its own line when the list is one item per line,
+  keeping its indent and trailing comma, and inline when it is inline.
 - **`.env` quotes are part of the value, not syntax.** There is no single `.env`
   grammar (docker-compose, dotenv libraries and shell `source` disagree), so
   edikt interprets nothing: for `APP_NAME="my app"` the value is the seven-plus

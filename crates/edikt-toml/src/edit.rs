@@ -3,7 +3,8 @@
 use crate::Toml;
 use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, expand_iter_paths};
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue,
+    Array, ArrayOfTables, DocumentMut, InlineTable, Item, RawString, Table, TableLike,
+    Value as TomlValue,
 };
 
 pub fn apply(doc: &mut Toml, expr: &Expr) -> Result<(), EditError> {
@@ -138,6 +139,116 @@ pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
             TomlValue::InlineTable(t)
         }
     })
+}
+
+/// Replace `arr` with `new` by appending, when `new` extends it (its first
+/// elements equal the current ones): the kept elements stay byte-for-byte and
+/// each extra one goes in through [`push_in_layout`], so `.a += [x]` on a
+/// one-item-per-line array adds one line. Returns `false`, touching nothing,
+/// when `new` is not an extension; the caller then rewrites the array.
+pub(crate) fn extend_in_layout(arr: &mut Array, new: &[Value]) -> Result<bool, EditError> {
+    if new.len() < arr.len()
+        || arr
+            .iter()
+            .zip(new)
+            .any(|(old, new)| crate::project::toml_value_to_value(old) != *new)
+    {
+        return Ok(false);
+    }
+    let extra = new[arr.len()..]
+        .iter()
+        .map(value_to_toml)
+        .collect::<Result<Vec<_>, _>>()?;
+    for v in extra {
+        push_in_layout(arr, v);
+    }
+    Ok(true)
+}
+
+/// [`extend_in_layout`] for an array of tables: when `new` extends `aot` with
+/// more tables, each goes in as its own `[[key]]` block, rather than the whole
+/// array collapsing to an inline array of inline tables.
+pub(crate) fn extend_aot(aot: &mut ArrayOfTables, new: &[Value]) -> Result<bool, EditError> {
+    if new.len() < aot.len()
+        || aot
+            .iter()
+            .zip(new)
+            .any(|(old, new)| crate::project::table_to_value(old) != *new)
+        || !new[aot.len()..]
+            .iter()
+            .all(|v| matches!(v, Value::Object(_)))
+    {
+        return Ok(false);
+    }
+    let extra = new[aot.len()..]
+        .iter()
+        .map(value_to_table)
+        .collect::<Result<Vec<_>, _>>()?;
+    for t in extra {
+        aot.push(t);
+    }
+    Ok(true)
+}
+
+/// Append `v` to `arr` in the array's own layout (jhheider/edikt#91).
+///
+/// A one-item-per-line array (its last item starts on a new line) gets the new
+/// item on its own line at that item's indentation; an empty array whose `]`
+/// sits on its own line gets it one level (four spaces) past the bracket.
+/// Anything else is inline and stays inline, separated like its last item.
+/// The trailing-comma style is kept, and what sat between the last item and
+/// `]` (a same-line comment, own-line comments, the bracket's line break) stays
+/// ahead of the bracket: a comment beside the old last item stays beside it.
+pub(crate) fn push_in_layout(arr: &mut Array, mut v: TomlValue) {
+    fn text(r: Option<&RawString>) -> String {
+        r.and_then(RawString::as_str).unwrap_or("").to_owned()
+    }
+    let n = arr.len();
+    let comma = arr.trailing_comma();
+    let last_prefix = arr.get(n.wrapping_sub(1)).map(|l| text(l.decor().prefix()));
+    // Everything between the last item's value (or `[`) and `]`: the array's
+    // trailing text after a trailing comma, else the last item's suffix.
+    let tail = match arr.get(n.wrapping_sub(1)) {
+        Some(last) if !comma => text(last.decor().suffix()),
+        _ => text(Some(arr.trailing())),
+    };
+    let indent = match &last_prefix {
+        Some(p) => p.rfind('\n').map(|i| p[i + 1..].to_owned()),
+        None => tail.rfind('\n').map(|i| format!("{}    ", &tail[i + 1..])),
+    };
+    let (prefix, rest) = match indent {
+        // Multi-line: the new item opens a line after whatever preceded the
+        // bracket's line, and that line (with the `]`) follows it.
+        Some(indent) => {
+            // (`toml_edit` drops every `\r` on output, so CRLF needs no care.)
+            let i = tail.rfind('\n').unwrap_or(tail.len());
+            (format!("{}\n{indent}", &tail[..i]), tail[i..].to_owned())
+        }
+        None => match last_prefix {
+            Some(p) if n >= 2 => (p, tail),
+            Some(_) => (" ".to_owned(), tail),
+            // `[ ]`: pad the item the way the brackets were padded.
+            None => (tail.clone(), tail),
+        },
+    };
+    match arr.get_mut(n.wrapping_sub(1)) {
+        Some(last) if !comma => {
+            last.decor_mut().set_suffix("");
+            v.decor_mut().set_prefix(prefix);
+            v.decor_mut().set_suffix(rest);
+        }
+        _ => {
+            v.decor_mut().set_prefix(prefix);
+            v.decor_mut().set_suffix("");
+            if n == 0 && rest.contains('\n') {
+                // A fresh multi-line list takes a trailing comma, the style
+                // that lets the next append touch one line.
+                arr.set_trailing_comma(true);
+            }
+            arr.set_trailing(rest);
+        }
+    }
+    arr.push_formatted(v);
 }
 
 /// `new` as the replacement for `old`, spelled the way `old` was: a string
@@ -349,7 +460,7 @@ pub(crate) fn set_array_element(
         let at = resolve_set_index(idx, arr.len())?;
         let tv = value_to_toml(value)?;
         if at == arr.len() {
-            arr.push(tv);
+            push_in_layout(arr, tv);
         } else if let Some(slot) = arr.get_mut(at) {
             *slot = replacing(slot, tv);
         }
