@@ -67,8 +67,11 @@ pub trait Document {
     /// - comments, indentation, quoting - rather than a re-serialized value.
     ///
     /// The default returns empty, meaning "this format doesn't source-slice";
-    /// the caller then falls back to emitting the value in the target format.
-    /// Only formats with structural values (JSONC, YAML) need override it.
+    /// the caller then falls back to emitting the value in the target format,
+    /// as it does for any result count that doesn't match the evaluator's.
+    /// Formats whose structural values have their own text override it: JSONC
+    /// and YAML (a node's span), and TOML (a table's body plus its sub-table
+    /// sections, each header re-rooted to the selected table).
     fn source_slice(&self, path: &[Step]) -> Vec<String> {
         let _ = path;
         Vec::new()
