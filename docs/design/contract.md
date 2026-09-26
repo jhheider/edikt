@@ -213,7 +213,10 @@ an *edit* language, not a general-purpose one.
 **Mutation**
 - assign `PATH = <expr>` - the RHS is evaluated in the value calculus
 - update-assign `PATH |= <expr>` - RHS sees the current value as `.`
-- append `.arr += [<expr>]`
+- append `.arr += [<expr>]`; merge `.obj += {k: <expr>}` (jq's `+` on two
+  objects, applied as one keyed edit per right-hand key: a shared key's value
+  is replaced in place, a new key is added at the end, and the object's other
+  entries, comments and layout are untouched)
 - delete `del(PATH)`
 
   **Mutations fan out over `[]`** exactly like jq: `.a[] |= f` maps `f` over
@@ -284,7 +287,13 @@ doesn't just place literals):
   select a few keys. Quoted (`{"a.b"}`) and hyphenated (`{default-features}`)
   keys pluck too; a key the input lacks yields `null`, as in jq
 - arithmetic on numbers: `+ - * / %`
-- string concat with `+`
+- string concat with `+`, and jq's other `+` overloads: arrays concatenate,
+  and **two objects merge shallowly** (#106): `{a: 1, b: 2} + {b: 3, c: 4}` is
+  `{a: 1, b: 3, c: 4}`, the right operand's value winning a shared key, the
+  left's keys first in their own order, then the right's new keys. `null` is
+  `+`'s identity on either side (`null + x` is `x`). This is jq compatibility
+  of an existing operator, not a new builtin; there is no deep merge (`*` on
+  objects stays an error)
 - a small function registry, jq-named: `length`, `keys`, `has`, `type`,
   `tostring`, `tonumber`, `ascii_upcase`, `ascii_downcase`, `ltrimstr`,
   `rtrimstr`, `startswith`, `endswith`, `split`, `join`, and the regex family

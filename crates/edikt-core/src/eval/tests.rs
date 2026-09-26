@@ -1,4 +1,5 @@
 use super::*;
+use crate::json;
 use crate::parser::parse;
 
 fn obj(pairs: &[(&str, Value)]) -> Value {
@@ -253,6 +254,34 @@ fn add_is_overloaded() {
         one("[1] + [2]", &Value::Null),
         Value::Array(vec![Value::Int(1), Value::Int(2)])
     );
+}
+
+#[test]
+fn add_merges_two_objects_shallowly_like_jq() {
+    // #106: right wins a shared key (in the left's position), then the
+    // right's new keys in its order; nested objects are replaced, not merged.
+    let r = one(
+        "{a: 1, b: {x: 1}, c: 3} + {d: 4, b: {y: 2}, a: 9}",
+        &Value::Null,
+    );
+    assert_eq!(r, json!({"a": 9, "b": {"y": 2}, "c": 3, "d": 4}));
+    assert_eq!(
+        r.to_json(),
+        r#"{"a":9,"b":{"y":2},"c":3,"d":4}"#,
+        "key order: left's keys first, then the right's new ones"
+    );
+    assert_eq!(one("null + {a: 1}", &Value::Null), json!({"a": 1}));
+    assert_eq!(one("{a: 1} + null", &Value::Null), json!({"a": 1}));
+    assert_eq!(one("{} + {}", &Value::Null), json!({}));
+    // `+=` merges too, at the value level.
+    let doc = json!({"o": {"a": 1, "b": 2}});
+    assert_eq!(
+        one(".o += {b: 3, c: 4}", &doc).to_json(),
+        r#"{"o":{"a":1,"b":3,"c":4}}"#
+    );
+    // Other object arithmetic is still an error.
+    assert!(eval(&parse("{a: 1} - {a: 1}").unwrap(), &Value::Null).is_err());
+    assert!(eval(&parse("{a: 1} + [1]").unwrap(), &Value::Null).is_err());
 }
 
 #[test]

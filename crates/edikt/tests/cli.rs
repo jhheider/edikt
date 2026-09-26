@@ -2137,6 +2137,50 @@ fn a_step_after_a_parenthesized_path_works_like_jq() {
 }
 
 #[test]
+fn plus_on_two_objects_is_a_shallow_merge() {
+    // #106: jq's `+` on objects, right wins, left's keys first.
+    let (out, err, code) = run(&["-t", "json", "{a: 1, b: 2} + {b: 3, c: 4}"], "{}");
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "{\n  \"a\": 1,\n  \"b\": 3,\n  \"c\": 4\n}\n");
+
+    // `+=` merges key by key: the shared key changes in place, the new one
+    // is added, and every comment and the layout of the rest survive.
+    let jsonc = "{\n  \"o\": {\n    // head\n    \"a\": 1, // one\n    \"b\": 2\n  }\n}\n";
+    let (out, err, code) = run(&["-t", "jsonc", ".o += {b: 5, z: true}"], jsonc);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "{\n  \"o\": {\n    // head\n    \"a\": 1, // one\n    \"b\": 5,\n    \"z\": true\n  }\n}\n"
+    );
+    let kdl = "o {\n  // head\n  a 1\n  b 2\n}\n";
+    let (out, err, code) = run(&["-t", "kdl", ".o += {b: 5, z: 9}"], kdl);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "o {\n  // head\n  a 1\n  b 5\n  z 9\n}\n");
+
+    // Over every element (`[]`) and through select (#88).
+    let toml = "[[bin]]\nname = \"a\"  # first\n\n[[bin]]\nname = \"b\"\n";
+    let (out, err, code) = run(&["-t", "toml", ".bin[] += {test: false}"], toml);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "[[bin]]\nname = \"a\"  # first\ntest = false\n\n[[bin]]\nname = \"b\"\ntest = false\n"
+    );
+    let (out, err, code) = run(
+        &[
+            "-t",
+            "yaml",
+            r#"(.items[] | select(.id == "a")) += {n: 7, x: 1}"#,
+        ],
+        NPCS,
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "items:\n  - id: a\n    n: 7  # keep me\n    x: 1\n  - id: b\n    n: 2\n"
+    );
+}
+
+#[test]
 fn path_builtin_shows_what_an_edit_will_touch() {
     let (out, _e, code) = run(
         &[

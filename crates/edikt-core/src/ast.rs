@@ -67,7 +67,7 @@ pub enum Expr {
     /// `path |= rhs` - update-assign; `rhs` sees the current value at `path`.
     UpdateAssign(Box<Expr>, Box<Expr>),
     /// `path += rhs`: add-assign; `path = path + rhs` (numeric add, string/array
-    /// concat). `rhs` is evaluated against the whole input.
+    /// concat, shallow object merge). `rhs` is evaluated against the whole input.
     AddAssign(Box<Expr>, Box<Expr>),
     /// `^dN | body` - select document N of a multi-document YAML stream, then
     /// apply `body` to it. A document-axis construct handled by the CLI/format

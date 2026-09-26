@@ -516,7 +516,7 @@ fn binary(op: BinOp, a: &Value, b: &Value) -> Result<Value, EvalError> {
 }
 
 /// `+` is overloaded: `null` is the identity, plus numeric addition, string
-/// concat, and array concat.
+/// concat, array concat, and jq's shallow object merge.
 pub(crate) fn add(a: &Value, b: &Value) -> Result<Value, EvalError> {
     match (a, b) {
         (Value::Null, _) => Ok(b.clone()),
@@ -527,8 +527,22 @@ pub(crate) fn add(a: &Value, b: &Value) -> Result<Value, EvalError> {
             v.extend(y.clone());
             Ok(Value::Array(v))
         }
+        (Value::Object(x), Value::Object(y)) => Ok(Value::Object(merge(x, y))),
         _ => arith(a, b, |x, y| x + y, i64::checked_add, "add"),
     }
+}
+
+/// jq's `{..} + {..}`: the left's entries in order, a shared key taking the
+/// right's value in place, then the right's new keys in its order.
+fn merge(left: &[(String, Value)], right: &[(String, Value)]) -> Vec<(String, Value)> {
+    let mut out = left.to_vec();
+    for (k, v) in right {
+        match out.iter_mut().find(|(kk, _)| kk == k) {
+            Some(slot) => slot.1 = v.clone(),
+            None => out.push((k.clone(), v.clone())),
+        }
+    }
+    out
 }
 
 fn arith(
