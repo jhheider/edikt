@@ -517,7 +517,7 @@ fn binary(op: BinOp, a: &Value, b: &Value) -> Result<Value, EvalError> {
 
 /// `+` is overloaded: `null` is the identity, plus numeric addition, string
 /// concat, and array concat.
-fn add(a: &Value, b: &Value) -> Result<Value, EvalError> {
+pub(crate) fn add(a: &Value, b: &Value) -> Result<Value, EvalError> {
     match (a, b) {
         (Value::Null, _) => Ok(b.clone()),
         (_, Value::Null) => Ok(a.clone()),

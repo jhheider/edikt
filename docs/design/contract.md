@@ -542,17 +542,21 @@ Workspace; each format is an isolated module with no cross-coupling.
   Pratt parser + evaluator / value calculus / function registry); the
   **`Document` trait** (format-agnostic seam: resolve path -> node handle(s),
   read value/source-slice/commented projection, format-preserving replace,
-  delete, append). There is no conversion trait: each format crate exports
-  `emit` / `emit_commented` free functions, and shared data-model helpers
-  live in `edikt-core`'s `convert` module.
+  delete, append); the **mutation driver** (`apply_mutation` interprets
+  `=` / `|=` / `+=` / `del` / `|` and path-expression targets once, over the
+  `Mutable` primitives each format supplies: value-at, set, delete, add). There
+  is no conversion trait: each format crate exports `emit` / `emit_commented`
+  free functions, and shared data-model helpers live in `edikt-core`'s
+  `convert` module.
 - **`edikt-syntax`** (lib) - shared **rowan** substrate: green-tree helpers,
   generic lossless serialize (walk green tree -> concat token text), splice /
   structural-sharing edit utilities usable by any format's `SyntaxKind`.
 **Library surface (the crates are a public API, not just the binary's guts).**
 Every format crate re-exports the `edikt-core` types that appear in its own
 signatures - `Value`, `Step`, `Expr`, `Document`, `Feature`, `CommentKind`,
-`Commented`, `EditError`, the `json!` macro, and `parse as parse_expr` (aliased
-because each crate's own `parse` is its document parser). A dependent calls
+`Commented`, `EditError`, `Mutable` (where the document implements it), the
+`json!` macro, and `parse as parse_expr` (aliased because each crate's own
+`parse` is its document parser). A dependent calls
 `Jsonc::set` without also taking a direct `edikt-core` dependency. `json!` is
 the `serde_json`-shaped `Value` constructor; it builds a data-model value, never
 a document, since the CST is what round-trips bytes.

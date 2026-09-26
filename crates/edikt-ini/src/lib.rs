@@ -20,7 +20,7 @@ pub use edit::apply;
 // edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
 // crate's own `parse` is the document parser.
 pub use edikt_core::{
-    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    CommentKind, Commented, Document, EditError, Expr, Feature, Mutable, Step, Value, json,
     parse as parse_expr,
 };
 use syntax::{Sk, SyntaxNode};

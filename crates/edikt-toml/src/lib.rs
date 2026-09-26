@@ -17,7 +17,7 @@ pub use edit::{apply, emit};
 // crate's own `parse` is the document parser.
 use edikt_core::eval;
 pub use edikt_core::{
-    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    CommentKind, Commented, Document, EditError, Expr, Feature, Mutable, Step, Value, json,
     parse as parse_expr,
 };
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue};
@@ -123,8 +123,7 @@ impl Toml {
     pub fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         if path.contains(&Step::Iterate) {
             let whole = self.to_value();
-            let paths = edikt_core::expand_delete_paths(path, &whole)
-                .map_err(|e| EditError::new(e.to_string()))?;
+            let paths = edikt_core::expand_delete_paths(path, &whole)?;
             for p in &paths {
                 self.delete(p)?;
             }

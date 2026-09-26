@@ -15,7 +15,7 @@
 //! shape edits only the elements that change.
 
 use edikt_core::{
-    BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, normalize_index, render_path,
+    EditError, Expr, Mutable, Step, Value, add_values, eval, normalize_index, render_path,
 };
 use std::ops::Range;
 
@@ -91,86 +91,41 @@ pub(crate) enum Strictness {
 
 /// Apply one edit program to document `idx` in isolation.
 fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Result<(), EditError> {
-    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
-    // resolves against this document to concrete paths; each is then an
-    // ordinary edit.
-    if let Some(each) = edikt_core::lower_mutation(expr, || doc.doc_value(idx))
-        .map_err(|e| EditError::new(e.to_string()))?
-    {
-        for e in &each {
-            apply_one(doc, idx, e, strict)?;
-        }
-        return Ok(());
+    edikt_core::apply_mutation(&mut InDoc { doc, idx, strict }, expr)
+}
+
+/// One document of the stream, as the shared mutation driver sees it: its own
+/// value for the right side, and a miss that is an error or a no-op
+/// depending on how the document was addressed.
+struct InDoc<'a> {
+    doc: &'a mut Yaml,
+    idx: usize,
+    strict: Strictness,
+}
+
+impl Mutable for InDoc<'_> {
+    fn whole(&self) -> Value {
+        self.doc.doc_value(self.idx)
     }
-    match expr {
-        Expr::Assign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let whole = doc.doc_value(idx);
-            let value = eval_one(rhs, &whole)?;
-            if steps.contains(&Step::Iterate) {
-                return set_each(doc, idx, steps, &whole, true, |_| Ok(value.clone()), strict);
+    fn value_at(&self, path: &[Step]) -> Option<Value> {
+        self.doc.value_at(self.idx, path)
+    }
+    fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        self.doc.set(self.idx, path, value, self.strict)
+    }
+    fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        self.doc.delete(self.idx, path)
+    }
+    fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
+        match (current, addend) {
+            (Value::Array(_), Value::Array(items)) => {
+                self.doc.append(self.idx, path, items, self.strict)
             }
-            doc.set(idx, steps, &value, strict)
+            _ => self.set(path, &add_values(current, addend)?),
         }
-        Expr::UpdateAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let whole = doc.doc_value(idx);
-            if steps.contains(&Step::Iterate) {
-                return set_each(
-                    doc,
-                    idx,
-                    steps,
-                    &whole,
-                    false,
-                    |current| eval_one(rhs, current),
-                    strict,
-                );
-            }
-            let Some(current) = doc.value_at(idx, steps) else {
-                return miss(strict, steps);
-            };
-            let value = eval_one(rhs, &current)?;
-            doc.set(idx, steps, &value, strict)
-        }
-        Expr::AddAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let whole = doc.doc_value(idx);
-            let addend = eval_one(rhs, &whole)?;
-            if steps.contains(&Step::Iterate) {
-                return set_each(
-                    doc,
-                    idx,
-                    steps,
-                    &whole,
-                    false,
-                    |current| add_values(current, &addend),
-                    strict,
-                );
-            }
-            let Some(current) = doc.value_at(idx, steps) else {
-                return miss(strict, steps);
-            };
-            match (&current, &addend) {
-                (Value::Array(_), Value::Array(items)) => doc.append(idx, steps, items, strict),
-                _ => doc.set(idx, steps, &add_values(&current, &addend)?, strict),
-            }
-        }
-        Expr::Pipe(a, b) => {
-            apply_one(doc, idx, a, strict)?;
-            apply_one(doc, idx, b, strict)
-        }
-        Expr::Call(name, args) if name == "del" => {
-            if args.len() != 1 {
-                return Err(EditError::new("del(...) takes one path argument"));
-            }
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            doc.delete(idx, steps)
-        }
-        _ => Err(EditError::new(
-            "expected an assignment (`path = value`, `path |= expr`) or `del(path)`",
-        )),
+    }
+    fn miss(&self, path: &[Step]) -> Result<(), EditError> {
+        miss(self.strict, path)
     }
 }
 
@@ -208,58 +163,8 @@ fn peel_select(expr: &Expr) -> Option<(&Expr, Expr)> {
 /// document matches when `select(pred)` keeps it.
 fn doc_matches(pred: &Expr, val: &Value) -> Result<bool, EditError> {
     let filter = Expr::Call("select".into(), vec![pred.clone()]);
-    let kept = eval(&filter, val).map_err(|e| EditError::new(e.to_string()))?;
+    let kept = eval(&filter, val)?;
     Ok(!kept.is_empty())
-}
-
-fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
-    lhs.as_path()
-        .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
-}
-
-/// Apply `f` to each element selected by `steps` (a path containing at least one
-/// `Step::Iterate`), splicing each element in place via the ordinary index-keyed
-/// `set` path. Each splice recomposes from the new source, exactly as a
-/// sequential program of `.a[i] = ...` edits would - just derived from the
-/// element expansion instead of typed by hand.
-fn set_each(
-    doc: &mut Yaml,
-    idx: usize,
-    steps: &[Step],
-    whole: &Value,
-    create: bool,
-    f: impl Fn(&Value) -> Result<Value, EditError>,
-    strict: Strictness,
-) -> Result<(), EditError> {
-    let paths = expand_iter_paths(steps, whole).map_err(|e| EditError::new(e.to_string()))?;
-    if paths.is_empty() && create {
-        return Err(EditError::new("cannot create through `[]`"));
-    }
-    for path in &paths {
-        let Some(current) = doc.value_at(idx, path) else {
-            return miss(strict, path);
-        };
-        let value = f(&current)?;
-        doc.set(idx, path, &value, strict)?;
-    }
-    Ok(())
-}
-
-fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
-    eval(expr, input)
-        .map_err(|e| EditError::new(e.to_string()))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EditError::new("right side of the assignment produced no value"))
-}
-
-fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
-    let expr = Expr::Binary(
-        BinOp::Add,
-        Box::new(Expr::Path(Vec::new())),
-        Box::new(Expr::Literal(addend.clone())),
-    );
-    eval_one(&expr, current)
 }
 
 /// The result of walking a path over the span tree.
@@ -592,8 +497,7 @@ impl Yaml {
                 return self.delete_within(idx, &path[..path.len() - 1]);
             }
             let whole = self.doc_value(idx);
-            let paths = edikt_core::expand_delete_paths(path, &whole)
-                .map_err(|e| EditError::new(e.to_string()))?;
+            let paths = edikt_core::expand_delete_paths(path, &whole)?;
             for p in &paths {
                 self.delete(idx, p)?;
             }

@@ -70,10 +70,11 @@ contract's Architecture section has the detail.
 - `edikt`: the clap CLI (I/O, `-i`, mode dispatch, format detection, exit
   codes).
 - `edikt-core`: `Value`, `Commented`, `Feature`, the expression language
-  (lexer, parser, evaluator, builtins), and the `Document` trait, the one trait
-  every format implements. Conversion is per-crate `emit`/`emit_commented`
-  functions plus helpers in `edikt-core`'s `convert` module; there is no
-  conversion trait.
+  (lexer, parser, evaluator, builtins), the `Document` trait every format
+  implements, and the mutation driver behind its `apply` (`apply_mutation`
+  over a format's `Mutable` primitives). Conversion is per-crate
+  `emit`/`emit_commented` functions plus helpers in `edikt-core`'s `convert`
+  module; there is no conversion trait.
 - `edikt-syntax`: shared rowan helpers for `edikt-jsonc`, `edikt-ini`,
   `edikt-env`.
 - `edikt-toml` (over `toml_edit`), `edikt-kdl` (over `kdl-rs`), `edikt-yaml`

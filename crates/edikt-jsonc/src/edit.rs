@@ -12,135 +12,35 @@
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, expand_iter_paths};
+use edikt_core::{Document, EditError, Expr, Mutable, Step, Value, add_values};
 use rowan::{GreenNode, NodeOrToken};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
 pub fn apply(doc: &mut Jsonc, expr: &Expr) -> Result<(), EditError> {
-    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
-    // resolves to concrete paths first; each is then an ordinary edit.
-    if let Some(each) = edikt_core::lower_mutation(expr, || doc.to_value())
-        .map_err(|e| EditError::new(e.to_string()))?
-    {
-        for e in &each {
-            apply(doc, e)?;
-        }
-        return Ok(());
-    }
-    match expr {
-        Expr::Assign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            // `path = rhs`: rhs is evaluated against the whole document.
-            let whole = doc.to_value();
-            let value = eval_one(rhs, &whole)?;
-            if steps.contains(&Step::Iterate) {
-                // `.a[] = x`: set every iterated element to the same value.
-                return set_each(doc, steps, &whole, true, |_| Ok(value.clone()));
-            }
-            doc.set(steps, &value)
-        }
-        Expr::UpdateAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            // `path |= rhs`: rhs sees the current value at `path`.
-            if steps.contains(&Step::Iterate) {
-                // `.a[] |= f`: map `f` over each element.
-                let whole = doc.to_value();
-                return set_each(doc, steps, &whole, false, |current| eval_one(rhs, current));
-            }
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            let value = eval_one(rhs, &current)?;
-            doc.set(steps, &value)
-        }
-        Expr::AddAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let whole = doc.to_value();
-            let addend = eval_one(rhs, &whole)?;
-            if steps.contains(&Step::Iterate) {
-                // `.a[] += x`: jq's `.a[] |= . + x`, per element.
-                return set_each(doc, steps, &whole, false, |current| {
-                    add_values(current, &addend)
-                });
-            }
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            match (&current, &addend) {
-                // Array + array -> format-preserving element insert.
-                (Value::Array(_), Value::Array(items)) => doc.append(steps, items),
-                // Everything else (number, string) -> compute and replace the node.
-                _ => doc.set(steps, &add_values(&current, &addend)?),
-            }
-        }
-        Expr::Pipe(a, b) => {
-            apply(doc, a)?;
-            apply(doc, b)
-        }
-        Expr::Call(name, args) if name == "del" => {
-            if args.len() != 1 {
-                return Err(EditError::new("del(...) takes one path argument"));
-            }
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            doc.delete(steps)
-        }
-        _ => Err(EditError::new(
-            "expected an assignment (`path = value`, `path |= expr`) or `del(path)`",
-        )),
-    }
+    edikt_core::apply_mutation(doc, expr)
 }
 
-fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
-    lhs.as_path()
-        .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
-}
-
-/// Apply `f` to each element selected by `steps` (which contains at least one
-/// `Step::Iterate`), replacing each element's value node with the result. Every
-/// replacement is a single-value-node splice, so layout/comments around and
-/// between elements are untouched. `create` is true for plain assignment (`=`),
-/// where an expansion resolving to nothing means "you asked to create elements
-/// through `[]`" and errors rather than silently doing nothing; update forms
-/// (`|=`, `+=`) treat an empty expansion as a miss (a no-op), jq-shaped.
-fn set_each(
-    doc: &mut Jsonc,
-    steps: &[Step],
-    whole: &Value,
-    create: bool,
-    f: impl Fn(&Value) -> Result<Value, EditError>,
-) -> Result<(), EditError> {
-    let paths = expand_iter_paths(steps, whole).map_err(|e| EditError::new(e.to_string()))?;
-    if paths.is_empty() && create {
-        return Err(EditError::new("cannot create through `[]`"));
+impl Mutable for Jsonc {
+    fn whole(&self) -> Value {
+        self.to_value()
     }
-    for path in &paths {
-        let current = doc
-            .value_at(path)
-            .ok_or_else(|| EditError::new("path not found"))?;
-        let value = f(&current)?;
-        doc.set(path, &value)?;
+    fn value_at(&self, path: &[Step]) -> Option<Value> {
+        Jsonc::value_at(self, path)
     }
-    Ok(())
-}
-
-fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
-    eval(expr, input)
-        .map_err(|e| EditError::new(e.to_string()))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EditError::new("right side of the assignment produced no value"))
-}
-
-/// Compute `current + addend` using the evaluator's `+` semantics.
-fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
-    let expr = Expr::Binary(
-        BinOp::Add,
-        Box::new(Expr::Path(Vec::new())),
-        Box::new(Expr::Literal(addend.clone())),
-    );
-    eval_one(&expr, current)
+    fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        Jsonc::set(self, path, value)
+    }
+    fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        Jsonc::delete(self, path)
+    }
+    fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
+        match (current, addend) {
+            // Array + array -> format-preserving element insert.
+            (Value::Array(_), Value::Array(items)) => self.append(path, items),
+            // Everything else (number, string) -> compute and replace the node.
+            _ => self.set(path, &add_values(current, addend)?),
+        }
+    }
 }
 
 /// The original source text of each value node selected by `path`, in document

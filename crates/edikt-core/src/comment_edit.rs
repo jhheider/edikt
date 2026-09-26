@@ -159,8 +159,7 @@ fn split_comment(steps: &[Step]) -> Result<(&[Step], CommentKind), EditError> {
 
 /// Evaluate an RHS to comment text (a scalar rendered as its raw string).
 fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
-    let v = eval(rhs, input)
-        .map_err(|e| EditError::new(e.to_string()))?
+    let v = eval(rhs, input)?
         .into_iter()
         .next()
         .ok_or_else(|| EditError::new("the comment text expression produced no value"))?;

@@ -9,73 +9,40 @@
 
 use crate::syntax::{Sk, SyntaxNode, sk};
 use crate::{Ini, project};
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{Document, EditError, Expr, Mutable, MutationKind, Step, Value, eval};
 use rowan::{GreenNode, GreenNodeBuilder};
 
 pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
-    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
-    // resolves to concrete paths first; each is then an ordinary edit.
-    if let Some(each) = edikt_core::lower_mutation(expr, || doc.to_value())
-        .map_err(|e| EditError::new(e.to_string()))?
-    {
-        for e in &each {
-            apply(doc, e)?;
-        }
-        return Ok(());
-    }
-    match expr {
-        Expr::Assign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            let value = eval_one(rhs, &doc.to_value())?;
-            doc.set(steps, &value)
-        }
-        Expr::UpdateAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            // `[]` is the array family, which this flat format lacks; the
-            // update forms resolve through `value_at` and would otherwise
-            // misreport it as "path not found".
-            if steps.contains(&Step::Iterate) {
-                return no_iterate(doc, steps);
-            }
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            let value = eval_one(rhs, &current)?;
-            doc.set(steps, &value)
-        }
-        Expr::AddAssign(lhs, rhs) => {
-            let steps = assign_path(lhs)?;
-            if steps.contains(&Step::Iterate) {
-                return no_iterate(doc, steps);
-            }
-            let current = doc
-                .value_at(steps)
-                .ok_or_else(|| EditError::new("path not found"))?;
-            let addend = eval_one(rhs, &doc.to_value())?;
-            doc.set(steps, &add_values(&current, &addend)?)
-        }
-        Expr::Pipe(a, b) => {
-            apply(doc, a)?;
-            apply(doc, b)
-        }
-        Expr::Call(name, args) if name == "del" => {
-            if args.len() != 1 {
-                return Err(EditError::new("del(...) takes one path argument"));
-            }
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            doc.delete(steps)
-        }
-        _ => Err(EditError::new(
-            "expected an assignment (`path = value`) or `del(path)`",
-        )),
-    }
+    edikt_core::apply_mutation(doc, expr)
 }
 
-fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
-    lhs.as_path()
-        .ok_or_else(|| EditError::new("left side of an assignment must be a path"))
+impl Mutable for Ini {
+    /// INI is flat: there is nothing to fan `[]` out over but scalars.
+    const FANS_OUT: bool = false;
+
+    fn whole(&self) -> Value {
+        self.to_value()
+    }
+    fn value_at(&self, path: &[Step]) -> Option<Value> {
+        Ini::value_at(self, path)
+    }
+    fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        Ini::set(self, path, value)
+    }
+    fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+        Ini::delete(self, path)
+    }
+    /// `[]` is the array family, which this flat format lacks; the update
+    /// forms resolve through `value_at` and would otherwise misreport it as
+    /// "path not found".
+    fn check_path(&self, path: &[Step], kind: MutationKind) -> Result<(), EditError> {
+        match kind {
+            MutationKind::Update | MutationKind::Add if path.contains(&Step::Iterate) => {
+                no_iterate(self, path)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// INI's answer to `[]` in an update/append path: the precise type error when
@@ -83,30 +50,11 @@ fn assign_path(lhs: &Expr) -> Result<&[Step], EditError> {
 /// clear unsupported hint for a section iterate - never the misleading
 /// `path not found` that `value_at` would produce for any `[]` path.
 fn no_iterate(doc: &Ini, steps: &[Step]) -> Result<(), EditError> {
-    if let Err(e) = eval(&Expr::Path(steps.to_vec()), &doc.to_value()) {
-        return Err(EditError::new(e.to_string()));
-    }
+    eval(&Expr::Path(steps.to_vec()), &doc.to_value())?;
     Err(EditError::new(
         "`[]` in an assignment is not supported for INI: it is flat key-value, \
          with nothing to iterate but scalars",
     ))
-}
-
-fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
-    eval(expr, input)
-        .map_err(|e| EditError::new(e.to_string()))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EditError::new("right side of the assignment produced no value"))
-}
-
-fn add_values(current: &Value, addend: &Value) -> Result<Value, EditError> {
-    let expr = Expr::Binary(
-        BinOp::Add,
-        Box::new(Expr::Path(Vec::new())),
-        Box::new(Expr::Literal(addend.clone())),
-    );
-    eval_one(&expr, current)
 }
 
 /// Resolve `.key` (preamble) or `.section.key` to its `Entry` node.

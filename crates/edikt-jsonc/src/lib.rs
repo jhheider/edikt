@@ -39,7 +39,7 @@ pub use edit::apply;
 // edikt-core dependency (jhheider/edikt#66). `parse` is aliased because this
 // crate's own `parse` is the document parser.
 pub use edikt_core::{
-    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
+    CommentKind, Commented, Document, EditError, Expr, Feature, Mutable, Step, Value, json,
     parse as parse_expr,
 };
 use syntax::{Sk, SyntaxNode};
@@ -156,8 +156,7 @@ impl Jsonc {
         // front so indices stay valid as the collection shrinks.
         if path.contains(&Step::Iterate) {
             let whole = self.to_value();
-            let paths = edikt_core::expand_delete_paths(path, &whole)
-                .map_err(|e| EditError::new(e.to_string()))?;
+            let paths = edikt_core::expand_delete_paths(path, &whole)?;
             for p in &paths {
                 self.delete(p)?;
             }
