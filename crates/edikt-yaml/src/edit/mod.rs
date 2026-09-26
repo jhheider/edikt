@@ -18,6 +18,7 @@ use edikt_core::{EditError, Expr, Mutable, Step, Value, eval, render_path};
 
 use crate::Yaml;
 
+mod delete;
 mod extent;
 mod resolve;
 mod write;
