@@ -18,6 +18,7 @@ use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, r
 use std::ops::Range;
 
 use crate::Yaml;
+use crate::block::BlockScalar;
 use crate::compose::{Node, NodeKind, collect_merge, node_to_value};
 use crate::layout::{Indent, flow_text, inline_text, is_flow, line_start};
 use crate::scalar::{QuoteStyle, emit_scalar_styled, kept_properties, split_properties};
@@ -804,6 +805,24 @@ pub(crate) fn block_end(source: &str, node: &Node) -> usize {
             Some(last) => block_end(source, &last.value),
             None => line_after(source, node.span.end),
         },
+    }
+}
+
+/// Where a key or item added after `node` goes: [`block_end`], except that a
+/// block scalar ending the node leaves its trailing blank lines after the
+/// insertion, where they keep separating it from what follows (#90). Only a
+/// keep-chomped (`+`) scalar owns those lines, so an insertion goes past them.
+pub(crate) fn insert_end(source: &str, node: &Node) -> usize {
+    match &node.kind {
+        NodeKind::Scalar(_) => {
+            BlockScalar::of(source, node).map_or_else(|| block_end(source, node), |b| b.insert_at())
+        }
+        NodeKind::Sequence(items) => items
+            .last()
+            .map_or_else(|| block_end(source, node), |n| insert_end(source, n)),
+        NodeKind::Mapping(entries) => entries
+            .last()
+            .map_or_else(|| block_end(source, node), |e| insert_end(source, &e.value)),
     }
 }
 

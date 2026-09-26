@@ -20,7 +20,7 @@ use edikt_core::{EditError, Value};
 use std::ops::Range;
 
 use crate::compose::{Node, NodeKind};
-use crate::edit::{block_end, ends_with_newline, newline, trim_newline};
+use crate::edit::{block_end, ends_with_newline, insert_end, newline, trim_newline};
 use crate::layout::{
     Indent, block_lines, child_offset, column, content_start, flow_text, inline_text, is_flow,
     line_end, line_start,
@@ -226,7 +226,7 @@ pub(crate) fn new_key(
     let mut lines = Vec::new();
     let entry = Value::Object(vec![(key.to_string(), value.clone())]);
     block_lines(&entry, col, indent, &mut lines)?;
-    Ok(after_block(source, block_end(source, &last.value), &lines))
+    Ok(after_block(source, insert_end(source, &last.value), &lines))
 }
 
 /// Append `items` to the sequence `node`: into a flow sequence in flow style,
@@ -244,7 +244,7 @@ pub(crate) fn append_items(
     let col = column(source, content_start(source, node));
     let mut lines = Vec::new();
     block_lines(&Value::Array(items.to_vec()), col, indent, &mut lines)?;
-    Ok(after_block(source, block_end(source, node), &lines))
+    Ok(after_block(source, insert_end(source, node), &lines))
 }
 
 /// Insert `lines` as whole lines at `at` (the start of the line after a

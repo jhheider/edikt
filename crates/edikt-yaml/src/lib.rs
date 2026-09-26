@@ -14,6 +14,7 @@
 //! the targeted value's bytes change: edikt never rewrites what it didn't
 //! target.
 
+mod block;
 mod comments;
 mod compose;
 mod edit;
@@ -564,6 +565,49 @@ mod tests {
             edit("- - x\n  - k: 1\n", ".[0][1].j = 2"),
             "- - x\n  - k: 1\n    j: 2\n"
         );
+    }
+
+    #[test]
+    fn new_key_goes_before_the_blank_line_after_a_block_scalar() {
+        // jhheider/edikt#90, verbatim: the blank line separating the items
+        // stays between them.
+        assert_eq!(
+            edit(
+                "npcs:\n  - id: a\n    notes: >-\n      text\n\n  - id: b\n",
+                r#".npcs[0].statblock_ref = "x.yaml""#
+            ),
+            "npcs:\n  - id: a\n    notes: >-\n      text\n    statblock_ref: x.yaml\n\n  - id: b\n"
+        );
+        // Clip chomping, several blank lines, a comment after them, and a
+        // plain mapping: all stay after the new key.
+        assert_eq!(
+            edit("a:\n  x: |\n    t\n\n\n# c\nb: 2\n", ".a.k = 2"),
+            "a:\n  x: |\n    t\n  k: 2\n\n\n# c\nb: 2\n"
+        );
+        assert_eq!(
+            edit("a:\n  x: 1\n\n  # c\nb: 2\n", ".a.k = 2"),
+            "a:\n  x: 1\n  k: 2\n\n  # c\nb: 2\n"
+        );
+        // A block scalar nested deeper still ends its mapping.
+        assert_eq!(
+            edit("a:\n  m:\n    x: >\n      t\n\nb: 2\n", ".a.k = 2"),
+            "a:\n  m:\n    x: >\n      t\n  k: 2\n\nb: 2\n"
+        );
+        // An appended item, likewise.
+        assert_eq!(
+            edit("xs:\n  - |-\n    t\n\nb: 2\n", ".xs += [1]"),
+            "xs:\n  - |-\n    t\n  - 1\n\nb: 2\n"
+        );
+        // A whitespace-only line indented past the content is content.
+        assert_eq!(
+            edit("a:\n  x: |\n    t\n      \n\nb: 2\n", ".a.k = 2"),
+            "a:\n  x: |\n    t\n      \n  k: 2\n\nb: 2\n"
+        );
+        // Under keep chomping the blank lines are the value's: they stay in it.
+        let src = "a:\n  x: |+\n    t\n\nb: 2\n";
+        let out = edit(src, ".a.k = 2");
+        assert_eq!(out, "a:\n  x: |+\n    t\n\n  k: 2\nb: 2\n");
+        assert_eq!(q(&out, ".a.x"), vec![Value::Str("t\n\n".into())]);
     }
 
     #[test]

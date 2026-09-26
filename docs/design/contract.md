@@ -297,7 +297,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   kind, its existing keys in order or its existing items, anything new after
   them) edits only the elements that change, so `.tags |= . + ["x"]` appends
   one line and assigning a collection its own value changes no bytes; any
-  other replacement rewrites the collection, keeping its anchor. Plain `=`
+  other replacement rewrites the collection, keeping its anchor. A new block
+  key or item goes directly after the collection's last content line, so the
+  blank lines and comments that separate it from what follows stay after the
+  insertion (#90). The blank lines after a block scalar count as separators,
+  not content, unless it keeps them (`|+`/`>+`), since there they are part of
+  its value. Plain `=`
   creates missing parent mappings at any depth (#85), laid out by the same
   rules, in every document of a stream; it can't create an array element or
   a key inside a scalar. Refused rather than reflowed: a multi-line (`|`/`>`)
