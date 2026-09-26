@@ -1799,3 +1799,191 @@ fn yaml_creates_missing_parents_with_a_note_per_path() {
     assert_eq!(code3, 2);
     assert!(err3.contains("not auto-creating"), "{err3}");
 }
+
+// --- assignment through select(...) (#88) ---------------------------------
+
+const NPCS: &str = "items:\n  - id: a\n    n: 1  # keep me\n  - id: b\n    n: 2\n";
+
+#[test]
+fn assign_through_select_edits_the_matched_element() {
+    // The issue's exact expression: only `.items[1].n` changes.
+    let (out, err, code) = run(
+        &["-t", "yaml", r#"(.items[] | select(.id == "b") | .n) = 5"#],
+        NPCS,
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, NPCS.replace("n: 2", "n: 5"));
+    assert!(err.is_empty(), "expected no note, got: {err}");
+
+    // `|=` and `+=` over several matches; `del` removes a match.
+    let (out, _e, code) = run(
+        &["-t", "yaml", "(.items[] | select(.n >= 1) | .n) |= . * 10"],
+        NPCS,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        NPCS.replace("n: 1 ", "n: 10 ").replace("n: 2", "n: 20")
+    );
+    let (out, _e, _c) = run(
+        &["-t", "yaml", r#"(.items[] | select(.id == "a") | .n) += 1"#],
+        NPCS,
+    );
+    assert_eq!(out, NPCS.replace("n: 1 ", "n: 2 "));
+    let (out, _e, _c) = run(
+        &["-t", "yaml", r#"del(.items[] | select(.id == "a"))"#],
+        NPCS,
+    );
+    assert_eq!(out, "items:\n  - id: b\n    n: 2\n");
+
+    // Nested select, over TOML's array of tables and JSONC.
+    let toml = "[[bin]]\nname = \"a\"  # first\ntags = [\"x\", \"y\"]\n\n[[bin]]\nname = \"b\"\ntags = [\"y\"]\n";
+    let (out, _e, code) = run(
+        &[
+            "-t",
+            "toml",
+            r#"(.bin[] | select(.name == "a") | .tags[] | select(. == "y")) = "z""#,
+        ],
+        toml,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, toml.replacen("[\"x\", \"y\"]", "[\"x\", \"z\"]", 1));
+    let jsonc = "{\n  // list\n  \"xs\": [{\"k\": 1}, {\"k\": 2}], // two\n}\n";
+    let (out, _e, _c) = run(
+        &["-t", "jsonc", "(.xs[] | select(.k == 2) | .k) = 3"],
+        jsonc,
+    );
+    assert_eq!(out, jsonc.replace("\"k\": 2", "\"k\": 3"));
+
+    // KDL: repeated nodes are the array; the property changes in place.
+    let kdl = "item \"a\" n=1\nitem \"b\" n=2 // keep\n";
+    let (out, _e, code) = run(&["-t", "kdl", "(.item[] | select(.n == 2) | .n) = 7"], kdl);
+    assert_eq!(code, 0);
+    assert_eq!(out, "item \"a\" n=1\nitem \"b\" n=7 // keep\n");
+
+    // Anything else on the left is still not a path.
+    let (_o, err, code) = run(&["-t", "yaml", "(.items | length) = 1"], NPCS);
+    assert_eq!(code, 2);
+    assert!(err.contains("must be a path"), "got: {err}");
+}
+
+#[test]
+fn assign_through_select_with_no_match_is_a_noted_no_op() {
+    // Zero matches: the document is unchanged, exit 0 (like a query miss),
+    // and stderr says so, because a scripted edit must be able to see that
+    // nothing happened.
+    let expr = r#"(.items[] | select(.id == "zz") | .n) = 5"#;
+    let (out, err, code) = run(&["-t", "yaml", expr], NPCS);
+    assert_eq!(code, 0);
+    assert_eq!(out, NPCS);
+    assert!(
+        err.contains("`.items[] | select(...) | .n` matched nothing; no change"),
+        "got: {err}"
+    );
+    // The same for `|=`, `+=` and `del`.
+    for e in [
+        r#"(.items[] | select(.id == "zz") | .n) |= . + 1"#,
+        r#"(.items[] | select(.id == "zz") | .n) += 1"#,
+        r#"del(.items[] | select(.id == "zz"))"#,
+    ] {
+        let (out, err, code) = run(&["-t", "yaml", e], NPCS);
+        assert_eq!((code, out.as_str()), (0, NPCS), "{e}");
+        assert!(err.contains("matched nothing"), "{e}: {err}");
+    }
+
+    // Over a stream, a match in any document is a match: no note.
+    let stream = "xs: [{id: a}]\n---\nxs: [{id: b}]\n";
+    let (out, err, code) = run(
+        &["-t", "yaml", r#"(.xs[] | select(.id == "b") | .id) = "c""#],
+        stream,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "xs: [{id: a}]\n---\nxs: [{id: c}]\n");
+    assert!(err.is_empty(), "got: {err}");
+
+    // The flat formats get it too: every key whose value matches.
+    let (out, _e, code) = run(
+        &["-t", "env", r#"(.[] | select(. == "x")) = "z""#],
+        "A=x\nB=y\nC=x\n",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "A=z\nB=y\nC=z\n");
+
+    // --exit-status turns it into exit 1, so a script can assert the edit
+    // landed; -i leaves the file as it was.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/select-nomatch.yaml");
+    std::fs::write(&path, NPCS).unwrap();
+    let (_o, err, code) = run(&["-i", "--exit-status", expr, &path], "");
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), NPCS);
+    // ... and a match still exits 0 under --exit-status.
+    let (_o, _e, code) = run(
+        &[
+            "-i",
+            "--exit-status",
+            r#"(.items[] | select(.id == "b") | .n) = 5"#,
+            &path,
+        ],
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        NPCS.replace("n: 2", "n: 5")
+    );
+}
+
+#[test]
+fn assign_through_select_notes_created_keys_and_honours_no_vivify() {
+    // A key the matched element lacks is created, and announced like any
+    // other create.
+    let expr = r#"(.items[] | select(.id == "a") | .note) = "hi""#;
+    let (out, err, code) = run(&["-t", "yaml", expr], NPCS);
+    assert_eq!(code, 0);
+    assert!(out.contains("    n: 1  # keep me\n    note: hi\n"), "{out}");
+    assert!(err.contains("created `.items[0].note`"), "got: {err}");
+    // --no-vivify refuses it, before anything is written.
+    let (out, err, code) = run(&["-t", "yaml", "--no-vivify", expr], NPCS);
+    assert_eq!(code, 2);
+    assert!(out.is_empty());
+    assert!(err.contains("not auto-creating"), "got: {err}");
+    // An existing key through select is fine under --no-vivify.
+    let (_o, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            "--no-vivify",
+            r#"(.items[] | select(.id == "a") | .n) = 3"#,
+        ],
+        NPCS,
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn path_builtin_shows_what_an_edit_will_touch() {
+    let (out, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            "-T",
+            "json",
+            r#"[path(.items[] | select(.id == "b") | .n)]"#,
+        ],
+        NPCS,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "[\n  [\n    \"items\",\n    1,\n    \"n\"\n  ]\n]\n");
+    // No match is an empty stream: a miss.
+    let (out, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            "--exit-status",
+            r#"path(.items[] | select(.id == "zz"))"#,
+        ],
+        NPCS,
+    );
+    assert_eq!((out.as_str(), code), ("", 1));
+}

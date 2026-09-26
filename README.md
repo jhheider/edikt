@@ -42,6 +42,10 @@ edikt -i '.services.web.replicas = 3' compose.yaml
 # compute, not just place
 edikt -i '.version |= . + "-dev"' package.jsonc
 
+# edit a list entry by its key, not its index - select() in the path, as in jq
+edikt -i '(.npcs[] | select(.id == "tobin") | .status) = "found"' npcs.yaml
+edikt -i 'del(.plugins[] | select(.enabled == false))' plugins.jsonc
+
 # stream-first, like sed (stdin has no extension, so name the format)
 cat settings.jsonc | edikt -t jsonc 'del(.telemetry) | .theme = "dark"'
 
@@ -187,8 +191,19 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   # or supply a default in the expression with //
   edikt '.maybe.key // "fallback"' f.yaml
   ```
+- **An edit through `select(...)` that matches nothing is a no-op**, like a
+  query miss, but it says so on stderr (`... matched nothing; no change`),
+  and `--exit-status` makes it exit `1`, so a script can assert the edit
+  landed. `path(...)` shows what an edit will touch before you make it:
+
+  ```bash
+  edikt 'path(.bin[] | select(.name == "cli"))' Cargo.toml  # the path array ["bin", 1]
+  edikt -i --exit-status '(.bin[] | select(.name == "cli") | .path) = "src/main.rs"' \
+    Cargo.toml || echo "no [[bin]] named cli"
+  ```
 - **The expression language is deliberately capped in v1.** jq's navigation,
-  mutation, arithmetic, `//` defaults, and a curated builtin registry
+  mutation (including assignment through `select(...)`), arithmetic, `//`
+  defaults, and a curated builtin registry
   (including regex `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are
   in; variables (`as $x`), `if/then`, `reduce`, and user-defined functions are
   not (yet).

@@ -41,7 +41,10 @@ Reads stdin and writes stdout by default, like sed.",
   edikt '.title' post.md                                Markdown frontmatter
   edikt '.kind' k8s.yaml                                 one result per YAML doc
   edikt -i '^d1.spec.replicas = 3' k8s.yaml             edit the 2nd doc of a stream
-  edikt -i 'select(.kind==\"Service\") | .x = 1' k8s.yaml   target docs by content"
+  edikt -i 'select(.kind==\"Service\") | .x = 1' k8s.yaml   target docs by content
+  edikt -i '(.npcs[] | select(.id==\"b\") | .hp) = 5' npcs.yaml
+                                                        edit a list item by key
+  edikt 'path(.npcs[] | select(.id==\"b\"))' npcs.yaml     which paths would change"
 )]
 struct Args {
     /// Expression, then files. With -e/-f present, ALL operands are files.
@@ -120,8 +123,9 @@ struct Args {
     /// already exist fails (exit 2) instead of creating it. Plain `=` is
     /// jq-style and creates by default (with a stderr note); this opts out so
     /// a mistyped or wrongly-scoped path can't silently write a new key.
-    /// The `select(`/`^dN` scoping gates  are unaffected; `|=`/`+=` already
-    /// error on a missing path and `del` stays a no-op.
+    /// A `select(...)` inside an assignment path is checked like any path;
+    /// a document-level `select(`/`^dN` scope is unaffected. `|=`/`+=`
+    /// already error on a missing path and `del` stays a no-op.
     #[arg(long)]
     no_vivify: bool,
 
@@ -130,7 +134,10 @@ struct Args {
     raw: bool,
 
     /// Exit 1 when a query produces no results (jq-style, for presence
-    /// tests). The default is sed-shaped: a miss is a silent no-op, exit 0.
+    /// tests), or when an edit through a path expression
+    /// (`(.xs[] | select(...) | .n) = v`) matched nothing. The default is
+    /// sed-shaped: a miss is a no-op, exit 0 (an unmatched edit still notes
+    /// it on stderr).
     #[arg(long = "exit-status")]
     exit_status: bool,
 
@@ -515,6 +522,9 @@ fn run(args: Args) -> Result<ExitCode> {
     // (nothing is written on a query miss).
     let mut file_out: Vec<String> = Vec::new();
     let mut emitted = false;
+    // An edit through a path expression that matched nothing (#88), for
+    // `--exit-status`.
+    let mut unmatched_edit = false;
     for (path, src) in &inputs {
         let loc = display_path(path.as_deref());
         let in_fmt = detect_format(path.as_deref(), forced_type.as_deref())?;
@@ -544,15 +554,20 @@ fn run(args: Args) -> Result<ExitCode> {
                 // scoped path writes a key you didn't intend, and an edit
                 // shouldn't do that silently. `--no-vivify` turns any would-be
                 // creation into a hard error *before* anything is written.
-                let creating = if scoped_edit(mexpr) {
-                    Vec::<String>::new()
+                //
+                // An edit through a path expression (`(.xs[] | select(...) |
+                // .n) = v`) that matches nothing is a no-op, and says so:
+                // silently doing nothing hides a wrong key as well as
+                // silently creating one would.
+                let (creating, unmatched) = if scoped_edit(mexpr) {
+                    (Vec::<String>::new(), Vec::<String>::new())
                 } else {
                     let values = doc.to_values();
                     let mut notes = Vec::new();
                     for (di, path) in would_create(mexpr, &values) {
                         notes.push(create_note(di, values.len(), &path));
                     }
-                    notes
+                    (notes, unmatched_targets(mexpr, &values))
                 };
                 if args.no_vivify
                     && let Some(note) = creating.first()
@@ -563,6 +578,10 @@ fn run(args: Args) -> Result<ExitCode> {
                 for note in &creating {
                     eprintln!("edikt: note: {loc}: {note}");
                 }
+                for lhs in &unmatched {
+                    eprintln!("edikt: note: {loc}: `{lhs}` matched nothing; no change");
+                }
+                unmatched_edit |= !unmatched.is_empty();
                 if args.strict && !warnings.is_empty() {
                     bail!("{loc}: {} (--strict)", warnings.join("; "));
                 }
@@ -752,6 +771,11 @@ fn run(args: Args) -> Result<ExitCode> {
             .with_context(|| format!("writing {}", p.display()))?;
     }
 
+    if args.exit_status && unmatched_edit {
+        // --exit-status: an edit whose path expression matched nothing is
+        // the mutation analogue of a query miss.
+        return Ok(ExitCode::from(1));
+    }
     Ok(if emitted || !args.exit_status {
         // A query miss is a silent no-op by default, like sed with no
         // matching address.
@@ -938,7 +962,7 @@ fn scoped_edit(expr: &edikt_core::Expr) -> bool {
 fn would_create(expr: &edikt_core::Expr, values: &[Value]) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (di, v) in values.iter().enumerate() {
-        for steps in assign_paths(expr) {
+        for steps in assign_paths(expr, v) {
             if !path_resolves(&steps, v) {
                 out.push((di, edikt_core::render_path(&steps)));
             }
@@ -948,20 +972,63 @@ fn would_create(expr: &edikt_core::Expr, values: &[Value]) -> Vec<(usize, String
 }
 
 /// The LHS paths of every plain `=` in the expression (not `|=`/`+=`/`del`,
-/// which already handle a miss on their own). Iterate fan-outs (`[]`) are
-/// skipped: creating *through* `[]` errors anyway.
-fn assign_paths(expr: &edikt_core::Expr) -> Vec<Vec<edikt_core::Step>> {
+/// which already handle a miss on their own), against document value `v`.
+/// Iterate fan-outs (`[]`) are skipped: creating *through* `[]` errors
+/// anyway. A path-expression LHS (`(.xs[] | select(...) | .new) = 1`)
+/// contributes each concrete path it resolves to, so a key it creates is
+/// announced like any other.
+fn assign_paths(expr: &edikt_core::Expr, v: &Value) -> Vec<Vec<edikt_core::Step>> {
     match expr {
         edikt_core::Expr::Assign(lhs, _) => match lhs.as_path() {
             Some(p) if !p.is_empty() && !p.contains(&edikt_core::Step::Iterate) => vec![p.to_vec()],
-            _ => Vec::new(),
+            Some(_) => Vec::new(),
+            // An error is the apply's to raise.
+            None => edikt_core::eval_paths(lhs, v).unwrap_or_default(),
         },
         edikt_core::Expr::Pipe(a, b) => {
-            let mut out = assign_paths(a);
-            out.extend(assign_paths(b));
+            let mut out = assign_paths(a, v);
+            out.extend(assign_paths(b, v));
             out
         }
         _ => Vec::new(),
+    }
+}
+
+/// The path-expression targets (of `=`, `|=`, `+=`, `del`) that resolve to
+/// no path in any document, rendered for the "matched nothing" note.
+fn unmatched_targets(expr: &edikt_core::Expr, values: &[Value]) -> Vec<String> {
+    match expr {
+        edikt_core::Expr::Pipe(a, b) => {
+            let mut out = unmatched_targets(a, values);
+            out.extend(unmatched_targets(b, values));
+            out
+        }
+        _ => match edikt_core::path_expr_target(expr) {
+            Some(lhs)
+                if values.iter().all(|v| {
+                    edikt_core::eval_paths(lhs, v).is_ok_and(|paths| paths.is_empty())
+                }) =>
+            {
+                vec![render_target(lhs)]
+            }
+            _ => Vec::new(),
+        },
+    }
+}
+
+/// A path expression, rendered for a note: paths as written, `select`'s
+/// predicate elided (`.items[] | select(...) | .n`).
+fn render_target(expr: &edikt_core::Expr) -> String {
+    match expr {
+        edikt_core::Expr::Path(steps) => edikt_core::render_path(steps),
+        edikt_core::Expr::Pipe(a, b) => format!("{} | {}", render_target(a), render_target(b)),
+        edikt_core::Expr::Comma(items) => items
+            .iter()
+            .map(render_target)
+            .collect::<Vec<_>>()
+            .join(", "),
+        edikt_core::Expr::Call(name, _) => format!("{name}(...)"),
+        _ => "...".to_string(),
     }
 }
 
