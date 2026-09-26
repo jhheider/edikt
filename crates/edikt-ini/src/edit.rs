@@ -148,7 +148,9 @@ fn find_entry(section: &SyntaxNode, key: &str) -> Option<SyntaxNode> {
 /// the named section's content (creating the section at EOF if absent), or the
 /// preamble. The caller reparses the result.
 pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &str) -> String {
-    let new_line = format!("{key} = {value}\n");
+    // New lines end the way most of the file's lines do.
+    let eol = edikt_core::text::dominant(src);
+    let new_line = format!("{key} = {value}{eol}");
     let lines: Vec<&str> = src.split_inclusive('\n').collect();
 
     let (start, end) = match section {
@@ -169,12 +171,12 @@ pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &
                 // Section absent: append `[section]\nkey = value\n` at EOF.
                 let mut out = String::from(src);
                 if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
+                    out.push_str(eol);
                 }
                 if !out.is_empty() {
-                    out.push('\n');
+                    out.push_str(eol);
                 }
-                out.push_str(&format!("[{sec}]\n{new_line}"));
+                out.push_str(&format!("[{sec}]{eol}{new_line}"));
                 return out;
             }
         },
@@ -193,7 +195,7 @@ pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &
         out.push_str(line);
     }
     if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(eol);
     }
     out.push_str(&new_line);
     for line in &lines[content_end..] {

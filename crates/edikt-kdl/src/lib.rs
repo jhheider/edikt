@@ -64,8 +64,22 @@ impl Kdl {
         if path.is_empty() {
             return Err(EditError::new("cannot set the whole document"));
         }
+        let before = self.doc.to_string();
         let unit = edit::indent_unit(&self.doc);
-        edit::set_in_doc(&mut self.doc, path, value, 0, &unit)
+        edit::set_in_doc(&mut self.doc, path, value, 0, &unit)?;
+        // kdl-rs autoformats a new node with `\n` line breaks; in a CRLF file,
+        // respell the inserted text's breaks to match. The original bytes on
+        // either side of the one insertion are left as they were.
+        let eol = edikt_core::text::dominant(&before);
+        if eol != "\n" {
+            let after = self.doc.to_string();
+            let fixed = edikt_core::text::eol_inserted(&before, &after, eol);
+            if fixed != after {
+                self.doc = KdlDocument::parse(&fixed)
+                    .map_err(|e| EditError::new(format!("internal: re-reading an edit: {e}")))?;
+            }
+        }
+        Ok(())
     }
 
     /// The value at `path`, or `None`.
@@ -843,6 +857,37 @@ mod tests {
         // The comment goes; the space that preceded it (the node's own decor,
         // not the terminator) stays.
         assert_eq!(cedit("n 1 // pinned\n", "del(.n.#.inline)"), "n 1 \n");
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        // kdl-rs autoformats new nodes with `\n`; they used to land as-is.
+        let src = "a 1\r\no {\r\n  x 1\r\n}\r\n";
+        assert_eq!(
+            edit_src(src, ".b = 2"),
+            "a 1\r\no {\r\n  x 1\r\n}\r\nb 2\r\n"
+        );
+        let out = edit_src(src, ".o.y = {\"p\": 1}");
+        assert!(!out.replace("\r\n", "").contains('\n'), "bare LF: {out:?}");
+        assert!(out.starts_with("a 1\r\no {\r\n  x 1\r\n"), "{out:?}");
+        assert_eq!(
+            cedit(src, ".o.# = \"n\""),
+            "a 1\r\n// n\r\no {\r\n  x 1\r\n}\r\n"
+        );
+    }
+
+    #[test]
+    fn a_node_added_after_an_unterminated_node_starts_its_own_line() {
+        // `a 1` + `.b = 2` used to write `a 1b 2`, and inside a one-line
+        // block `x 1 }` + `.a.y = 2` made `y` and `2` more arguments of `x`.
+        let out = edit_src("a 1", ".b = 2");
+        assert_eq!(out, "a 1\nb 2", "no final newline before, none after");
+        assert_eq!(q(&out, ".a"), vec![Value::Int(1)]);
+        assert_eq!(q(&out, ".b"), vec![Value::Int(2)]);
+
+        let out = edit_src("a { x 1 }\n", ".a.y = 2");
+        assert_eq!(q(&out, ".a.x"), vec![Value::Int(1)]);
+        assert_eq!(q(&out, ".a.y"), vec![Value::Int(2)]);
     }
 
     #[test]

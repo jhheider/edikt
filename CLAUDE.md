@@ -22,8 +22,9 @@ Every format has a **lossless CST**: parse, then serialize, is byte-identical.
 An edit touches only the nodes it targets; every untouched region is re-emitted
 byte-for-byte. This is the entire reason the tool exists.
 
-- No edit may alter indentation, comma style, quote style, comment placement,
-  or trailing newline of any region it did not target.
+- No edit may alter indentation, line endings, comma style, quote style,
+  comment placement, or trailing newline of any region it did not target. A
+  new line takes the file's dominant ending; a leading BOM is restored.
 - `parse ∘ serialize == identity` is a hard invariant, tested per format.
 - We do **not** format, lint, or normalize. taplo and prettier own that.
 

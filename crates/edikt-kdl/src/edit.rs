@@ -538,12 +538,36 @@ fn one_node(name: &str, value: &Value) -> Result<KdlNode, EditError> {
 /// on a line of its own, or a `;`-separated slot on a single-line block
 /// (`{ a 1; b 2 }`). Internals autoformat below it, indented by the file's
 /// own `unit`. With no sibling to copy, the level is `unit` x `depth`.
+///
+/// The last line of a file with no final newline has no terminator, so a node
+/// appended after it would read as more of its arguments (`a 1` became
+/// `a 1b 2`). That line gets the break it lacked, and the last new node takes
+/// over lacking one.
 fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: usize, unit: &str) {
+    if nodes.is_empty() {
+        return;
+    }
+    let count = nodes.len();
     let config = FormatConfig::builder()
         .indent_level(depth)
         .indent(unit)
         .build();
     let level_indent = own_line_indents(doc).next().map(str::to_owned);
+    let unterminated_eof = depth == 0
+        && at > 0
+        && at == doc.nodes().len()
+        && doc.nodes()[at - 1]
+            .format()
+            .is_none_or(|f| !f.terminator.contains(['\n', ';']));
+    if unterminated_eof {
+        let prev = &mut doc.nodes_mut()[at - 1];
+        if prev.format().is_none() {
+            prev.set_format(kdl::KdlNodeFormat::default());
+        }
+        if let Some(f) = prev.format_mut() {
+            f.terminator = "\n".to_string();
+        }
+    }
     for (i, mut node) in nodes.into_iter().enumerate() {
         node.autoformat_config(&config);
         close_blocks(&mut node, unit, depth);
@@ -579,6 +603,9 @@ fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: us
             }
         }
         doc.nodes_mut().insert(pos, node);
+    }
+    if unterminated_eof && let Some(f) = doc.nodes_mut()[at + count - 1].format_mut() {
+        f.terminator = String::new();
     }
 }
 

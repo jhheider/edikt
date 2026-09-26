@@ -75,12 +75,20 @@ pub struct Jsonc {
     /// `null`). Untouched regions round-trip regardless - this only decides the
     /// spelling of new nodes.
     json5: bool,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it is not JSON) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Jsonc {
     /// Access the underlying syntax tree.
     pub fn syntax(&self) -> &SyntaxNode {
         &self.root
+    }
+
+    /// The file's dominant line ending, for lines an insertion adds.
+    fn eol(&self) -> &'static str {
+        edikt_core::text::dominant(&edikt_syntax::to_source(&self.root))
     }
 
     /// Set the value at `path` to `value`, format-preserving. If the path
@@ -108,7 +116,8 @@ impl Jsonc {
                 .find(|n| n.kind() == Sk::Object)
                 .ok_or_else(|| EditError::new("cannot create a key inside a non-object"))?;
             let member_value = edit::nest_value(&remaining[1..], value)?;
-            let text = edit::insert_into_object(&object, key, &member_value, self.json5)?;
+            let text =
+                edit::insert_into_object(&object, key, &member_value, self.json5, self.eol())?;
             object.replace_with(edit::object_green_from_text(&text))
         };
         self.root = SyntaxNode::new_root(new_root);
@@ -130,7 +139,7 @@ impl Jsonc {
             .children()
             .find(|n| n.kind() == Sk::Array)
             .ok_or_else(|| EditError::new("`+= [..]` target is not an array"))?;
-        let new_text = edit::insert_into_array(&array, items, self.json5)?;
+        let new_text = edit::insert_into_array(&array, items, self.json5, self.eol())?;
         let new_root = array.replace_with(edit::array_green_from_text(&new_text));
         self.root = SyntaxNode::new_root(new_root);
         Ok(())
@@ -210,6 +219,7 @@ impl Jsonc {
 /// comments after the top-level value. Editing a structurally broken document
 /// would splice into a tree that does not mean what the bytes say.
 pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let (green, errors) = parser::build_checked(src);
     let root = SyntaxNode::new_root(green);
 
@@ -231,7 +241,7 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
     }
 
     let json5 = detect_json5(&root);
-    Ok(Jsonc { root, json5 })
+    Ok(Jsonc { root, json5, bom })
 }
 
 /// Does the source use a spelling that strict JSON forbids? That is the JSON5
@@ -289,7 +299,7 @@ fn top_value_present(root: &SyntaxNode) -> bool {
 
 impl Document for Jsonc {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -585,6 +595,43 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        // New members and elements used to arrive with bare `\n`s.
+        let src = "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n";
+        assert_eq!(
+            edit_src(src, ".b = 2"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"b\": 2\r\n}\r\n"
+        );
+        assert_eq!(
+            edit_src(src, ".o.p = [1]"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1\r\n  ],\r\n  \"o\": {\r\n    \"p\": [\r\n      1\r\n    ]\r\n  }\r\n}\r\n"
+        );
+        assert_eq!(
+            edit_src(src, ".l += [2]"),
+            "{\r\n  \"a\": 1,\r\n  \"l\": [\r\n    1,\r\n    2\r\n  ]\r\n}\r\n"
+        );
+        assert_eq!(
+            cedit(src, ".l.# = \"n\""),
+            "{\r\n  \"a\": 1,\r\n  // n\r\n  \"l\": [\r\n    1\r\n  ]\r\n}\r\n"
+        );
+        // An LF file is untouched by any of this.
+        assert_eq!(
+            edit_src("{\n  \"a\": 1\n}\n", ".b = 2"),
+            "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+        );
+    }
+
+    #[test]
+    fn a_bom_is_not_json_and_survives_edits() {
+        // The lexer used to reject the BOM as an unexpected character.
+        let src = "\u{FEFF}{\"a\": 1}\n";
+        let doc = parse(src).unwrap();
+        assert_eq!(doc.to_source(), src);
+        assert_eq!(doc.to_value(), json!({"a": 1}));
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}{\"a\": 2}\n");
     }
 
     #[test]

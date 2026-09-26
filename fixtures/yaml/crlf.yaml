@@ -1,0 +1,10 @@
+# CRLF throughout
+name: crlf
+server:
+  host: localhost
+  ports:
+    - 8080
+    - 8081
+notes: |
+  line one
+  line two

@@ -27,9 +27,11 @@
 //!   host-language file (Python for uv, shell for scriptbox), optionally after a
 //!   shebang. The block is TOML once each line's `# ` prefix is stripped; the
 //!   prefix is re-applied on serialize. v1 requires the canonical `# `/bare-`#`
-//!   prefix and the block at the head of the file. Line endings inside a
-//!   commented block follow the inner TOML engine, which normalizes to `\n`;
-//!   the fenced containers preserve CRLF.
+//!   prefix and the block at the head of the file.
+//!
+//! Line endings (CRLF, LF, or mixed) and a leading UTF-8 byte-order mark
+//! round-trip in every container; lines an edit adds take the block's
+//! dominant ending, as in the inner engines.
 
 // The edikt-core types that appear in this crate's own public API, re-exported
 // so a dependent can call these methods without also taking a direct
@@ -100,6 +102,10 @@ pub struct Frontmatter {
 /// Parse `src` as a frontmatter-bearing document: split off the block, parse it
 /// with the matching engine, keep the rest opaque.
 pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
+    // A byte-order mark sits before the fence: detect past it, and keep it as
+    // the first byte of the opaque prefix so it round-trips.
+    let (bom, src) = edikt_core::text::split_bom(src);
+    let with_bom = |prefix: &str| edikt_core::text::with_bom(bom, prefix.to_string());
     // A commented host-language block (`# /// name` ... `# ///`) is detected
     // first, so a shebang-led script isn't mistaken for a fence-less document.
     // Its inner is always TOML, once de-commented.
@@ -107,7 +113,7 @@ pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
         let inner =
             Box::new(edikt_toml::parse(&c.block).map_err(|e| ParseError::new(e.to_string()))?);
         return Ok(Frontmatter {
-            prefix: c.prefix.to_string(),
+            prefix: with_bom(c.prefix),
             inner,
             suffix: c.suffix.to_string(),
             inner_fmt: Lang::Toml.name(),
@@ -133,7 +139,7 @@ pub fn parse(src: &str) -> Result<Frontmatter, ParseError> {
         }
     };
     Ok(Frontmatter {
-        prefix: prefix.to_string(),
+        prefix: with_bom(prefix),
         inner,
         suffix: suffix.to_string(),
         inner_fmt: lang.name(),
@@ -495,6 +501,34 @@ mod tests {
     }
 
     #[test]
+    fn crlf_toml_blocks_keep_crlf_on_edit() {
+        // The inner TOML engine used to write the whole block back LF.
+        let md = "+++\r\na = 1\r\n+++\r\nbody\r\n";
+        assert_eq!(src_of(md, ".a = 2"), "+++\r\na = 2\r\n+++\r\nbody\r\n");
+        assert_eq!(
+            src_of(md, ".b = 2"),
+            "+++\r\na = 1\r\nb = 2\r\n+++\r\nbody\r\n"
+        );
+        let py = "# /// script\r\n# a = 1\r\n# ///\r\nprint(1)\r\n";
+        assert_eq!(
+            src_of(py, ".t.k = 2"),
+            "# /// script\r\n# a = 1\r\n#\r\n# [t]\r\n# k = 2\r\n# ///\r\nprint(1)\r\n"
+        );
+    }
+
+    #[test]
+    fn a_bom_before_the_fence_survives() {
+        // The BOM hid the opening fence ("no frontmatter block").
+        let md = "\u{FEFF}---\ntitle: X\n---\nbody\n";
+        assert_eq!(parse(md).unwrap().to_source(), md);
+        assert_eq!(query(md, ".title"), vec![Value::Str("X".into())]);
+        assert_eq!(
+            src_of(md, r#".title = "Z""#),
+            "\u{FEFF}---\ntitle: Z\n---\nbody\n"
+        );
+    }
+
+    #[test]
     fn no_frontmatter_errors() {
         let e = parse("# Just a heading\n\nno block here\n").err().unwrap();
         assert!(e.to_string().contains("no frontmatter block"), "{e}");
@@ -546,7 +580,8 @@ mod tests {
         let mut count = 0;
         for entry in std::fs::read_dir(&dir).expect("fixtures/markdown directory") {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            // `.py` holds PEP 723 blocks, which the CLI reads with `-t markdown`.
+            if !matches!(path.extension().and_then(|e| e.to_str()), Some("md" | "py")) {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();

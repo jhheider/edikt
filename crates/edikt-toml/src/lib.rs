@@ -46,6 +46,12 @@ pub struct ParseError {
 pub struct Toml {
     doc: DocumentMut,
     had_comments: bool,
+    /// The parsed source (after any BOM). `toml_edit` writes every line
+    /// ending as `\n` and always ends the file with one, so serializing
+    /// restores the original's endings and missing final newline from it.
+    original: String,
+    /// The source opened with a UTF-8 byte-order mark (restored on output).
+    bom: bool,
 }
 
 impl Toml {
@@ -271,11 +277,17 @@ fn walk_tables<'a>(root: &'a mut dyn TableLike, steps: &[Step]) -> Option<&'a mu
 
 /// Parse TOML source into a [`Toml`] document.
 pub fn parse(src: &str) -> Result<Toml, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let doc = src
         .parse::<DocumentMut>()
         .map_err(|e| ParseError { msg: e.to_string() })?;
     let had_comments = has_comment_decor(&doc);
-    Ok(Toml { doc, had_comments })
+    Ok(Toml {
+        doc,
+        had_comments,
+        original: src.to_string(),
+        bom,
+    })
 }
 
 /// Whether any decor in the document holds a comment. `toml_edit` keeps
@@ -325,7 +337,16 @@ fn has_comment_decor(doc: &DocumentMut) -> bool {
 
 impl Document for Toml {
     fn to_source(&self) -> String {
-        self.doc.to_string()
+        let mut out = self.doc.to_string();
+        // `toml_edit` terminates the last line unconditionally; a file that
+        // didn't end with a newline keeps not ending with one.
+        if !self.original.is_empty() && !self.original.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        // `toml_edit` also drops every `\r` it writes (decor and string reprs
+        // alike), so put the original's line endings back, line by line.
+        let out = edikt_core::text::restore_endings(&self.original, &out);
+        edikt_core::text::with_bom(self.bom, out)
     }
     fn to_value(&self) -> Value {
         project::table_to_value(self.doc.as_table())
@@ -676,6 +697,52 @@ mod tests {
             count += 1;
         }
         assert!(count >= 2, "expected toml fixtures, found {count}");
+    }
+
+    #[test]
+    fn crlf_survives_edits_and_new_lines_match_it() {
+        // toml_edit writes every `\r` away; any edit used to turn the whole
+        // file LF.
+        let src = "a = 1\r\nb = [\r\n  1,\r\n]\r\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, ".a = 2"), "a = 2\r\nb = [\r\n  1,\r\n]\r\n");
+        assert_eq!(
+            edit_src(src, ".t.x = 1"),
+            "a = 1\r\nb = [\r\n  1,\r\n]\r\n\r\n[t]\r\nx = 1\r\n"
+        );
+        assert_eq!(
+            cedit(src, ".b.# = \"note\""),
+            "a = 1\r\n# note\r\nb = [\r\n  1,\r\n]\r\n"
+        );
+    }
+
+    #[test]
+    fn mixed_endings_survive_even_inside_multi_line_strings() {
+        let src = "s = \"\"\"\r\nx\ny\r\n\"\"\"\nk = 1\r\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(
+            edit_src(src, ".k = 2"),
+            "s = \"\"\"\r\nx\ny\r\n\"\"\"\nk = 2\r\n"
+        );
+        // The string's value is untouched by the ending bookkeeping.
+        assert_eq!(q(src, ".s"), vec![Value::Str("x\ny\n".into())]);
+    }
+
+    #[test]
+    fn a_missing_final_newline_stays_missing() {
+        assert_eq!(edit_src("a = 1", ".a = 2"), "a = 2");
+        assert_eq!(edit_src("a = 1", ".b = 2"), "a = 1\nb = 2");
+        assert_eq!(edit_src("a = 1\r\n# end", ".a = 2"), "a = 2\r\n# end");
+        // An empty file gains a terminated line, as before.
+        assert_eq!(edit_src("", ".a = 1"), "a = 1\n");
+    }
+
+    #[test]
+    fn a_bom_survives_edits() {
+        let src = "\u{FEFF}a = 1\n";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(q(src, ".a"), vec![Value::Int(1)]);
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}a = 2\n");
     }
 
     #[test]

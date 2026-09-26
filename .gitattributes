@@ -1,3 +1,5 @@
 # Fixtures are byte-exact round-trip inputs: never let git rewrite their line
 # endings, or the lossless-round-trip tests would diverge across platforms.
-fixtures/** text eol=lf
+# `-text` turns off end-of-line conversion both ways, so the CRLF and
+# mixed-ending fixtures stay CRLF and mixed (`eol=lf` would normalize them).
+fixtures/** -text

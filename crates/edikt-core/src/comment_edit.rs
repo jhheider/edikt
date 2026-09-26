@@ -178,6 +178,12 @@ fn eval_text(rhs: &Expr, input: &Value) -> Result<String, EditError> {
 /// (else below, for foot). Contiguous existing comment lines on that side
 /// (detected by `is_comment_line`) are replaced; `wrapped == None` deletes.
 /// Untouched lines are preserved verbatim, so the moat holds.
+///
+/// The block's lines end the way the target line does (the file's dominant
+/// ending if the target is an unterminated last line). A foot block below an
+/// unterminated last line first terminates that line, so the comment never
+/// lands on the value's own line; the block's last line then stays
+/// unterminated, keeping the file's missing final newline.
 pub fn place_line_comment(
     source: &str,
     target_line: usize,
@@ -191,11 +197,15 @@ pub fn place_line_comment(
     if target_line >= lines.len() {
         return source.to_string();
     }
+    let eol = match crate::text::ending_of(&lines[target_line]) {
+        "" => crate::text::dominant(source),
+        e => e,
+    };
     let bare = |s: &str| s.trim_end_matches(['\n', '\r']).to_string();
-    let block: Vec<String> = wrapped
+    let mut block: Vec<String> = wrapped
         .into_iter()
         .flatten()
-        .map(|l| format!("{indent}{delim}{l}\n"))
+        .map(|l| format!("{indent}{delim}{l}{eol}"))
         .collect();
 
     if is_head {
@@ -208,6 +218,23 @@ pub fn place_line_comment(
         let mut end = target_line + 1;
         while end < lines.len() && is_comment_line(&bare(&lines[end])) {
             end += 1;
+        }
+        // The replaced run reached an unterminated EOF: the file had no final
+        // newline, so the new last line keeps not having one.
+        if end == lines.len() && crate::text::ending_of(&lines[end - 1]).is_empty() {
+            let target = &mut lines[target_line];
+            match block.last_mut() {
+                Some(last) => {
+                    last.truncate(last.len() - eol.len());
+                    if !target.ends_with('\n') {
+                        target.push_str(eol);
+                    }
+                }
+                None => {
+                    let kept = target.trim_end_matches(['\n', '\r']).len();
+                    target.truncate(kept);
+                }
+            }
         }
         lines.splice(target_line + 1..end, block);
     }
@@ -227,5 +254,48 @@ fn current_comment(doc: &dyn Document, prefix: &[Step], kind: CommentKind) -> Op
     match commented.resolve_comment(&path).into_iter().next() {
         Some(Value::Str(s)) => Some(s),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place_line_comment;
+
+    fn place(src: &str, line: usize, head: bool, text: Option<&str>) -> String {
+        let block: Option<Vec<String>> = text.map(|t| vec![format!(" {t}")]);
+        let is_comment = |l: &str| l.trim_start().starts_with('#');
+        place_line_comment(src, line, head, "", "#", &is_comment, block.as_deref())
+    }
+
+    #[test]
+    fn block_takes_the_target_lines_ending() {
+        assert_eq!(
+            place("A=1\r\nB=2\r\n", 1, true, Some("x")),
+            "A=1\r\n# x\r\nB=2\r\n"
+        );
+        assert_eq!(
+            place("A=1\r\nB=2\r\n", 0, false, Some("x")),
+            "A=1\r\n# x\r\nB=2\r\n"
+        );
+        assert_eq!(
+            place("A=1\nB=2\r\n", 0, true, Some("x")),
+            "# x\nA=1\nB=2\r\n"
+        );
+    }
+
+    #[test]
+    fn foot_below_an_unterminated_last_line_starts_its_own_line() {
+        // Used to glue the comment onto the value: `A=1# x`.
+        assert_eq!(place("A=1", 0, false, Some("x")), "A=1\n# x");
+        assert_eq!(
+            place("A=1\r\nB=2", 1, false, Some("x")),
+            "A=1\r\nB=2\r\n# x"
+        );
+        // Replacing an unterminated trailing foot keeps the missing newline.
+        assert_eq!(place("A=1\n# old", 0, false, Some("x")), "A=1\n# x");
+        // Deleting it too.
+        assert_eq!(place("A=1\n# old", 0, false, None), "A=1");
+        // A terminated file stays terminated.
+        assert_eq!(place("A=1\n", 0, false, Some("x")), "A=1\n# x\n");
     }
 }

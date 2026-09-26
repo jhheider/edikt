@@ -48,6 +48,9 @@ pub struct Env {
     /// existing ones; a `key=value` line inside an envspaced file would not
     /// parse back as the same document.
     dialect: Dialect,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it would read as part of the first key) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Env {
@@ -75,9 +78,11 @@ impl Env {
             }
             None => {
                 edit::check_key(key, self.dialect)?;
-                let mut src = self.to_source();
+                let mut src = edikt_syntax::to_source(&self.root);
+                // The new line ends the way most of the file's lines do.
+                let eol = edikt_core::text::dominant(&src);
                 if !src.is_empty() && !src.ends_with('\n') {
-                    src.push('\n');
+                    src.push_str(eol);
                 }
                 // An appended key must be spelled the way the rest of the
                 // file is, or the document stops parsing as itself.
@@ -85,7 +90,7 @@ impl Env {
                     parser::Dialect::Punctuated => "=",
                     parser::Dialect::Spaced => " ",
                 };
-                src.push_str(&format!("{key}{sep}{text}\n"));
+                src.push_str(&format!("{key}{sep}{text}{eol}"));
                 self.root = SyntaxNode::new_root(parser::build(&src, self.dialect));
             }
         }
@@ -126,6 +131,7 @@ pub fn parse_spaced(src: &str) -> Result<Env, ParseError> {
 
 /// Parse with an explicit [`Dialect`].
 pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src, dialect));
     let malformed = root
         .descendants_with_tokens()
@@ -136,12 +142,12 @@ pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
             msg: "invalid: a line is neither a comment nor key=value".to_string(),
         });
     }
-    Ok(Env { root, dialect })
+    Ok(Env { root, dialect, bom })
 }
 
 impl Document for Env {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -271,6 +277,38 @@ mod tests {
         }
         set_round_trip("A 1\n", S, "Subsystem", "sftp /usr/lib/sftp-server").unwrap();
         set_round_trip("A 1\n", S, "K=V", "x").unwrap();
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        let src = "A=1\r\nB=2\r\n";
+        assert_eq!(edit_src(src, r#".C = "3""#), "A=1\r\nB=2\r\nC=3\r\n");
+        assert_eq!(
+            edit_src("A=1\r\nB=2", r#".C = "3""#),
+            "A=1\r\nB=2\r\nC=3\r\n"
+        );
+        assert_eq!(cedit(src, ".B.# = \"n\""), "A=1\r\n# n\r\nB=2\r\n");
+        let mut sp = parse_spaced("Port 22\r\n").unwrap();
+        sp.set("X", &Value::Str("y".into())).unwrap();
+        assert_eq!(sp.to_source(), "Port 22\r\nX y\r\n");
+    }
+
+    #[test]
+    fn a_foot_comment_below_an_unterminated_last_line_gets_its_own_line() {
+        // Used to glue on: `A=1# x`, which reads back as the value `1# x`.
+        let out = cedit("A=1", ".A.#.foot = \"x\"");
+        assert_eq!(out, "A=1\n# x");
+        assert_eq!(q(&out, ".A"), vec![Value::Str("1".into())]);
+    }
+
+    #[test]
+    fn a_bom_is_not_part_of_the_first_key() {
+        // `.A` used to miss, and `.A = 2` appended a duplicate `A=2`.
+        let src = "\u{FEFF}A=1\nB=2\n";
+        assert_eq!(q(src, ".A"), vec![Value::Str("1".into())]);
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, r#".A = "2""#), "\u{FEFF}A=2\nB=2\n");
+        assert_eq!(edit_src(src, r#".C = "3""#), "\u{FEFF}A=1\nB=2\nC=3\n");
     }
 
     #[test]

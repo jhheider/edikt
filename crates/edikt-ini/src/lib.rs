@@ -43,6 +43,9 @@ pub struct ParseError {
 /// A parsed INI document, backed by a lossless CST.
 pub struct Ini {
     root: SyntaxNode,
+    /// The source opened with a UTF-8 byte-order mark: kept out of the tree
+    /// (it would read as part of the first key) and restored by `to_source`.
+    bom: bool,
 }
 
 impl Ini {
@@ -79,7 +82,8 @@ impl Ini {
         if let Some(s) = section {
             edit::check_section(s)?;
         }
-        let new_src = edit::insert_entry(&self.to_source(), section, key, &text);
+        let src = edikt_syntax::to_source(&self.root);
+        let new_src = edit::insert_entry(&src, section, key, &text);
         self.root = SyntaxNode::new_root(parser::build(&new_src));
         Ok(())
     }
@@ -103,6 +107,7 @@ impl Ini {
 
 /// Parse INI source into an [`Ini`] document.
 pub fn parse(src: &str) -> Result<Ini, ParseError> {
+    let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src));
     let malformed = root
         .descendants_with_tokens()
@@ -113,12 +118,12 @@ pub fn parse(src: &str) -> Result<Ini, ParseError> {
             msg: "invalid INI: a line is neither a comment, section, nor key=value".to_string(),
         });
     }
-    Ok(Ini { root })
+    Ok(Ini { root, bom })
 }
 
 impl Document for Ini {
     fn to_source(&self) -> String {
-        edikt_syntax::to_source(&self.root)
+        edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
@@ -256,6 +261,44 @@ mod tests {
         ] {
             set_round_trip(src, path, value).unwrap();
         }
+    }
+
+    #[test]
+    fn inserted_lines_take_the_files_crlf() {
+        let src = "[s]\r\na = 1\r\n";
+        assert_eq!(edit_src(src, ".s.b = 2"), "[s]\r\na = 1\r\nb = 2\r\n");
+        assert_eq!(
+            edit_src(src, ".t.b = 2"),
+            "[s]\r\na = 1\r\n\r\n[t]\r\nb = 2\r\n"
+        );
+        assert_eq!(cedit(src, ".s.a.# = \"n\""), "[s]\r\n; n\r\na = 1\r\n");
+        // Terminating an unterminated last line uses the file's ending too.
+        assert_eq!(
+            edit_src("[s]\r\na = 1", ".s.b = 2"),
+            "[s]\r\na = 1\r\nb = 2\r\n"
+        );
+    }
+
+    #[test]
+    fn a_foot_comment_below_an_unterminated_last_line_gets_its_own_line() {
+        // Used to glue on: `k = v; x`, which reads back as the value `v; x`.
+        let out = cedit("k = v", ".k.#.foot = \"x\"");
+        assert_eq!(out, "k = v\n; x");
+        assert_eq!(q(&out, ".k"), vec![Value::Str("v".into())]);
+    }
+
+    #[test]
+    fn a_bom_is_not_part_of_the_first_key() {
+        // `.a` used to miss (the key read as "\u{FEFF}a"), and `.a = 2`
+        // appended a duplicate.
+        let src = "\u{FEFF}a = 1\n[s]\nk = v\n";
+        assert_eq!(q(src, ".a"), vec![Value::Str("1".into())]);
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit_src(src, ".a = 2"), "\u{FEFF}a = 2\n[s]\nk = v\n");
+        assert_eq!(
+            edit_src(src, ".b = 3"),
+            "\u{FEFF}a = 1\nb = 3\n[s]\nk = v\n"
+        );
     }
 
     #[test]
