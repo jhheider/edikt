@@ -820,10 +820,38 @@ fn yaml_block_scalar_set_in_place() {
         "npcs:\n  - id: a\n    fate: >-\n      old\n      text\n\n  - id: b\n",
     );
     assert_eq!(code, 0, "{err}");
+    // The old value wrapped at 10 columns, too narrow to fold at (#108).
     assert_eq!(
         out,
         "npcs:\n  - id: a\n    fate: >-\n      new text\n\n  - id: b\n"
     );
+}
+
+#[test]
+fn yaml_folded_scalar_refolds_to_the_file_width() {
+    // jhheider/edikt#108: a `>-` value that wrapped, in a file whose prose
+    // is filled to 98 columns, takes new text folded at that width (not at
+    // its own few columns), at spaces only, and reads back as assigned.
+    let prose = "npcs:\n  - id: a\n    fate: >-\n      \
+        Decided at his table, the evening after the warehouse burns. He offers the PCs three things:\n      \
+        join him, leave the city, or die.\n\n";
+    let src = format!("{prose}  - id: b\n    fate: >-\n      old\n      text\n");
+    let new = "Told the truth about the smuggler, with proof, he can stand down: he goes to \
+        ground, or hands himself to the captain. Every branch ends his story in Book 1.";
+    let expr = format!(".npcs[1].fate = \"{new}\"");
+    let (out, err, code) = run(&["-t", "yaml", &expr], &src);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        format!(
+            "{prose}  - id: b\n    fate: >-\n      \
+            Told the truth about the smuggler, with proof, he can stand down: he goes to ground, or\n      \
+            hands himself to the captain. Every branch ends his story in Book 1.\n"
+        )
+    );
+    let (back, err, code) = run(&["-t", "yaml", "-r", ".npcs[1].fate"], &out);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(back, format!("{new}\n"));
 }
 
 #[test]

@@ -19,6 +19,7 @@ mod comments;
 mod compose;
 mod edit;
 mod emit;
+mod fold;
 mod layout;
 mod scalar;
 mod splice;

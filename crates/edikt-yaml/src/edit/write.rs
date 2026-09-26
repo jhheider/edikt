@@ -169,16 +169,31 @@ impl Yaml {
                 }
             };
             let offset = Indent::infer(&before, &self.docs).unit;
-            if let Some((range, text)) = block.respell(&before, s, parent, offset, newline(&before))
-                && self.commit(range, &text).is_ok()
-            {
-                if self
-                    .value_at(idx, path)
-                    .is_some_and(|v| Value::identical(&v, value))
+            // Folded to the file's prose width first (#108), if it has
+            // one, then one line per line of text, should the folded
+            // spelling not read back.
+            let width = block
+                .indent(parent, offset)
+                .and_then(|indent| crate::fold::width(&before, &self.docs, block, indent));
+            let widths = [width, None];
+            let tries = if width.is_some() {
+                &widths[..]
+            } else {
+                &widths[1..]
+            };
+            for &width in tries {
+                if let Some((range, text)) =
+                    block.respell(&before, s, parent, offset, newline(&before), width)
+                    && self.commit(range, &text).is_ok()
                 {
-                    return Ok(());
+                    if self
+                        .value_at(idx, path)
+                        .is_some_and(|v| Value::identical(&v, value))
+                    {
+                        return Ok(());
+                    }
+                    self.restore(before.clone())?;
                 }
-                self.restore(before.clone())?;
             }
         }
         let range = block.header.start..trim_newline(&before, block.content.end);

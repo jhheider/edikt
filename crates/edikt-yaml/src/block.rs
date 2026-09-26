@@ -12,6 +12,7 @@
 use std::ops::Range;
 
 use crate::compose::{Node, NodeKind};
+use crate::fold::fold_line;
 use crate::scalar::{needs_escape, split_properties};
 
 /// How a block scalar treats its trailing line breaks.
@@ -149,6 +150,10 @@ impl BlockScalar {
     /// from. The chomping indicator changes only when it can't read back
     /// `value`'s trailing line breaks.
     ///
+    /// With a `width` (chars, indent included; see [`crate::fold`]), each
+    /// line of text in a `>` scalar is folded to it (#108); without one, or
+    /// in a `|` scalar, each line of text is written as one line.
+    ///
     /// `None` when `value` can't be spelled as a block scalar here: it holds
     /// a character with no literal spelling, or needs an indentation
     /// indicator that `parent` can't supply. The caller checks the splice
@@ -160,6 +165,7 @@ impl BlockScalar {
         parent: Option<usize>,
         offset: usize,
         nl: &str,
+        width: Option<usize>,
     ) -> Option<(Range<usize>, String)> {
         if value
             .chars()
@@ -178,11 +184,7 @@ impl BlockScalar {
         } else {
             Chomp::Keep
         };
-        let indent = match (self.digit, self.first_indent) {
-            (Some(d), _) => parent? + d,
-            (None, Some(i)) => i,
-            (None, None) => parent? + offset,
-        };
+        let indent = self.indent(parent, offset)?;
         let header = &source[self.header.clone()];
         let style = &header[..1];
         let spaced = |line: &str| line.starts_with([' ', '\t']);
@@ -210,6 +212,8 @@ impl BlockScalar {
         let mut lines: Vec<&str> = Vec::new();
         if !body.is_empty() {
             let folded = style == ">";
+            // The room a folded line of text has past the indent.
+            let room = width.filter(|_| folded).map(|w| w.saturating_sub(indent));
             let mut prev: Option<&str> = None;
             let mut empties = 0;
             for segment in body.split('\n') {
@@ -225,7 +229,12 @@ impl BlockScalar {
                     _ => empties,
                 };
                 lines.extend(std::iter::repeat_n("", blank));
-                lines.push(segment);
+                match room {
+                    // A more-indented line keeps its line breaks, so it
+                    // is written as it is.
+                    Some(room) if !spaced(segment) => lines.extend(fold_line(segment, room)),
+                    _ => lines.push(segment),
+                }
                 prev = Some(segment);
                 empties = 0;
             }
@@ -257,6 +266,44 @@ impl BlockScalar {
             Chomp::Strip | Chomp::Clip => self.content.end,
         };
         Some((self.header.start..end, text))
+    }
+
+    /// The content indent of this block scalar, given its parent's
+    /// indentation and the file's nesting width (see [`Self::respell`]).
+    pub(crate) fn indent(&self, parent: Option<usize>, offset: usize) -> Option<usize> {
+        Some(match (self.digit, self.first_indent) {
+            (Some(d), _) => parent? + d,
+            (None, Some(i)) => i,
+            (None, None) => parent? + offset,
+        })
+    }
+
+    /// Whether this is a folded (`>`) scalar.
+    pub(crate) fn is_folded(&self, source: &str) -> bool {
+        source[self.header.clone()].starts_with('>')
+    }
+
+    /// The content indent as far as the source alone shows it: the first
+    /// text line's indent, or with an indentation indicator (which counts
+    /// from a parent this can't see) the least indented text line's.
+    pub(crate) fn seen_indent(&self, source: &str) -> Option<usize> {
+        match self.digit {
+            None => self.first_indent,
+            Some(_) => self.text_lines(source).map(leading_spaces).min(),
+        }
+    }
+
+    /// The content lines, line breaks (`\r` included) trimmed; blank lines
+    /// come through as the empty string.
+    pub(crate) fn content_lines<'a>(&self, source: &'a str) -> impl Iterator<Item = &'a str> {
+        lines_in(source, self.content.clone()).map(|l| {
+            let line = source[l].trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() { "" } else { line }
+        })
+    }
+
+    fn text_lines<'a>(&self, source: &'a str) -> impl Iterator<Item = &'a str> {
+        self.content_lines(source).filter(|l| !l.is_empty())
     }
 }
 
