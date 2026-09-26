@@ -39,6 +39,23 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
     flip `yes` to `no`. New keys and `-T yaml` quote those words too. The
     scalar's anchor always survives, and so does its tag, unless it is a core
     tag (`!!str`, `!!int`, ...) that no longer fits the value.
+    A **block scalar** (`|` literal, `>` folded) stays one (#89): the new
+    text goes on lines at the scalar's own content indent, under its own
+    header (indicators and comment kept), and the blank lines after it stay.
+    Nothing is reflowed. A line of `>` text is written as one line however
+    long, since edikt can't know the width a file wraps at, and a line break
+    in the value is written as the blank line `>` spells it with. The
+    chomping indicator stays while it fits the value's trailing line breaks
+    (none for `-`, exactly one for clip, any number for `+`) and changes to
+    the one that fits when it doesn't, so the value reads back as assigned:
+    `.notes = "x"` over `notes: |` writes `notes: |-`, and `.notes = "x\n"`
+    keeps `|`. A `+` scalar owns the blank lines after it, so a value turned
+    `+` absorbs them. Text that starts with a space or tab gets an indentation
+    indicator. The new block must read back as the value; when it can't (a
+    control character or `\r`, which a block scalar has no escape for, or an
+    indentation indicator edikt can't place), the string falls back to
+    double quotes on the header's line. A number, bool, null, or collection
+    replaces the block the way it would a plain scalar on that line.
   - **TOML**: basic `"`, literal `'`, and the multi-line `"""`/`'''` forms
     keep themselves. A literal has no escapes, so a value it can't hold
     verbatim becomes basic, staying multi-line if it was.
@@ -305,8 +322,10 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   its value. Plain `=`
   creates missing parent mappings at any depth (#85), laid out by the same
   rules, in every document of a stream; it can't create an array element or
-  a key inside a scalar. Refused rather than reflowed: a multi-line (`|`/`>`)
-  scalar in place, and growing a multi-line flow collection.
+  a key inside a scalar. A block (`|`/`>`) scalar is set in place, keeping
+  its style (see the moat). Refused rather than reflowed: replacing a quoted
+  or plain scalar that wraps over several lines, and growing a multi-line
+  flow collection.
 - **TOML** - lossless via `toml_edit`'s decor-preserving DOM. An array grows
   in its own layout (#91): `.a += [x]`, `.a[len] = x`, and any assignment
   whose new array keeps the old elements as a prefix append rather than

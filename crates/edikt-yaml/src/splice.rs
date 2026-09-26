@@ -663,10 +663,9 @@ mod corpus {
                         match doc.set(idx, path, shape, Strictness::Strict) {
                             Ok(()) => {}
                             // An element reached only through an alias or a
-                            // merge has no bytes of its own; a block scalar
-                            // is refused. Anything else is a failure.
+                            // merge has no bytes of its own. Anything else
+                            // is a failure, block scalars included (#89).
                             Err(e) if e.to_string().contains("path not found") => continue,
-                            Err(e) if e.to_string().contains("multi-line") => continue,
                             Err(e) => panic!("{path:?} = {shape:?}: {e}\n{src}"),
                         }
                         let got = parse(&doc.to_source()).unwrap();

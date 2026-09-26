@@ -131,8 +131,8 @@ fn emit_string(s: &str) -> String {
 }
 
 /// The spelling of an existing scalar token, as far as re-spelling a new value
-/// in it goes. Block (`|`/`>`) scalars never reach here (a multi-line target is
-/// refused), and an alias (`*a`) has no quote style, so both read as plain.
+/// in it goes. Block (`|`/`>`) scalars never reach here ([`crate::block`]
+/// respells them), and an alias (`*a`) has no quote style, so both read as plain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QuoteStyle {
     Plain,
@@ -317,7 +317,7 @@ fn single_quote(s: &str) -> String {
 /// non-printable (per the YAML character set) or a line break, including the
 /// Unicode ones YAML 1.1 honours (NEL, LS, PS). Tab is printable but is escaped
 /// too, for readability and so it can't be mistaken for separation space.
-fn needs_escape(c: char) -> bool {
+pub(crate) fn needs_escape(c: char) -> bool {
     !matches!(c,
         '\u{20}'..='\u{7E}'
         | '\u{A0}'..='\u{2027}'

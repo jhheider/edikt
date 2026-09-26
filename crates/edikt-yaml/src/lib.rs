@@ -785,20 +785,172 @@ mod tests {
         assert_eq!(out, "items:\n  - |\n    literal\n  - plain\n  - x\n");
     }
 
-    #[test]
-    fn block_scalar_set_refused_clearly_del_works() {
-        let src = "x: |\n  line1\n  line2\nother: 1\n";
-        // Setting a block scalar in place is refused with a clear message (not an
-        // opaque re-parse error), and the document is left untouched.
+    /// Set the string at `path` in `src` and return the new source, checking
+    /// that it reads back as that string.
+    fn set_block(src: &str, path: &str, value: &str) -> String {
+        let expr = parse_expr(path).unwrap();
+        let steps = expr.as_path().unwrap();
+        let value = Value::Str(value.into());
         let mut doc = parse(src).unwrap();
-        let err = doc
-            .apply(&parse_expr(".x = \"new\"").unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("multi-line"), "got: {err}");
-        assert_eq!(doc.to_source(), src);
+        doc.set(0, steps, &value, edit::Strictness::Strict).unwrap();
+        let out = doc.to_source();
+        assert_eq!(q(&out, path), vec![value], "{out:?}");
+        out
+    }
+
+    #[test]
+    fn block_scalar_set_keeps_its_style() {
+        // jhheider/edikt#89: a `>-` prose field, and the blank line after it,
+        // stay as they were around the new text.
+        assert_eq!(
+            set_block(
+                "npcs:\n  - id: a\n    fate: >-\n      old text\n      wraps\n\n  - id: b\n",
+                ".npcs[0].fate",
+                "new text"
+            ),
+            "npcs:\n  - id: a\n    fate: >-\n      new text\n\n  - id: b\n"
+        );
+        // Literal lines go in as lines, at the scalar's own indent.
+        assert_eq!(
+            set_block("x: |\n    old\nother: 1\n", ".x", "a\nb\n"),
+            "x: |\n    a\n    b\nother: 1\n"
+        );
+        // Folded text isn't reflowed: a long line stays one line, and a line
+        // break is written as the blank line `>` spells it with.
+        let long = "word ".repeat(30);
+        let long = long.trim_end();
+        assert_eq!(
+            set_block("x: >\n  old\ny: 1\n", ".x", &format!("{long}\n")),
+            format!("x: >\n  {long}\ny: 1\n")
+        );
+        assert_eq!(
+            set_block("x: >\n  old\ny: 1\n", ".x", "a\nb\n\nc\n"),
+            "x: >\n  a\n\n  b\n\n\n  c\ny: 1\n"
+        );
+        // Next to a more-indented line, `>` keeps line breaks as they are.
+        assert_eq!(
+            set_block("x: >\n  old\ny: 1\n", ".x", "a\n  code\nb\n"),
+            "x: >\n  a\n    code\n  b\ny: 1\n"
+        );
+        // Header comment, anchor, and tag stay; aliases follow the new text.
+        assert_eq!(
+            set_block("x: &a !!str |  # c\n  old\ny: *a\n", ".x", "q\n"),
+            "x: &a !!str |  # c\n  q\ny: *a\n"
+        );
+        // `|=` over the current text keeps the chomping it already fits.
+        assert_eq!(
+            edit("x: |\n  t\ny: 1\n", r#".x |= . + "more\n""#),
+            "x: |\n  t\n  more\ny: 1\n"
+        );
+        // CRLF files get CRLF lines.
+        assert_eq!(
+            set_block("x: >-\r\n  old\r\n\r\ny: 1\r\n", ".x", "a\nb"),
+            "x: >-\r\n  a\r\n\r\n  b\r\n\r\ny: 1\r\n"
+        );
+    }
+
+    #[test]
+    fn block_scalar_chomping_follows_the_value() {
+        // Chomping stays while it fits the value's trailing line breaks, and
+        // changes to the one that does when it doesn't.
+        assert_eq!(
+            set_block("x: |\n  old\ny: 1\n", ".x", "new"),
+            "x: |-\n  new\ny: 1\n"
+        );
+        assert_eq!(
+            set_block("x: |-  # c\n  old\n\ny: 1\n", ".x", "new\n"),
+            "x: |  # c\n  new\n\ny: 1\n"
+        );
+        assert_eq!(
+            set_block("x: >2-\n  old\ny: 1\n", ".x", "new\n"),
+            "x: >2\n  new\ny: 1\n"
+        );
+        // A value turned `+` owns the blank lines after it.
+        assert_eq!(
+            set_block("x: |-\n  old\n\n\ny: 1\n", ".x", "a\n\n"),
+            "x: |+\n  a\n\ny: 1\n"
+        );
+        // A `+` value turned `-` leaves the blank lines after it, now
+        // separators.
+        assert_eq!(
+            set_block("x: |+\n  old\n\n\ny: 1\n", ".x", "a"),
+            "x: |-\n  a\n\n\ny: 1\n"
+        );
+        // Empty values, and only line breaks.
+        assert_eq!(set_block("x: |\n  old\ny: 1\n", ".x", ""), "x: |\ny: 1\n");
+        assert_eq!(
+            set_block("x: |\n  old\ny: 1\n", ".x", "\n\n"),
+            "x: |+\n\n\ny: 1\n"
+        );
+        // A block with no content yet takes the file's indent.
+        assert_eq!(
+            set_block("x: |\n\ny: 1\n", ".x", "t\n"),
+            "x: |\n  t\n\ny: 1\n"
+        );
+    }
+
+    #[test]
+    fn block_scalar_indentation_indicator() {
+        // Text starting with a space or tab needs an indentation indicator;
+        // one the header already has is kept.
+        assert_eq!(
+            set_block("x: |\n  old\ny: 1\n", ".x", " lead\n"),
+            "x: |2\n   lead\ny: 1\n"
+        );
+        assert_eq!(
+            set_block("x: |\n  old\ny: 1\n", ".x", "\ttab\n"),
+            "x: |2\n  \ttab\ny: 1\n"
+        );
+        assert_eq!(
+            set_block("x: |4\n      old\ny: 1\n", ".x", " lead\n"),
+            "x: |4\n     lead\ny: 1\n"
+        );
+        // Counted from the dash of a sequence item, anchor or not.
+        assert_eq!(
+            set_block("- &a |\n  old\n- *a\n", ".[0]", " lead\n"),
+            "- &a |2\n   lead\n- *a\n"
+        );
+        assert_eq!(
+            set_block("- - x\n  - |\n    old\n", ".[0][1]", " lead"),
+            "- - x\n  - |2-\n     lead\n"
+        );
+        assert_eq!(set_block("--- |\n  old\n", ".", " q\n"), "--- |2\n   q\n");
+    }
+
+    #[test]
+    fn block_scalar_replaced_by_another_type() {
+        // A string no block scalar can hold goes double-quoted.
+        assert_eq!(
+            set_block("x: |\n  old\n\ny: 1\n", ".x", "bad\u{1}"),
+            "x: \"bad\\x01\"\n\ny: 1\n"
+        );
+        // So does one whose indentation indicator can't be worked out (no
+        // dash on the item's line), or whose block doesn't read back as
+        // written (an explicit `?` key indents from its `?`, not the `:`).
+        assert_eq!(
+            set_block("-\n  |\n    old\n", ".[0]", " lead\n"),
+            "-\n  \" lead\\n\"\n"
+        );
+        assert_eq!(
+            set_block("? a\n: |2\n    old\n", ".a", "new\n"),
+            "? a\n: \"new\\n\"\n"
+        );
+        // A non-string replaces the block on its key line: the anchor and
+        // comment stay, a core tag that no longer fits goes.
+        assert_eq!(
+            edit("x: &a !!str |  # c\n  old\n\ny: 1\n", ".x = 5"),
+            "x: &a 5  # c\n\ny: 1\n"
+        );
+        assert_eq!(
+            edit("x: |  # c\n  old\n\ny: 1\n", ".x = [1, 2]"),
+            "x:  # c\n  - 1\n  - 2\n\ny: 1\n"
+        );
+        assert_eq!(edit("- >\n  old\n- b\n", ".[0] = null"), "- null\n- b\n");
         // Deleting a block scalar entry works.
-        assert_eq!(edit(src, "del(.x)"), "other: 1\n");
+        assert_eq!(
+            edit("x: |\n  line1\n  line2\nother: 1\n", "del(.x)"),
+            "other: 1\n"
+        );
     }
 
     #[test]
@@ -1031,8 +1183,8 @@ mod tests {
         assert!(e("a: 1\n", ".a.# = \"x\"").contains("path not found"));
         // Growing a multi-line flow collection would reflow it: refused.
         assert!(e("xs: [1,\n  2]\n", ".xs += [3]").contains("multi-line flow"));
-        // A multi-line scalar can't become a collection in place either.
-        assert!(e("k: |\n  text\n", ".k = [1]").contains("multi-line"));
+        // So is replacing a quoted scalar wrapped over several lines.
+        assert!(e("k: \"a\n  b\"\n", ".k = [1]").contains("multi-line quoted"));
     }
 
     #[test]

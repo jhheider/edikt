@@ -212,7 +212,11 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   `name: "old"` to `"new"` writes `name: "new"`, and a single-quoted, literal
   or raw string stays that way. The style changes only when the new value
   can't be written in it (a line break into single quotes, or a plain YAML
-  scalar that would read as another type, like `yes` or `1.10`).
+  scalar that would read as another type, like `yes` or `1.10`). A YAML block
+  scalar (`|` or `>`) stays a block at its own indent, with its text written
+  as-is on lines (never reflowed); only its chomping sign changes, and only
+  when the value's trailing newlines need it (`"x"` into `notes: |` writes
+  `notes: |-`).
 - **A new list or map follows the file.** Assigning a sequence or mapping in
   YAML writes it the way the file already writes one: block lines at the
   file's own indent width (and its `key:\n- item` habit, if it has one), or
