@@ -3,7 +3,7 @@
 //! One `eval_call` dispatches over the whole registry - `length`/`keys`/`has`,
 //! the string family (`split`/`join`, affix predicates, case mapping), the
 //! regex family (`test`/`match`/`capture`/`sub`/`gsub`), `tonumber`/`tostring`,
-//! and `select`. Grows deliberately, never speculatively: a new builtin lands
+//! `select`, and `path(f)` (resolution lives in `crate::paths`). Grows deliberately, never speculatively: a new builtin lands
 //! here as one `match` arm plus (if non-trivial) a helper in this file.
 //!
 //! `del` is handled at the value level right here too (it is a function in the
@@ -171,10 +171,33 @@ pub(crate) fn eval_call(name: &str, args: &[Expr], input: &Value) -> Result<Vec<
         }
         "del" => {
             arity(1)?;
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EvalError::new("del(...) takes a path"))?;
-            Ok(vec![delete_path(input, steps)?])
+            if let Some(steps) = args[0].as_path() {
+                return Ok(vec![delete_path(input, steps)?]);
+            }
+            // A path expression (`del(.xs[] | select(...))`): delete each
+            // match, back to front so earlier indices stay valid.
+            let mut out = input.clone();
+            if let Some(dels) =
+                crate::paths::lower_mutation(&Expr::Call(name.into(), args.to_vec()), || {
+                    input.clone()
+                })?
+            {
+                for d in dels {
+                    if let Expr::Call(_, a) = &d
+                        && let Some(steps) = a[0].as_path()
+                    {
+                        out = delete_path(&out, steps)?;
+                    }
+                }
+            }
+            Ok(vec![out])
+        }
+        "path" => {
+            arity(1)?;
+            Ok(crate::paths::eval_paths(&args[0], input)?
+                .iter()
+                .map(|p| crate::paths::path_to_value(p))
+                .collect())
         }
         _ => Err(EvalError::new(format!("unknown function `{name}`"))),
     }

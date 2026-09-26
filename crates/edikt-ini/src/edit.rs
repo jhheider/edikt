@@ -13,6 +13,16 @@ use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
 use rowan::{GreenNode, GreenNodeBuilder};
 
 pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
+    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
+    // resolves to concrete paths first; each is then an ordinary edit.
+    if let Some(each) = edikt_core::lower_mutation(expr, || doc.to_value())
+        .map_err(|e| EditError::new(e.to_string()))?
+    {
+        for e in &each {
+            apply(doc, e)?;
+        }
+        return Ok(());
+    }
     match expr {
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;

@@ -89,6 +89,17 @@ pub(crate) enum Strictness {
 
 /// Apply one edit program to document `idx` in isolation.
 fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Result<(), EditError> {
+    // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
+    // resolves against this document to concrete paths; each is then an
+    // ordinary edit.
+    if let Some(each) = edikt_core::lower_mutation(expr, || doc.doc_value(idx))
+        .map_err(|e| EditError::new(e.to_string()))?
+    {
+        for e in &each {
+            apply_one(doc, idx, e, strict)?;
+        }
+        return Ok(());
+    }
     match expr {
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;

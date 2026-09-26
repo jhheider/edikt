@@ -89,8 +89,8 @@ edikt -f script.edk [-f ...] [FILE...]
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
 | `--strict` | when output format differs from input, lossy degradations (dropped comments, flattening) are errors (exit 2) instead of warnings |
-| `--exit-status` | a query with no results exits 1 (jq-style presence test) instead of the default silent exit 0 |
-| `--no-vivify` | assignments **fail** (exit 2) when the target path doesn't already exist, instead of auto-creating. Plain `=` is jq-style and creates missing keys by default (announced by a stderr `created` **note**); this opts out so a mistyped or wrongly-scoped path can't silently write a new key. An `arr[len] = v` TOML append is exempt (it's not a create); `select(`/`^dN`-scoped edits keep default behavior; `|=`/`+=` already error on a missing target and `del` stays a no-op |
+| `--exit-status` | a query with no results exits 1 (jq-style presence test) instead of the default silent exit 0; likewise an edit through a path expression (`(.xs[] \| select(...) \| .n) = v`) that matched nothing exits 1, so a script can assert the edit landed |
+| `--no-vivify` | assignments **fail** (exit 2) when the target path doesn't already exist, instead of auto-creating. Plain `=` is jq-style and creates missing keys by default (announced by a stderr `created` **note**); this opts out so a mistyped or wrongly-scoped path can't silently write a new key. An `arr[len] = v` TOML append is exempt (it's not a create); a document-level `select(`/`^dN` scope keeps default behavior, while a `select(...)` *inside* an assignment path is checked like any path (each path it resolves to that doesn't exist is a create); `|=`/`+=` already error on a missing target and `del` stays a no-op |
 
 **Output-format precedence:** explicit CLI (`-T` / a `--fmt` shorthand) ->
 `-o` FILE's extension -> script `toFormat:` directive -> the input format,
@@ -178,6 +178,47 @@ an *edit* language, not a general-purpose one.
   a scripted edit must assert that it applied. `--no-vivify` hard-fails
   instead (see the CLI contract).
 
+  **Assignment through a path expression** (#88). The left side of `=`,
+  `|=`, `+=` and the argument of `del(...)` may be a *path expression*,
+  not only a plain path: paths, `[]`, `|`, `,`, and `select(pred)`,
+  composed freely and parenthesized as in jq:
+  `(.items[] | select(.id == "b") | .n) = 5`,
+  `(.bin[] | select(.name | startswith("x")) | .path) |= ltrimstr("./")`,
+  `del(.items[] | select(.stale))`. (A step can't follow a parenthesized group
+  yet, so it is `(... | .n)`, not jq's `(...).n`.) The semantics are jq's: the left side
+  first resolves, against the document as it stands before this assignment, to
+  a **set of concrete paths** (`.items[1].n`, ...), and each is then edited on
+  its own through the ordinary single-path splice, so every untouched byte
+  survives exactly as for `.items[1].n = 5` typed by hand. `=` and `+=`
+  evaluate the right side once, against the whole document; `|=` evaluates it
+  per match against that match's value. `del` removes the matches back to
+  front, so earlier indices stay valid.
+  - **Resolution mirrors a query**: a key or index that isn't there resolves to
+    its path anyway (so `(... | select(...) | .new) = 1` creates `.new` on
+    each match, with the usual `created` note and `--no-vivify` check), but
+    `[]` over something missing resolves to nothing, and `select` keeps a
+    path when its predicate is truthy. Iterating or indexing the wrong type is
+    an error, as in a query. Anything else on the left (a literal, arithmetic,
+    another builtin) is still "left side of an assignment must be a path".
+  - **Multiple matches** are each edited, in document order.
+  - **Zero matches is a no-op**, like a query miss (exit 0), and it is
+    announced on stderr (`edikt: note: <file>: .items[] | select(...) | .n
+    matched nothing; no change`), since an edit that silently did nothing is
+    as invisible as one that silently created a key. `--exit-status` turns it
+    into exit 1, so a script can assert the edit landed. Over a
+    multi-document stream the note fires only when no document matched. Like
+    the `created` note, it isn't computed under a document-level
+    `select(...)`/`^dN` scope, and it judges each assignment against the
+    document as the program started, so a path created by an earlier
+    statement of the same program isn't seen.
+  - Comment steps (`.#`) don't compose with a path expression yet; a comment
+    edit takes a plain path.
+
+  `path(f)` is the same resolution as a query: it outputs each concrete path
+  as a jq path array (`path(.items[] | select(.id == "b"))` is `["items",1]`),
+  so a caller can see what an edit will touch. It reads paths; it is not a
+  first-class path value you can assign through (no `getpath`/`setpath`).
+
 **Value calculus** (what makes "fuller" fuller: the evaluator computes, it
 doesn't just place literals):
 - JSON literals: `"s"`, `1`, `1.5`, `true`, `false`, `null`, `[...]`, `{...}`,
@@ -195,7 +236,7 @@ doesn't just place literals):
 - a small function registry, jq-named: `length`, `keys`, `has`, `type`,
   `tostring`, `tonumber`, `ascii_upcase`, `ascii_downcase`, `ltrimstr`,
   `rtrimstr`, `startswith`, `endswith`, `split`, `join`, and the regex family
-  `test`, `match`, `capture`, `sub`, `gsub` (args `;`-separated, jq-style;
+  `test`, `match`, `capture`, `sub`, `gsub`, plus `path(f)` (see Mutation) (args `;`-separated, jq-style;
   optional trailing flags from `g i x s m`; `match` yields jq's match objects
   with codepoint offsets, and no match is an empty stream, a miss). One
   deliberate divergence: jq splices captures into `sub` replacements by string
@@ -212,7 +253,8 @@ explicitly asked for.
 
 **Explicitly still out of scope in v1:** user-defined functions, `reduce`/`foreach`,
 variable bindings (`as $x`), `if/then/else`, path expressions as first-class
-values, module imports. If the language starts wanting these, that's
+values (`path(f)` reads paths; nothing assigns through a path value), module
+imports. If the language starts wanting these, that's
 a v2 conversation, not scope creep.
 
 ---
