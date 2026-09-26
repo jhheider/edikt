@@ -1,12 +1,13 @@
 [package]
 name = "edikt-syntax"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt shared rowan substrate: lossless green-tree helpers, serialize, and structural-sharing edit utilities."
 readme = { workspace = true }
+rust-version = "1.85"
 
 [dependencies]
 rowan = { workspace = true }

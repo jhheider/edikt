@@ -1,12 +1,13 @@
 [package]
 name = "edikt-yaml"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt YAML format module: lossless in-place edit, query, and conversion (pure Rust, via libyaml-safer)."
 readme = { workspace = true }
+rust-version = "1.88"
 
 [dependencies]
 edikt-core = { workspace = true }

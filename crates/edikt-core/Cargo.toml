@@ -1,12 +1,13 @@
 [package]
 name = "edikt-core"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt core: value model, Feature capabilities, the expression language, the Document trait and the shared mutation driver."
 readme = { workspace = true }
+rust-version = "1.88"
 
 [dependencies]
 logos = { workspace = true }
