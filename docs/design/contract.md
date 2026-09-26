@@ -359,7 +359,9 @@ edikt is in exactly one mode per run, decided by the expression:
 - **structural, otherwise** (computed result, or output ≠ input) -> the value
   **emitted via the output format's emitter**. Layout is the emitter's own, but
   a **pure-path** selection carries its **comments** across (the uniform
-  comment model; see conversion below); a synthesized value has none to carry.
+  comment model; see conversion below); a synthesized value has none to carry
+  (and warns that they were dropped only when it was built from source
+  values, not for `path(...)`, `keys` and the like).
   Lossy degradations warn (`--strict` promotes); a value the output format
   **cannot represent errors, naming the formats that can** (derived from
   `Feature` sets).
@@ -563,7 +565,15 @@ N-out against one model, not N×N per pair. A kind the target's grammar can't
 hold **remaps** to one it can, with a warning (env has no inline comments ->
 own line); a target with no `Comments` feature at all (JSON) **drops** them,
 with a warning. Comments ride **pure-path** selections; a computed result has
-none to carry, so converting a commented source through one warns. `-T FMT`
+none to carry, so converting a commented source through one warns, **when the
+result could hold source values** (#110): a structural result built from
+paths or `select` (`{first: .items[0]}`, `[.xs[] | select(.on)]`, `.a + {b:
+1}`) warns, while one the language computed fresh never carried a comment
+and doesn't (`path(...)`, `keys`, `split`/`match`/`capture`, `{n: length}`,
+literals, arithmetic, comparisons). The judgment is on the expression, and
+errs toward the warning: an unknown call counts as carrying. Which source
+nodes a projected value came from isn't tracked, so the check stays
+document-level (any comment in the source). `-T FMT`
 (≠ input) parses -> `Value` (+ commented projection) -> applies the expression ->
 **emits the target format**.
 

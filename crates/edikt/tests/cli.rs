@@ -686,12 +686,16 @@ fn convert_comment_remap_warns_and_strict_errors() {
 #[test]
 fn synthesized_conversion_still_warns_on_commented_source() {
     // A computed result carries no comments; converting a commented source
-    // through one stays an honest, warned drop.
+    // through one that is built from source values stays an honest, warned
+    // drop. (`.web | keys` used to warn here too; its key names are new
+    // values that never carried a comment, so since #110 it doesn't.)
     let y = "# stack\nweb:\n  a: 1\n  b: 2\n";
-    let (out, err, code) = run(&["-t", "yaml", "-T", "json", ".web | keys"], y);
-    assert_eq!(out, "[\n  \"a\",\n  \"b\"\n]\n");
+    let (out, err, code) = run(&["-t", "yaml", "-T", "json", "{w: .web}"], y);
+    assert_eq!(out, "{\n  \"w\": {\n    \"a\": 1,\n    \"b\": 2\n  }\n}\n");
     assert!(err.contains("comments were dropped"), "got: {err}");
     assert_eq!(code, 0);
+    let (_o, err, code) = run(&["-t", "yaml", "-T", "json", ".web | keys"], y);
+    assert_eq!((err.as_str(), code), ("", 0));
 }
 
 #[test]
@@ -2242,6 +2246,41 @@ fn a_comment_edit_through_a_path_expression() {
     let (_o, err, code) = edit("(.items | length).# = \"x\"");
     assert_eq!(code, 2);
     assert!(err.contains("must be a path"), "{err}");
+}
+
+#[test]
+fn a_computed_value_that_never_had_comments_converts_without_a_warning() {
+    // #110: `path(...)`, `keys`, `length` and friends are new values, not
+    // projections of the commented source, so nothing was dropped, and
+    // `--strict` has nothing to refuse.
+    for expr in [
+        r#"path(.items[] | select(.id == "b"))"#,
+        "[path(.items[].n)]",
+        ".items[0] | keys",
+        "{count: (.items | length)}",
+    ] {
+        let (out, err, code) = run(&["-t", "yaml", "-T", "json", "--strict", expr], NPCS);
+        assert_eq!(code, 0, "{expr}: {err}");
+        assert!(err.is_empty(), "{expr}: {err}");
+        assert!(!out.is_empty(), "{expr}");
+    }
+    // A computed value built from the commented source still warns (and
+    // `--strict` still refuses it): `.items[0]` carried `# keep me`.
+    let (_o, err, code) = run(&["-t", "yaml", "-T", "json", "{first: .items[0]}"], NPCS);
+    assert_eq!(code, 0);
+    assert!(err.contains("comments were dropped"), "{err}");
+    let (_o, _e, code) = run(
+        &[
+            "-t",
+            "yaml",
+            "-T",
+            "json",
+            "--strict",
+            "[.items[] | select(.n > 0)]",
+        ],
+        NPCS,
+    );
+    assert_eq!(code, 2);
 }
 
 #[test]

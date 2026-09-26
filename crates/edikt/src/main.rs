@@ -328,10 +328,14 @@ fn run(args: Args) -> Result<ExitCode> {
         // A synthesized result carries no comments; converting a commented
         // source through one still loses them, and that stays honest. But a
         // comment query (`.foo.#`, `comments`) *surfaces* comments; its result
-        // is the comment text, nothing is dropped, so it never warns.
+        // is the comment text, nothing is dropped, so it never warns. Nor
+        // does a value the language computed fresh (`path(...)`, `keys`,
+        // `{n: length}`): it never came from the source, so it never had a
+        // comment to drop (#110).
         if target != in_fmt
             && annotated.is_none()
             && !expr.has_comment()
+            && expr.projects_input()
             && doc.has_comments()
             && results
                 .iter()

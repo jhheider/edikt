@@ -95,6 +95,56 @@ impl Expr {
         }
     }
 
+    /// Can this expression's output carry (part of) its input value? A path,
+    /// `select`, and anything built from them (`[...]`, `{...}`, `+`, `//`,
+    /// `,`) can; a value the language computes fresh cannot: a literal,
+    /// arithmetic other than `+`, a comparison, and builtins whose results
+    /// are new (`path(f)`, `keys`, `length`, `type`, the string and regex
+    /// family, `comments`). The CLI uses it to decide whether converting a
+    /// computed result from a commented source dropped any comments (#110).
+    /// An unknown call answers `true`: it errs toward the warning.
+    pub fn projects_input(&self) -> bool {
+        match self {
+            Expr::Path(steps) => !steps.iter().any(|s| matches!(s, Step::Comment(_))),
+            Expr::Literal(_) | Expr::Neg(_) => false,
+            Expr::Binary(BinOp::Add, a, b) => a.projects_input() || b.projects_input(),
+            Expr::Binary(..) => false,
+            // `a | b` carries the input only if `a` carries it into `b` and
+            // `b` passes (part of) its own input through.
+            Expr::Pipe(a, b) => a.projects_input() && b.projects_input(),
+            Expr::Alternative(a, b) => a.projects_input() || b.projects_input(),
+            Expr::Comma(items) => items.iter().any(Expr::projects_input),
+            Expr::Collect(inner) => inner.as_ref().is_some_and(|e| e.projects_input()),
+            Expr::ObjectConstruct(pairs) => pairs.iter().any(|(_, e)| e.projects_input()),
+            Expr::Call(name, _) => !matches!(
+                name.as_str(),
+                "path"
+                    | "keys"
+                    | "length"
+                    | "type"
+                    | "has"
+                    | "tostring"
+                    | "tonumber"
+                    | "ascii_upcase"
+                    | "ascii_downcase"
+                    | "ltrimstr"
+                    | "rtrimstr"
+                    | "startswith"
+                    | "endswith"
+                    | "test"
+                    | "match"
+                    | "capture"
+                    | "sub"
+                    | "gsub"
+                    | "split"
+                    | "join"
+                    | "comments"
+            ),
+            Expr::Assign(..) | Expr::UpdateAssign(..) | Expr::AddAssign(..) => true,
+            Expr::DocSelect(_, body) => body.projects_input(),
+        }
+    }
+
     /// The path steps if this expression is a plain path (the only valid left
     /// side of an assignment), else `None`.
     pub fn as_path(&self) -> Option<&[Step]> {
@@ -229,6 +279,47 @@ mod tests {
         assert!(p(".a.# == \"x\"").has_comment()); // Binary
         assert!(!p("-.a").has_comment()); // Neg, no comment
         assert!(!p(".a.b").has_comment());
+    }
+
+    #[test]
+    fn projects_input_tells_source_values_from_computed_ones() {
+        // #110: what can carry a document value (and so its comments).
+        for src in [
+            ".",
+            ".a.b",
+            ".xs[]",
+            ".xs[] | select(.on)",
+            "[.xs[] | .n]",
+            "{x: .a, n: 1}",
+            ".a + {b: 1}",
+            "{b: 1} + .a",
+            ".a // {}",
+            "1, .a",
+            "(.a).b",
+            "^d0 | .a",
+            "frobnicate", // unknown: err toward the warning
+        ] {
+            assert!(p(src).projects_input(), "{src}");
+        }
+        for src in [
+            "path(.xs[] | select(.on))",
+            "[path(.a), path(.b)]",
+            "keys",
+            ".a | keys",
+            "{n: (.xs | length), t: (.a | type)}",
+            ".a | split(\",\")",
+            ".s | capture(\"(?<x>.)\")",
+            "[.a == 1, .b > 2]",
+            ".n * 2",
+            "-.n",
+            "{a: 1}",
+            "[]",
+            "comments",
+            ".a.#",
+            "{k: 1} | .k",
+        ] {
+            assert!(!p(src).projects_input(), "{src}");
+        }
     }
 
     #[test]
