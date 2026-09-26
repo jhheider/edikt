@@ -1137,8 +1137,10 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
     if let Some(t) = forced {
         return format_from_name(t);
     }
-    // `.env` (and `.env.local`, ...) are dotfiles with no extension; match by name.
+    // `.env` (and `.env.local`, ...) are dotfiles with no extension; match by
+    // name, ignoring case like extension detection does.
     if let Some(name) = path.and_then(|p| p.file_name()).and_then(|n| n.to_str())
+        && let name = name.to_ascii_lowercase()
         && (name == ".env" || name.starts_with(".env."))
     {
         return Ok(Format::Env);

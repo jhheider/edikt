@@ -366,6 +366,19 @@ fn env_detects_dotenv_by_name() {
 }
 
 #[test]
+fn dotenv_name_detection_ignores_case_like_extensions_do() {
+    // Its own directory: on a case-insensitive filesystem `.ENV` is `.env`.
+    let dir = format!("{}/dotenv-case", env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in [".ENV", ".Env.Local"] {
+        let path = format!("{dir}/{name}");
+        std::fs::write(&path, "PORT=8080\n").unwrap();
+        let (out, err, code) = run(&[".PORT", &path], "");
+        assert_eq!((code, out.as_str()), (0, "8080\n"), "{name}: {err}");
+    }
+}
+
+#[test]
 fn env_edit_in_place() {
     let dir = env!("CARGO_TARGET_TMPDIR");
     let path = format!("{dir}/edit.env");
