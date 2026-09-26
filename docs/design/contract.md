@@ -302,6 +302,19 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   rules, in every document of a stream; it can't create an array element or
   a key inside a scalar. Refused rather than reflowed: a multi-line (`|`/`>`)
   scalar in place, and growing a multi-line flow collection.
+- **TOML** - lossless via `toml_edit`'s decor-preserving DOM. An array grows
+  in its own layout (#91): `.a += [x]`, `.a[len] = x`, and any assignment
+  whose new array keeps the old elements as a prefix append rather than
+  rewrite, so the kept elements stay byte for byte (assigning an array its own
+  value changes nothing). In a one-item-per-line array (its last item opens
+  its own line) the new item gets its own line at that item's indentation; an
+  empty array whose `]` is on its own line indents one level (four spaces)
+  past the bracket. An inline array stays inline, separated like its last
+  item. The trailing-comma style is kept (a fresh multi-line list takes one),
+  and whatever sat between the last item and `]` stays ahead of the bracket,
+  so a comment beside the old last item stays beside it. An array of tables
+  grows by a `[[key]]` block per new table. Any other array assignment
+  rewrites the array inline, keeping the value's decor.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,

@@ -62,6 +62,18 @@ impl Toml {
                 let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
                 let new_item = edit::value_to_item(value)?;
                 if let Some(existing) = current.get_mut(key) {
+                    // A new array that extends the old one appends in the
+                    // array's own layout (#91) instead of rewriting it.
+                    if let Value::Array(new) = value {
+                        let extended = match existing {
+                            Item::Value(TomlValue::Array(old)) => edit::extend_in_layout(old, new)?,
+                            Item::ArrayOfTables(old) => edit::extend_aot(old, new)?,
+                            _ => false,
+                        };
+                        if extended {
+                            return Ok(());
+                        }
+                    }
                     // Keep the existing value's decor (spacing + inline
                     // comment) and, for a string, its quote style.
                     let replacement = match (existing.as_value(), new_item) {
