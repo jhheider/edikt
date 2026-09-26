@@ -844,6 +844,26 @@ fn toml_comments_on_array_of_tables_elements() {
 }
 
 #[test]
+fn toml_comment_on_a_headerless_table_never_silently_drops() {
+    // These exited 0 and wrote nothing.
+    let src = "x = 0\na.b = 1\na.c = 2\n";
+    let (out, err, code) = run(&["-t", "toml", ".a.# = \"note\""], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("x = 0\n# note\na.b = 1\na.c = 2\n", 0),
+        "{err}"
+    );
+    for (expr, input) in [
+        (".a.#.inline = \"note\"", src),
+        (".a.# = \"note\"", "[a.b]\nk = 1\n"),
+    ] {
+        let (out, err, code) = run(&["-t", "toml", expr], input);
+        assert_eq!((out.as_str(), code), ("", 2), "{expr}");
+        assert!(err.contains("`.a`"), "{expr}: {err}");
+    }
+}
+
+#[test]
 fn kdl_document_updates_node_by_node() {
     // `. |= .` used to exit 2, "cannot set the whole document".
     let src = "// c\nserver \"a\" port=80 {\n    tls #true\n}\nname x\n";

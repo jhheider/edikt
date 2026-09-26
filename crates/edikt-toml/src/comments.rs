@@ -109,48 +109,136 @@ fn write_comment(
         )));
     }
     // An inline table is a value: its comments sit on its key and after it.
-    let is_table = item.is_table();
-
+    if item.is_table() {
+        let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
+        return table_comment(t, path, kind, &block, &inline).map(|()| Vec::new());
+    }
     match kind {
-        CommentKind::Head => {
-            if is_table {
-                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
-                let existing = decor_prefix(t.decor());
-                t.decor_mut().set_prefix(block(&existing));
-            } else {
-                let existing = current
-                    .key(key)
-                    .and_then(|k| k.leaf_decor().prefix())
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let mut kmut = current
-                    .key_mut(key)
-                    .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
-                kmut.leaf_decor_mut().set_prefix(block(&existing));
-            }
-        }
-        CommentKind::Inline => {
-            let suffix = inline();
-            if is_table {
-                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
-                t.decor_mut().set_suffix(suffix);
-            } else {
-                let v = current
-                    .get_mut(key)
-                    .unwrap()
-                    .as_value_mut()
-                    .ok_or_else(|| EditError::new(format!("`{key}` has no inline slot")))?;
-                v.decor_mut().set_suffix(suffix);
-            }
-        }
-        CommentKind::Foot => unreachable!(),
+        CommentKind::Head => set_key_head(current, key, &block),
+        _ => set_value_inline(current, key, inline()),
     }
     Ok(Vec::new())
 }
 
+/// A key's head comment: the lines above its `key = value` line (its leaf
+/// decor prefix, written before the first key of a dotted path).
+fn set_key_head(parent: &mut dyn TableLike, key: &str, block: &dyn Fn(&str) -> String) {
+    let existing = parent
+        .key(key)
+        .and_then(|k| k.leaf_decor().prefix())
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    if let Some(mut k) = parent.key_mut(key) {
+        k.leaf_decor_mut().set_prefix(block(&existing));
+    }
+}
+
+/// A value's inline comment: its decor suffix, after the value on its line.
+fn set_value_inline(parent: &mut dyn TableLike, key: &str, suffix: String) {
+    if let Some(v) = parent.get_mut(key).and_then(Item::as_value_mut) {
+        v.decor_mut().set_suffix(suffix);
+    }
+}
+
+/// A comment on the table `t` at `path`. A `[table]` keeps it on its header
+/// line. `toml_edit` prints no decor for a table without a header, so the
+/// other kinds must not write there (the comment would vanish, exit 0):
+/// a dotted table (`a.b = 1` / `a.c = 2`) is its keys' lines, so its head
+/// goes above the first of them and its inline comment on its only line (a
+/// table over several lines is refused); an implicit table (named only by
+/// headers under it, `[a.b]` with no `[a]`) has no line at all, so it is
+/// refused, naming a table that has one.
+fn table_comment(
+    t: &mut Table,
+    path: &[Step],
+    kind: CommentKind,
+    block: &dyn Fn(&str) -> String,
+    inline: &dyn Fn() -> String,
+) -> Result<(), EditError> {
+    let shown = show(path);
+    if t.is_dotted() {
+        let mut leaves = Vec::new();
+        dotted_leaves(t, &mut Vec::new(), &mut leaves);
+        let target = match (kind, leaves.as_slice()) {
+            (CommentKind::Head, [first, ..]) | (_, [first]) => first,
+            (CommentKind::Head, []) | (_, []) => {
+                return Err(EditError::new(format!(
+                    "`{shown}` is a dotted table with no `key = value` line of its own to comment"
+                )));
+            }
+            (_, [first, ..]) => {
+                return Err(EditError::new(format!(
+                    "`{shown}` is a dotted table written over {} lines, so an inline comment \
+                     has no one line to go on; comment one of them (`{shown}.{}.#.inline`)",
+                    leaves.len(),
+                    first.join(".")
+                )));
+            }
+        };
+        let (last, parents) = target.split_last().expect("a leaf has a key");
+        let mut owner: &mut Table = t;
+        for k in parents {
+            owner = owner
+                .get_mut(k)
+                .and_then(Item::as_table_mut)
+                .expect("the leaf path was just read from this table");
+        }
+        match kind {
+            CommentKind::Head => set_key_head(owner, last, block),
+            _ => set_value_inline(owner, last, inline()),
+        }
+        return Ok(());
+    }
+    if t.is_implicit() && t.get_values().is_empty() {
+        let child = t
+            .iter()
+            .find(|(_, i)| i.is_table() || i.is_array_of_tables())
+            .map(|(k, _)| format!(" (`{shown}.{k}.#`)"))
+            .unwrap_or_default();
+        return Err(EditError::new(format!(
+            "`{shown}` has no line of its own (only the headers under it name it); \
+             comment one of those instead{child}"
+        )));
+    }
+    match kind {
+        CommentKind::Head => {
+            let existing = decor_prefix(t.decor());
+            t.decor_mut().set_prefix(block(&existing));
+        }
+        _ => t.decor_mut().set_suffix(inline()),
+    }
+    Ok(())
+}
+
+/// The `key = value` lines of the dotted table `t`, as key paths relative to
+/// it, in the order `toml_edit` writes them.
+fn dotted_leaves(t: &Table, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    for (k, item) in t.iter() {
+        prefix.push(k.to_string());
+        match item {
+            Item::Value(_) => out.push(prefix.clone()),
+            Item::Table(sub) if sub.is_dotted() => dotted_leaves(sub, prefix, out),
+            _ => {}
+        }
+        prefix.pop();
+    }
+}
+
+/// `path` as the user would write it (`.a.b[1]`).
+fn show(path: &[Step]) -> String {
+    path.iter()
+        .map(|s| match s {
+            Step::Field(k) => format!(".{k}"),
+            Step::Index(n) => format!("[{n}]"),
+            _ => String::new(),
+        })
+        .collect()
+}
+
 /// The table `steps` lead to from `root`: object keys, each optionally
-/// followed by an index into an array of tables (`.items[1].id`).
+/// followed by an index into an array of tables (`.items[1].id`). An inline
+/// table is not walked into: TOML allows no comment inside one.
 fn walk<'a>(
     mut current: &'a mut dyn TableLike,
     steps: &[Step],
@@ -164,6 +252,13 @@ fn walk<'a>(
             current = element(current, k, *n)?;
             i += 2;
         } else {
+            if matches!(current.get(k), Some(Item::Value(TomlValue::InlineTable(_)))) {
+                return Err(EditError::new(format!(
+                    "`{}` is an inline table, which holds no comments (TOML keeps it \
+                     on one line); comment `{0}` itself",
+                    show(&steps[..=i])
+                )));
+            }
             current = current
                 .get_mut(k)
                 .and_then(|i| i.as_table_like_mut())
