@@ -116,6 +116,30 @@ impl Value {
         }
     }
 
+    /// Exactly the same value: same types, same float bits, keys in the same
+    /// order. Stricter than `==`, which is jq's (`1 == 1.0`, key order
+    /// ignored); an edit that judges a value unchanged keeps its bytes, and
+    /// `.a = 1.0` over `a = 1` must still write `1.0`.
+    pub fn identical(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Null, Value::Null) => true,
+            (Value::Bool(x), Value::Bool(y)) => x == y,
+            (Value::Int(x), Value::Int(y)) => x == y,
+            (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+            (Value::Str(x), Value::Str(y)) => x == y,
+            (Value::Array(x), Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(x, y)| x.identical(y))
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|((xk, xv), (yk, yv))| xk == yk && xv.identical(yv))
+            }
+            _ => false,
+        }
+    }
+
     /// Structural equality consistent with [`Value::order`].
     pub fn value_eq(&self, other: &Value) -> bool {
         self.order(other) == Ordering::Equal

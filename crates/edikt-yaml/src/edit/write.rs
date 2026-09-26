@@ -84,7 +84,7 @@ impl Yaml {
             return miss(strict, path);
         };
         let collection = matches!(value, Value::Array(_) | Value::Object(_));
-        if collection && identical(&node_to_value(node), value) {
+        if collection && Value::identical(&node_to_value(node), value) {
             return Ok(());
         }
         if let Some(plan) = elementwise(source, node, value) {
@@ -174,7 +174,7 @@ impl Yaml {
             {
                 if self
                     .value_at(idx, path)
-                    .is_some_and(|v| identical(&v, value))
+                    .is_some_and(|v| Value::identical(&v, value))
                 {
                     return Ok(());
                 }
@@ -365,30 +365,6 @@ impl Yaml {
     }
 }
 
-/// Exactly the same value: same types, same float bits, keys in the same
-/// order. Stricter than `==`, which is jq's (`1 == 1.0`, key order ignored),
-/// because an element judged unchanged keeps its bytes, and `.a = 1.0` over
-/// `a: 1` must still write `1.0`.
-pub(crate) fn identical(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Null, Value::Null) => true,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
-        (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::Array(x), Value::Array(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| identical(x, y))
-        }
-        (Value::Object(x), Value::Object(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .zip(y)
-                    .all(|((xk, xv), (yk, yv))| xk == yk && identical(xv, yv))
-        }
-        _ => false,
-    }
-}
-
 /// A replacement applied element by element: the changed elements, the items
 /// to append, and the keys to add.
 pub(crate) struct Plan {
@@ -413,7 +389,7 @@ pub(crate) fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Pl
     match (&node.kind, value) {
         (NodeKind::Sequence(items), Value::Array(new)) if new.len() >= items.len() => {
             for (i, (old, new)) in items.iter().zip(new).enumerate() {
-                if !identical(&node_to_value(old), new) {
+                if !Value::identical(&node_to_value(old), new) {
                     plan.changes.push((Step::Index(i as i64), new.clone()));
                 }
             }
@@ -441,13 +417,16 @@ pub(crate) fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Pl
             let mut pos = 0;
             for (k, v) in new {
                 if let Some(e) = phys.get(pos).filter(|e| &e.key == k) {
-                    if !identical(&node_to_value(&e.value), v) {
+                    if !Value::identical(&node_to_value(&e.value), v) {
                         plan.changes.push((Step::Field(k.clone()), v.clone()));
                     }
                     pos += 1;
                 } else if phys.iter().any(|e| &e.key == k) {
                     return None; // reordered
-                } else if merged.iter().any(|(mk, mv)| mk == k && identical(mv, v)) {
+                } else if merged
+                    .iter()
+                    .any(|(mk, mv)| mk == k && Value::identical(mv, v))
+                {
                     // Still supplied, unchanged, by the merge.
                 } else if pos < phys.len() {
                     return None; // a new key ahead of existing ones
