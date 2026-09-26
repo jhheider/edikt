@@ -196,6 +196,19 @@ fn appending_to_an_array_of_tables_adds_a_block() {
 }
 
 #[test]
+fn a_table_replaced_by_a_value_is_spelled_key_space_equals() {
+    // An array of tables that can't take the new element as a block falls
+    // back to an inline array; the key used to keep the header's bare decor
+    // and render as `bin= [...]`.
+    let src = "name = \"x\"\n\n[[bin]]\nname = \"a\"\n";
+    let got = edit(src, ".bin += [1]");
+    assert!(got.contains("\nbin = [{ name = \"a\" }, 1]"), "got:\n{got}");
+    // Likewise a `[table]` replaced by a scalar.
+    let got = edit("a = 1\n\n[pkg]\nx = 1\n", ".pkg = 5");
+    assert!(got.contains("\npkg = 5"), "got:\n{got}");
+}
+
+#[test]
 fn fan_out_appends_to_each_nested_array() {
     assert_eq!(
         edit("[a]\nx = [\n  1,\n]\ny = [2]\n", ".a[] += [9]"),

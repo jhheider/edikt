@@ -82,11 +82,21 @@ impl Toml {
                     }
                     // Keep the existing value's decor (spacing + inline
                     // comment) and, for a string, its quote style.
+                    let was_value = existing.is_value();
                     let replacement = match (existing.as_value(), new_item) {
                         (Some(old), Item::Value(new)) => Item::Value(edit::replacing(old, new)),
                         (_, new_item) => new_item,
                     };
+                    let now_value = replacement.is_value();
                     *existing = replacement;
+                    // A `[table]` / `[[array]]` header's key carries no
+                    // spacing; as a `key = value` line it takes the default.
+                    if !was_value
+                        && now_value
+                        && let Some(mut k) = current.key_mut(key)
+                    {
+                        k.leaf_decor_mut().clear();
+                    }
                 } else {
                     current.insert(key, new_item);
                 }
