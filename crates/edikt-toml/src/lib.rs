@@ -66,6 +66,25 @@ impl Toml {
         match last {
             Step::Field(key) => {
                 let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
+                if let Some(existing) = current.get(key) {
+                    // An unchanged value keeps its bytes (an identity update
+                    // must not restyle a `[table]` as an inline one).
+                    if project::item_to_value(existing).identical(value) {
+                        return Ok(());
+                    }
+                    // A `[table]` given a new object is updated key by key,
+                    // so it stays a table and its untouched keys keep their
+                    // bytes.
+                    if let (Some(table), Value::Object(entries)) = (existing.as_table(), value) {
+                        let stale: Vec<String> = table
+                            .iter()
+                            .map(|(k, _)| k.to_string())
+                            .filter(|k| entries.iter().all(|(n, _)| n != k))
+                            .collect();
+                        return self.update_table(path, entries, &stale);
+                    }
+                }
+                let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
                 let new_item = edit::value_to_item(value)?;
                 if let Some(existing) = current.get_mut(key) {
                     // A new array that extends the old one appends in the
@@ -117,6 +136,29 @@ impl Toml {
                 "TOML set targets object keys or array indices",
             )),
         }
+    }
+
+    /// Bring the standard table at `path` to `entries`: each key set in place
+    /// (recursively, so a sub-table stays a table too), and each `stale` key
+    /// deleted.
+    fn update_table(
+        &mut self,
+        path: &[Step],
+        entries: &[(String, Value)],
+        stale: &[String],
+    ) -> Result<(), EditError> {
+        let at = |k: &str| {
+            let mut p = path.to_vec();
+            p.push(Step::Field(k.to_string()));
+            p
+        };
+        for k in stale {
+            self.delete(&at(k))?;
+        }
+        for (k, v) in entries {
+            self.set(&at(k), v)?;
+        }
+        Ok(())
     }
 
     /// The value at `path`, or `None`.
