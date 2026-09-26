@@ -43,7 +43,7 @@ edikt -i '.services.web.replicas = 3' compose.yaml
 edikt -i '.version |= . + "-dev"' package.jsonc
 
 # edit a list entry by its key, not its index - select() in the path, as in jq
-edikt -i '(.npcs[] | select(.id == "tobin") | .status) = "found"' npcs.yaml
+edikt -i '(.npcs[] | select(.id == "tobin")).status = "found"' npcs.yaml
 edikt -i 'del(.plugins[] | select(.enabled == false))' plugins.jsonc
 
 # stream-first, like sed (stdin has no extension, so name the format)

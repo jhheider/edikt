@@ -30,7 +30,7 @@ Reads stdin and writes stdout by default, like sed.",
   edikt '.kind' k8s.yaml                                 one result per YAML doc
   edikt -i '^d1.spec.replicas = 3' k8s.yaml             edit the 2nd doc of a stream
   edikt -i 'select(.kind==\"Service\") | .x = 1' k8s.yaml   target docs by content
-  edikt -i '(.npcs[] | select(.id==\"b\") | .hp) = 5' npcs.yaml
+  edikt -i '(.npcs[] | select(.id==\"b\")).hp = 5' npcs.yaml
                                                         edit a list item by key
   edikt 'path(.npcs[] | select(.id==\"b\"))' npcs.yaml     which paths would change"
 )]

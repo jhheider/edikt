@@ -178,6 +178,10 @@ an *edit* language, not a general-purpose one.
 - index `.arr[0]`, `.arr[-1]`
 - iterate `.arr[]`, `.obj[]`
 - pipe `EXPR | EXPR`
+- a path step after a parenthesized expression, as in jq: `(EXPR).n`,
+  `(EXPR)[0]`, `(EXPR)[]`, `(EXPR).#` are `(EXPR) | .n` and so on, in a query
+  and as an assignment target (#105). Only a parenthesized group takes one;
+  `f(x).n` and `[...][0]` still need the `|`
 - multi-output `.a, .b, .c`
 - alternative `EXPR // EXPR` - the left's truthy outputs, else the right
   (a miss, `null`, or `false` falls back; a type *error* still propagates)
@@ -231,8 +235,9 @@ an *edit* language, not a general-purpose one.
   composed freely and parenthesized as in jq:
   `(.items[] | select(.id == "b") | .n) = 5`,
   `(.bin[] | select(.name | startswith("x")) | .path) |= ltrimstr("./")`,
-  `del(.items[] | select(.stale))`. (A step can't follow a parenthesized group
-  yet, so it is `(... | .n)`, not jq's `(...).n`.) The semantics are jq's: the left side
+  `del(.items[] | select(.stale))`. jq's postfix spelling works too:
+  `(.items[] | select(.id == "b")).n = 5` is the same target as
+  `(... | .n)` (see Navigation). The semantics are jq's: the left side
   first resolves, against the document as it stands before this assignment, to
   a **set of concrete paths** (`.items[1].n`, ...), and each is then edited on
   its own through the ordinary single-path splice, so every untouched byte

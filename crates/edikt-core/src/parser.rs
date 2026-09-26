@@ -490,7 +490,7 @@ impl Parser {
                 self.pos += 1;
                 let e = self.parse_pipe()?;
                 self.expect(Lx::RParen, "`)`")?;
-                Ok(e)
+                self.parse_postfix(e)
             }
             Some(Lx::LBrack) => {
                 self.pos += 1;
@@ -573,6 +573,34 @@ impl Parser {
 
     fn parse_path(&mut self) -> Result<Expr, ParseError> {
         self.pos += 1; // leading `.`
+        Ok(Expr::Path(self.parse_steps()?))
+    }
+
+    /// jq's postfix path on a parenthesized expression: `(f).n`, `(f)[0]`,
+    /// `(f)[]`, `(f).#` are `(f) | .n` and so on (#105). Anything else after
+    /// the `)` is left for the caller, so `(f) | g` and `(f), g` are unchanged.
+    fn parse_postfix(&mut self, e: Expr) -> Result<Expr, ParseError> {
+        let starts_step = match self.peek() {
+            Some(Lx::LBrack) => true,
+            Some(Lx::Dot) => self
+                .toks
+                .get(self.pos + 1)
+                .is_some_and(|t| matches!(t.kind, Lx::Ident | Lx::Str | Lx::LBrack | Lx::Hash)),
+            _ => false,
+        };
+        if !starts_step {
+            return Ok(e);
+        }
+        if self.peek() == Some(Lx::Dot) {
+            self.pos += 1;
+        }
+        let steps = self.parse_steps()?;
+        Ok(Expr::Pipe(Box::new(e), Box::new(Expr::Path(steps))))
+    }
+
+    /// The steps of a path, starting at the token after its leading `.` (or
+    /// at a `[`). No step at all is identity.
+    fn parse_steps(&mut self) -> Result<Vec<Step>, ParseError> {
         let mut steps = Vec::new();
         loop {
             match self.peek() {
@@ -638,7 +666,7 @@ impl Parser {
                 _ => break,
             }
         }
-        Ok(Expr::Path(steps))
+        Ok(steps)
     }
 
     fn parse_ident(&mut self) -> Result<Expr, ParseError> {
@@ -904,6 +932,37 @@ mod tests {
             }
             _ => panic!("expected pipe"),
         }
+    }
+
+    #[test]
+    fn a_step_after_parentheses_is_a_pipe_into_that_path() {
+        // jq's `(f).n` is `(f) | .n` (#105), for every step form.
+        for (postfix, piped) in [
+            (
+                r#"(.items[] | select(.id == "b")).n"#,
+                r#".items[] | select(.id == "b") | .n"#,
+            ),
+            ("(.a)[0]", ".a | .[0]"),
+            ("(.a)[]", ".a | .[]"),
+            ("(.a).b[1].c", ".a | .b[1].c"),
+            (r#"(.a)."k k""#, r#".a | ."k k""#),
+            (r#"(.a)["k"]"#, r#".a | .["k"]"#),
+            ("(.a).#", ".a | .#"),
+            ("(.a).#.inline", ".a | .#.inline"),
+            ("((.a).b).c", ".a | .b | .c"),
+        ] {
+            assert_eq!(p(postfix), p(piped), "{postfix}");
+        }
+        // Also as an assignment target, which the #88 lowering then resolves.
+        assert_eq!(
+            p(r#"(.items[] | select(.id == "b")).n = 5"#),
+            p(r#"(.items[] | select(.id == "b") | .n) = 5"#)
+        );
+        // Whatever else follows `)` parses as before.
+        assert_eq!(p("(.a) | .b"), p(".a | .b"));
+        assert_eq!(p("(.a) + 1"), p(".a + 1"));
+        assert!(parse("(.a).").is_err());
+        assert!(parse("(.a)[.i]").is_err());
     }
 
     #[test]

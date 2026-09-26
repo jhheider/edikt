@@ -398,6 +398,15 @@ mod tests {
             ns(&one("del(.items[] | select(.n != 2))")),
             vec![json!([2])]
         );
+        // jq's postfix step after the group (#105) is the same target.
+        assert_eq!(
+            ns(&one(r#"(.items[] | select(.id == "b")).n = 5"#)),
+            vec![json!([1, 5, 3])]
+        );
+        assert_eq!(
+            paths(r#"(.items[] | select(.n > 1))[]"#, &doc)[..2],
+            [".items[1].id", ".items[1].n"]
+        );
         // Zero matches: the document is unchanged.
         assert_eq!(one(r#"(.items[] | select(.id == "zz") | .n) = 5"#), doc);
         // Still not a path.

@@ -2101,6 +2101,42 @@ fn assign_through_select_notes_created_keys_and_honours_no_vivify() {
 }
 
 #[test]
+fn a_step_after_a_parenthesized_path_works_like_jq() {
+    // jq's `(f).n` (#105): the same edit as `(f | .n)`, in place.
+    let (out, err, code) = run(
+        &["-t", "yaml", r#"(.items[] | select(.id == "b")).n = 5"#],
+        NPCS,
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, NPCS.replace("n: 2", "n: 5"));
+    assert!(err.is_empty(), "{err}");
+    let (out, err, code) = run(
+        &["-t", "jsonc", "del((.items[] | select(.[0] == 1))[1])"],
+        "{\"items\": [[1, 2], [3]]} // two\n",
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "{\"items\": [[1], [3]]} // two\n");
+    // And in a query: `.n`, `[0]` and `[]` after the group.
+    let (out, _e, code) = run(
+        &["-t", "yaml", r#"(.items[] | select(.id == "b")).n"#],
+        NPCS,
+    );
+    assert_eq!((out.as_str(), code), ("2\n", 0));
+    let (out, _e, _c) = run(&["-t", "yaml", "(.items)[0].id, (.items)[].n"], NPCS);
+    assert_eq!(out, "a\n1\n2\n");
+    // A miss through the group is a noted no-op, as for `(f | .n)`.
+    let (out, err, code) = run(
+        &["-t", "yaml", r#"(.items[] | select(.id == "zz")).n = 5"#],
+        NPCS,
+    );
+    assert_eq!((out.as_str(), code), (NPCS, 0));
+    assert!(
+        err.contains("`.items[] | select(...) | .n` matched nothing"),
+        "{err}"
+    );
+}
+
+#[test]
 fn path_builtin_shows_what_an_edit_will_touch() {
     let (out, _e, code) = run(
         &[
