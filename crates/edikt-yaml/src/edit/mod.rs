@@ -14,7 +14,7 @@
 //! style (see [`crate::splice`]); a replacement that keeps a collection's
 //! shape edits only the elements that change.
 
-use edikt_core::{EditError, Expr, Mutable, Step, Value, add_values, eval, render_path};
+use edikt_core::{EditError, Expr, Mutable, Step, Value, eval, render_path};
 
 use crate::Yaml;
 
@@ -111,13 +111,8 @@ impl Mutable for InDoc<'_> {
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         self.doc.delete(self.idx, path)
     }
-    fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
-        match (current, addend) {
-            (Value::Array(_), Value::Array(items)) => {
-                self.doc.append(self.idx, path, items, self.strict)
-            }
-            _ => self.set(path, &add_values(current, addend)?),
-        }
+    fn append(&mut self, path: &[Step], items: &[Value]) -> Option<Result<(), EditError>> {
+        Some(self.doc.append(self.idx, path, items, self.strict))
     }
     fn miss(&self, path: &[Step]) -> Result<(), EditError> {
         miss(self.strict, path)

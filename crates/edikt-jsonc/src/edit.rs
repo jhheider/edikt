@@ -12,7 +12,7 @@
 
 use crate::syntax::{Sk, SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::{Jsonc, parser, project};
-use edikt_core::{Document, EditError, Expr, Mutable, Step, Value, add_values};
+use edikt_core::{Document, EditError, Expr, Mutable, Step, Value};
 use rowan::{GreenNode, NodeOrToken};
 
 /// Apply a mutation expression to `doc`, preserving format everywhere untouched.
@@ -33,13 +33,9 @@ impl Mutable for Jsonc {
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         Jsonc::delete(self, path)
     }
-    fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
-        match (current, addend) {
-            // Array + array -> format-preserving element insert.
-            (Value::Array(_), Value::Array(items)) => self.append(path, items),
-            // Everything else (number, string) -> compute and replace the node.
-            _ => self.set(path, &add_values(current, addend)?),
-        }
+    /// Array onto array is a format-preserving element insert.
+    fn append(&mut self, path: &[Step], items: &[Value]) -> Option<Result<(), EditError>> {
+        Some(Jsonc::append(self, path, items))
     }
 }
 

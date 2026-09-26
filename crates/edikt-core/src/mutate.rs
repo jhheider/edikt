@@ -50,10 +50,23 @@ pub trait Mutable {
     /// Delete the value at `path`.
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError>;
 
-    /// `path += addend`, where `current` is the value there. The default
-    /// writes `current + addend`; a format with a format-preserving append
-    /// (array onto array) overrides it and falls back to [`add_values`].
+    /// Append `items` to the array at `path` in place, format-preserving.
+    /// `None` (the default) means the format has no in-place append, and
+    /// `+=` writes the concatenated array through `set` instead.
+    fn append(&mut self, path: &[Step], items: &[Value]) -> Option<Result<(), EditError>> {
+        let _ = (path, items);
+        None
+    }
+
+    /// `path += addend`, where `current` is the value there: array onto
+    /// array goes through [`Mutable::append`] when the format has one;
+    /// anything else writes `current + addend`.
     fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
+        if let (Value::Array(_), Value::Array(items)) = (current, addend)
+            && let Some(done) = self.append(path, items)
+        {
+            return done;
+        }
         let sum = add_values(current, addend)?;
         self.set(path, &sum)
     }
