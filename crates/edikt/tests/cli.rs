@@ -392,6 +392,40 @@ fn creates_new_key_jsonc() {
 }
 
 #[test]
+fn jsonc_insert_after_trailing_comment_keeps_comma_out_of_it() {
+    // The separator comma belongs after the last element, not appended to the
+    // comment that ends its line (which would swallow it).
+    let (out, _e, code) = run(&["-t", "jsonc", ".b = 2"], "{\n  \"a\": 1 // note\n}\n");
+    assert_eq!(out, "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n");
+    assert_eq!(code, 0);
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".xs += [2]"],
+        "{\"xs\": [\n  1 // one\n]}\n",
+    );
+    assert_eq!(out, "{\"xs\": [\n  1, // one\n  2\n]}\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn jsonc_malformed_input_is_a_located_error_not_a_splice() {
+    // Unclosed input used to reach the insert path: `{"a":}` became `{"a":9`,
+    // and a multibyte character before the missing `}` panicked (exit 101).
+    for (src, expr, at) in [
+        ("{\"a\":}", ".a = 9", "line 1, column 6"),
+        ("{\"a\": 1 // café", ".b = 2", "line 1, column 16"),
+        ("{\"a\": 1 \"b\": 2}", ".b", "line 1, column 9"),
+    ] {
+        let (out, err, code) = run(&["-t", "jsonc", expr], src);
+        assert_eq!(code, 2, "{src:?}: {err}");
+        assert_eq!(out, "", "{src:?}");
+        assert!(
+            err.contains(&format!("invalid JSONC at {at}")),
+            "{src:?}: {err}"
+        );
+    }
+}
+
+#[test]
 fn creates_new_key_env() {
     // The exact case the demo hit; now works.
     let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");
