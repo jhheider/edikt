@@ -83,7 +83,8 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
   the end of the file: TOML, YAML and KDL value edits, and a foot comment
   below the last line in any format. A foot comment added below an
   unterminated last line first ends that line, so it never lands on the
-  value's own line (`A=1# x` would read back as the value `1# x`). Appending
+  value's own line (`A=1# x` would read back as the value `1# x`); a KDL
+  node added after an unterminated node likewise ends it first. Appending
   a whole `.env` or INI entry writes it as a terminated line.
 - **A UTF-8 byte-order mark is not content.** Each format's `parse` sets a
   leading BOM aside (so it is never part of the first key, and YAML and JSONC

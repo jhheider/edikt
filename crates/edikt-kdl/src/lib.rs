@@ -877,6 +877,20 @@ mod tests {
     }
 
     #[test]
+    fn a_node_added_after_an_unterminated_node_starts_its_own_line() {
+        // `a 1` + `.b = 2` used to write `a 1b 2`, and inside a one-line
+        // block `x 1 }` + `.a.y = 2` made `y` and `2` more arguments of `x`.
+        let out = edit_src("a 1", ".b = 2");
+        assert_eq!(out, "a 1\nb 2", "no final newline before, none after");
+        assert_eq!(q(&out, ".a"), vec![Value::Int(1)]);
+        assert_eq!(q(&out, ".b"), vec![Value::Int(2)]);
+
+        let out = edit_src("a { x 1 }\n", ".a.y = 2");
+        assert_eq!(q(&out, ".a.x"), vec![Value::Int(1)]);
+        assert_eq!(q(&out, ".a.y"), vec![Value::Int(2)]);
+    }
+
+    #[test]
     fn inline_comment_keeps_crlf_line_ending() {
         assert_eq!(
             cedit("n 1\r\nm 2\r\n", ".n.#.inline = \"hi\""),
