@@ -13,8 +13,16 @@ use kdl::{
     FormatConfig, KdlDocument, KdlDocumentFormat, KdlEntry, KdlEntryFormat, KdlNode, KdlValue,
 };
 
+/// Apply a mutation expression. One that fails partway (`.a = 1 | .b = x`
+/// with `.b` refused, or a node given an object with one key that can't be
+/// set) is undone whole, leaving `doc` as it was.
 pub fn apply(doc: &mut Kdl, expr: &Expr) -> Result<(), EditError> {
-    edikt_core::apply_mutation(doc, expr)
+    let before = doc.doc.clone();
+    let result = edikt_core::apply_mutation(doc, expr);
+    if result.is_err() {
+        doc.doc = before;
+    }
+    result
 }
 
 impl Mutable for Kdl {

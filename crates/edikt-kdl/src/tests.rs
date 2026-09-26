@@ -500,6 +500,16 @@ fn assigning_a_scalar_to_repeated_nodes_errors() {
 }
 
 #[test]
+fn an_edit_that_fails_partway_leaves_the_document_as_it_was() {
+    // The first edit of the chain applies, the second is refused: the
+    // document must not keep the first.
+    let mut doc = parse(SAMPLE).unwrap();
+    let expr = parse_expr(".layout.gaps = 4 | .layout = 5").unwrap();
+    assert!(apply(&mut doc, &expr).is_err());
+    assert_eq!(doc.to_source(), SAMPLE);
+}
+
+#[test]
 fn assigning_a_non_prefix_array_to_repeated_nodes_errors() {
     let err = edit_err(SAMPLE, ".bind = [[\"nomatch\"], [\"y\"]]");
     assert!(err.contains("wholesale is not supported"), "got: {err}");
