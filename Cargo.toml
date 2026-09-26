@@ -24,7 +24,7 @@ edikt-kdl = { path = "crates/edikt-kdl", version = "0.4.1" }
 edikt-frontmatter = { path = "crates/edikt-frontmatter", version = "0.2.3" }
 # Third-party.
 rowan = "0.16"
-kdl = "6"
+kdl = { version = "6", default-features = false, features = ["span"] }
 logos = "0.16"
 regex = "1"
 clap = { version = "4", features = ["derive"] }

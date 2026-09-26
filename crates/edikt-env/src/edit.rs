@@ -5,7 +5,7 @@
 //! strings; an array or object errors (the format is flat and string-only).
 
 use crate::syntax::{Sk, SyntaxNode, sk};
-use crate::{Env, project};
+use crate::{Dialect, Env, project};
 use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
 use rowan::{GreenNode, GreenNodeBuilder};
 
@@ -101,6 +101,63 @@ pub(crate) fn value_node_green(s: &str) -> GreenNode {
     }
     b.finish_node();
     b.finish()
+}
+
+fn format_name(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::Punctuated => ".env",
+        Dialect::Spaced => "envspaced",
+    }
+}
+
+/// Refuse a value this line format cannot hold: the scanner would read the
+/// line back differently. There is no quoting to reach for (the contract
+/// keeps `.env` free of quoting semantics), so the honest answer is an error.
+pub(crate) fn check_value(text: &str, dialect: Dialect) -> Result<(), EditError> {
+    let fmt = format_name(dialect);
+    if text.contains(['\n', '\r']) {
+        return Err(EditError::new(format!(
+            "{fmt} can't hold a value with a line break: the rest would read back as \
+             another line, and {fmt} has no quoting"
+        )));
+    }
+    if text.trim() != text {
+        return Err(EditError::new(format!(
+            "{fmt} can't hold a value with leading or trailing whitespace: it reads \
+             back trimmed, and {fmt} has no quoting ({text:?})"
+        )));
+    }
+    Ok(())
+}
+
+/// Refuse a new key this line format cannot hold (an existing key is
+/// already known to read back as itself).
+pub(crate) fn check_key(key: &str, dialect: Dialect) -> Result<(), EditError> {
+    let fmt = format_name(dialect);
+    let why = if key.contains(['\n', '\r']) {
+        Some("a line break would split the line")
+    } else if key.trim() != key {
+        Some("leading or trailing whitespace reads back trimmed")
+    } else if key.starts_with(['#', '!']) {
+        Some("a line starting with `#` or `!` is a comment")
+    } else {
+        match dialect {
+            Dialect::Punctuated if key.contains(['=', ':']) => {
+                Some("`=` or `:` would end the key early")
+            }
+            Dialect::Spaced if key.is_empty() => Some("the value would read back as the key"),
+            Dialect::Spaced if key.contains(char::is_whitespace) => {
+                Some("whitespace would end the key early")
+            }
+            _ => None,
+        }
+    };
+    match why {
+        Some(why) => Err(EditError::new(format!(
+            "{fmt} can't hold the key {key:?}: {why}, and {fmt} has no quoting"
+        ))),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn scalar_string(value: &Value) -> Result<String, EditError> {

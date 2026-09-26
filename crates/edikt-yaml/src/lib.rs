@@ -104,12 +104,7 @@ impl Document for Yaml {
         edit::apply(self, expr)
     }
     fn has_comments(&self) -> bool {
-        // A `#` at line start or after whitespace opens a comment. This can
-        // false-positive on a `#` inside a quoted scalar, which only ever
-        // over-warns on conversion; acceptable, and never wrong the other way.
-        self.source
-            .lines()
-            .any(|l| l.trim_start().starts_with('#') || l.contains(" #"))
+        has_comment(&self.source, &self.docs)
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         // The first document's comments (bulk enumeration and single-doc
@@ -187,6 +182,54 @@ impl Document for Yaml {
     }
 }
 
+/// Whether `source` holds a comment: a `#` at a line start or after
+/// whitespace, outside every scalar's text. The span tree gives each scalar's
+/// (and key's) exact bytes, so the `#` in `"v #1"` or `'a #b'` is data. A
+/// block scalar's header line (`key: | # note`) can carry a comment, so only
+/// the lines after its `|`/`>` indicator count as scalar text.
+fn has_comment(source: &str, docs: &[Node]) -> bool {
+    fn collect(node: &Node, source: &str, out: &mut Vec<std::ops::Range<usize>>) {
+        match &node.kind {
+            compose::NodeKind::Scalar(_) => {
+                let text = source.get(node.span.clone()).unwrap_or("");
+                // Past any anchor/tag properties, a block scalar opens with
+                // its indicator; no other scalar can start with `|` or `>`.
+                let is_block = text
+                    .split_whitespace()
+                    .find(|t| !t.starts_with(['&', '!']))
+                    .is_some_and(|t| t.starts_with(['|', '>']));
+                match text.find('\n').filter(|_| is_block) {
+                    Some(nl) => out.push(node.span.start + nl..node.span.end),
+                    None => out.push(node.span.clone()),
+                }
+            }
+            compose::NodeKind::Sequence(items) => {
+                items.iter().for_each(|n| collect(n, source, out));
+            }
+            compose::NodeKind::Mapping(entries) => {
+                for e in entries {
+                    out.push(e.key_span.clone());
+                    collect(&e.value, source, out);
+                }
+            }
+        }
+    }
+    let mut scalars = Vec::new();
+    for doc in docs {
+        collect(doc, source, &mut scalars);
+    }
+    scalars.sort_by_key(|r| r.start);
+    let bytes = source.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| {
+        b == b'#' && (i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r')) && {
+            // The last scalar starting at or before `i` is the only one
+            // that can contain it (spans don't overlap).
+            let k = scalars.partition_point(|r| r.start <= i);
+            k == 0 || !scalars[k - 1].contains(&i)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +268,37 @@ mod tests {
 
     const STREAM: &str =
         "---\nkind: Deployment\nspec:\n  replicas: 2\n---\nkind: Service\nspec:\n  port: 80\n";
+
+    #[test]
+    fn has_comments_ignores_a_hash_inside_scalars() {
+        // A `#` inside a scalar is data (`--strict` used to refuse converting
+        // these comment-free files).
+        for src in [
+            "tag: \"v #1\"\n",
+            "tag: 'v #1'\n",
+            "\"k #1\": v\n",
+            "xs: [\"a #b\", 'c #d']\n",
+            "t: |\n  line\n  # not a comment\n",
+            "t: &a >-\n  folded # text\n",
+            "url: http://x/#frag\n",
+            "---\na: \"#1\"\n---\nb: '#2'\n",
+        ] {
+            assert!(!parse(src).unwrap().has_comments(), "{src:?}");
+        }
+        // Every place a comment can live is still seen.
+        for src in [
+            "# banner\na: 1\n",
+            "a: 1 # inline\n",
+            "a:\n  # head\n  b: 1\n",
+            "xs: [1, # one\n  2]\n",
+            "t: | # header note\n  text\n",
+            "t: |\n  text\n# after\nb: 1\n",
+            "a: 1\n# foot\n",
+            "a: \"x\" # after a quoted #\n",
+        ] {
+            assert!(parse(src).unwrap().has_comments(), "{src:?}");
+        }
+    }
 
     #[test]
     fn multidoc_round_trip_is_identity() {

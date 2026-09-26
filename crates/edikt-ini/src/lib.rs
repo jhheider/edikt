@@ -54,9 +54,13 @@ impl Ini {
     /// Set the entry at `path` to a scalar, format-preserving. If the entry
     /// exists, only its value text changes. Otherwise a `key = value` line is
     /// inserted into the named section (creating the section if absent) or the
-    /// preamble.
+    /// preamble. A key, section name, or value INI can't read back as itself
+    /// (a line break, surrounding whitespace, an inline-comment `;`/`#`, a
+    /// key that would read as a header or comment) errors: INI has no
+    /// quoting to fall back on.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let text = edit::scalar_string(value)?;
+        edit::check_value(&text)?;
         if let Some(entry) = edit::resolve_entry(&self.root, path) {
             let value_node = entry
                 .children()
@@ -71,6 +75,10 @@ impl Ini {
             [Step::Field(s), Step::Field(k)] => (Some(s.as_str()), k.as_str()),
             _ => return Err(EditError::new("INI paths are `.key` or `.section.key`")),
         };
+        edit::check_key(key)?;
+        if let Some(s) = section {
+            edit::check_section(s)?;
+        }
         let new_src = edit::insert_entry(&self.to_source(), section, key, &text);
         self.root = SyntaxNode::new_root(parser::build(&new_src));
         Ok(())
@@ -182,6 +190,72 @@ mod tests {
         let mut doc = parse(src).unwrap();
         edikt_core::apply_comment_mutation(&mut doc, &parse_expr(expr).unwrap()).unwrap();
         doc.to_source()
+    }
+
+    /// Set `path` to `value`; on success, assert the written file parses and
+    /// reads back with exactly that value.
+    fn set_round_trip(src: &str, path: &[&str], value: &str) -> Result<(), String> {
+        let steps: Vec<Step> = path.iter().map(|s| Step::Field((*s).into())).collect();
+        let mut doc = parse(src).unwrap();
+        doc.set(&steps, &Value::Str(value.into()))
+            .map_err(|e| e.to_string())?;
+        let out = doc.to_source();
+        let back = parse(&out).unwrap_or_else(|e| panic!("{out:?} doesn't parse: {e}"));
+        assert_eq!(
+            back.value_at(&steps),
+            Some(Value::Str(value.into())),
+            "{path:?} = {value:?} wrote {out:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_value_or_key_that_cannot_read_back_errors() {
+        let src = "top = 1\n[s]\nk = v\n";
+        // Values, on existing and new keys: an inline-comment `;`/`#`,
+        // surrounding whitespace, a line break.
+        for path in [
+            &["top"][..],
+            &["s", "k"],
+            &["new"],
+            &["s", "new"],
+            &["t", "new"],
+        ] {
+            for bad in ["x ; y", "x # y", "#foo", ";foo", " x", "x ", "x\ny = evil"] {
+                let err = set_round_trip(src, path, bad).unwrap_err();
+                assert!(err.contains("INI can't hold the value"), "{bad:?}: {err}");
+            }
+        }
+        // New keys that would read as a header or comment, end early, or trim.
+        for bad in ["[x", ";x", "#x", "a=b", "a:b", " a", "a ", "a\nb"] {
+            let err = set_round_trip(src, &[bad], "v").unwrap_err();
+            assert!(err.contains("INI can't hold the key"), "{bad:?}: {err}");
+            let err = set_round_trip(src, &["s", bad], "v").unwrap_err();
+            assert!(err.contains("INI can't hold the key"), "{bad:?}: {err}");
+        }
+        for bad in ["a]b", "a\nb"] {
+            let err = set_round_trip(src, &[bad, "k"], "v").unwrap_err();
+            assert!(err.contains("section name"), "{bad:?}: {err}");
+        }
+        // A refused edit leaves the document untouched.
+        let mut doc = parse(src).unwrap();
+        assert!(
+            doc.set(&[Step::Field("top".into())], &Value::Str("x ; y".into()))
+                .is_err()
+        );
+        assert_eq!(doc.to_source(), src);
+        // What INI can hold still writes, and reads back as itself.
+        for (path, value) in [
+            (&["top"][..], "a;b"),
+            (&["top"], "a#b"),
+            (&["top"], "x = y"),
+            (&["top"], "\"quoted\""),
+            (&["s", "k"], ""),
+            (&["s", "a b"], "v"),
+            (&["t u", "k"], "v"),
+        ] {
+            set_round_trip(src, path, value).unwrap();
+        }
     }
 
     #[test]

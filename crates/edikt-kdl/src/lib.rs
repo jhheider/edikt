@@ -64,7 +64,8 @@ impl Kdl {
         if path.is_empty() {
             return Err(EditError::new("cannot set the whole document"));
         }
-        edit::set_in_doc(&mut self.doc, path, value, 0)
+        let unit = edit::indent_unit(&self.doc);
+        edit::set_in_doc(&mut self.doc, path, value, 0, &unit)
     }
 
     /// The value at `path`, or `None`.
@@ -80,8 +81,52 @@ impl Kdl {
         if path.is_empty() {
             return Err(EditError::new("del(.) is not allowed"));
         }
-        edit::delete_in_doc(&mut self.doc, path)
+        edit::delete_in_doc(&mut self.doc, path, false)
     }
+}
+
+/// Whether any decor in `doc` holds a comment. kdl-rs keeps comments (line,
+/// block, and `/-` slashdash) only in decor strings, which otherwise hold
+/// whitespace, so a comment opener there is a comment, while `//` inside a
+/// string value (`url "https://x"`) is never looked at.
+fn comments_in_decor(doc: &KdlDocument) -> bool {
+    fn text(s: &str) -> bool {
+        s.contains("//") || s.contains("/*") || s.contains("/-")
+    }
+    fn node(n: &kdl::KdlNode) -> bool {
+        n.format().is_some_and(|f| {
+            [
+                &f.leading,
+                &f.before_ty_name,
+                &f.after_ty_name,
+                &f.after_ty,
+                &f.before_children,
+                &f.before_terminator,
+                // A line comment ending the node rides in its terminator.
+                &f.terminator,
+                &f.trailing,
+            ]
+            .into_iter()
+            .any(|s| text(s))
+        }) || n.entries().iter().any(|e| {
+            e.format().is_some_and(|f| {
+                [
+                    &f.leading,
+                    &f.trailing,
+                    &f.after_ty,
+                    &f.before_ty_name,
+                    &f.after_ty_name,
+                    &f.after_key,
+                    &f.after_eq,
+                ]
+                .into_iter()
+                .any(|s| text(s))
+            })
+        }) || n.children().is_some_and(comments_in_decor)
+    }
+    doc.format()
+        .is_some_and(|f| text(&f.leading) || text(&f.trailing))
+        || doc.nodes().iter().any(node)
 }
 
 /// Parse KDL source into a [`Kdl`] document.
@@ -104,10 +149,7 @@ impl Document for Kdl {
         edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
-        // kdl-rs keeps comments in decor strings; a `//` or `/*` anywhere in
-        // the serialized form means the source carried one.
-        let s = self.doc.to_string();
-        s.contains("//") || s.contains("/*")
+        comments_in_decor(&self.doc)
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.doc))
@@ -520,11 +562,61 @@ mod tests {
 
     #[test]
     fn a_bare_node_grows_a_children_block() {
-        // The autoformatter attaches the fresh children block directly (no space).
+        // The fresh block is set off by a space, as a parsed one is; with no
+        // nesting in the file to learn from, it indents by kdl-rs's four.
         assert_eq!(
             edit_src("flag\n", ".flag.child = 1"),
-            "flag{\n    child 1\n}\n"
+            "flag {\n    child 1\n}\n"
         );
+        // A nested file's own indent wins, closing brace included.
+        assert_eq!(
+            edit_src("a {\n\tflag\n}\n", ".a.flag.child = 1"),
+            "a {\n\tflag {\n\t\tchild 1\n\t}\n}\n"
+        );
+    }
+
+    #[test]
+    fn deleting_a_blocks_first_child_keeps_the_brace_line() {
+        // kdl-rs keeps the `{` line's break in the first child's leading
+        // decor; deleting that child must not pull the next one up.
+        let src = "server {\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(
+            edit_src(src, "del(.server.host)"),
+            "server {\n  port 80\n}\n"
+        );
+        // A comment trailing the brace stays; the deleted child's own head
+        // comment goes with it.
+        let src = "s { // hi\n  // head\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(edit_src(src, "del(.s.host)"), "s { // hi\n  port 80\n}\n");
+        // One occurrence of a repeated first child, and a single-line block.
+        let src = "s {\n  b 1\n  b 2\n}\n";
+        assert_eq!(edit_src(src, "del(.s.b[0])"), "s {\n  b 2\n}\n");
+        assert_eq!(edit_src("s { a 1; b 2 }\n", "del(.s.a)"), "s { b 2 }\n");
+    }
+
+    #[test]
+    fn a_new_child_copies_its_siblings_indent() {
+        let src = "server {\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(
+            edit_src(src, ".server.tls = true"),
+            "server {\n  host \"a\"\n  port 80\n  tls #true\n}\n"
+        );
+        // A nested object indents by the file's unit, closing braces too.
+        let src = "a {\n\tb {\n\t\tc 1\n\t}\n}\n";
+        assert_eq!(
+            edit_src(src, ".a.b.d = {x: {y: 1}}"),
+            "a {\n\tb {\n\t\tc 1\n\t\td {\n\t\t\tx {\n\t\t\t\ty 1\n\t\t\t}\n\t\t}\n\t}\n}\n"
+        );
+    }
+
+    #[test]
+    fn a_new_child_on_a_single_line_block_stays_a_separate_node() {
+        // Without a terminator the new node would read as more arguments of
+        // `port` (`port 80 tls #true`).
+        let out = edit_src("s { host \"a\"; port 80 }\n", ".s.tls = true");
+        assert_eq!(out, "s { host \"a\"; port 80; tls #true }\n");
+        assert_eq!(q(&out, ".s.port"), vec![Value::Int(80)]);
+        assert_eq!(q(&out, ".s.tls"), vec![Value::Bool(true)]);
     }
 
     #[test]
@@ -546,6 +638,9 @@ mod tests {
         // path refuses a `#` step cleanly.
         assert!(edit_err(SAMPLE, ".layout.# = \"x\"").contains("editing comments"));
         assert!(edit_err(SAMPLE, "del(.layout.#)").contains("deleting comments"));
+        // Comment editing shipped: the refusal explains, it doesn't promise.
+        assert!(!edit_err(SAMPLE, ".layout.# = \"x\"").contains("planned"));
+        assert!(!edit_err(SAMPLE, "del(.layout.#)").contains("planned"));
     }
 
     // --- set: replace_args prefix-append / rebuild ------------------------
@@ -911,6 +1006,35 @@ mod tests {
         let mut doc = parse("a 1\n").unwrap();
         assert!(doc.set(&[], &Value::Int(1)).is_err());
         assert!(doc.delete(&[]).is_err());
+    }
+
+    #[test]
+    fn has_comments_ignores_comment_openers_inside_strings() {
+        // A URL or path in a string is data (`--strict` used to refuse
+        // converting these comment-free files).
+        for src in [
+            "url \"https://example.com\"\n",
+            "glob \"/*\" dash=\"a/-b\"\n",
+            "raw #\"C://x\"#\n",
+            "s {\n  home \"http://h\"\n}\n",
+        ] {
+            assert!(!parse(src).unwrap().has_comments(), "{src:?}");
+        }
+        // Every place a comment can live is still seen.
+        for src in [
+            "// banner\na 1\n",
+            "a 1 // inline\n",
+            "a /* mid */ 1\n",
+            "a 1 k=/* v */2\n",
+            "s {\n  // head\n  b 1\n}\n",
+            "s { // brace\n  b 1\n}\n",
+            "s {\n  b 1\n  // foot\n}\n",
+            "/-gone 1\nkept 2\n",
+            "a 1 /-2\n",
+            "a 1\n// trailing\n",
+        ] {
+            assert!(parse(src).unwrap().has_comments(), "{src:?}");
+        }
     }
 
     #[test]

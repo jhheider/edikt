@@ -66,7 +66,9 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
     form, so it becomes quoted.
   - **INI, `.env`, `envspaced`**: not applicable. A value is its bytes, and
     any quotes in them are part of the value (`a = "x"` reads as `"x"`), so an
-    assignment writes exactly the string it is given.
+    assignment writes exactly the string it is given. With no quoting to fall
+    back on, a string these formats can't read back as itself **errors**
+    rather than being written (see Per-format semantics).
 
 ---
 
@@ -84,7 +86,7 @@ edikt -f script.edk [-f ...] [FILE...]
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
 | `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order. Scripts may open with **header directives** - `toFormat: FMT`, `type: FMT` - which CLI flags override; `#` header lines (comments, shebangs) are skipped |
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin. Needs a mutating expression or a conversion (`-T`) |
-| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`\|`kdl`\|`markdown`; aliases `cfg`, `conf`, `props`, `spaced`, `yml`, `md`, `mdx`, `qmd`, `frontmatter`, `fm`) |
+| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`\|`kdl`\|`markdown`; aliases `cfg`, `conf`, `props`, `spaced`, `yml`, `md`, `mdx`, `qmd`, `rmd`, `frontmatter`, `fm`; any case) |
 | `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml`/`--kdl` are shorthands for `-T <fmt>`. `markdown` is an input lens and never an output format |
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
@@ -106,8 +108,11 @@ file.
 **Format detection:** `-t` wins; otherwise the file name (`.env` and `.env.*`
 dotfiles), then the extension: `.json`, `.jsonc`/`.json5`, `.ini`/`.cfg`/`.conf`,
 `.env`/`.properties`/`.props`, `.toml`, `.yaml`/`.yml`, `.kdl`,
-`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd` (see `detect_format` in
-`crates/edikt/src/main.rs`). There is no content sniffing: **stdin without `-t`,
+`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd`, in any case (`up.YAML`). One alias
+table (`FORMAT_ALIASES` in `crates/edikt/src/main.rs`) feeds `-t`/`-T`,
+extension detection, and the error listing, so every detected extension is
+also a `-t` name; `envspaced`/`spaced` and `frontmatter`/`fm` are `-t` names
+only. There is no content sniffing: **stdin without `-t`,
 or an unknown extension, is an error** (predictable beats magic). `envspaced` is
 never auto-detected (see Per-format semantics).
 
@@ -325,7 +330,14 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   mutation time).
 - **INI** - paths are `.section.key`; sectionless preamble keys are top-level.
   Values are strings. No arrays/objects; an array index into INI is a clean
-  error (exit 2). Iteration over a section's keys is allowed.
+  error (exit 2). Iteration over a section's keys is allowed. INI has no
+  quoting, so an assignment it can't read back as written **errors** (exit
+  2) instead of silently writing something else: a value with a line break,
+  leading or trailing whitespace (read back trimmed), or a `;`/`#` at its
+  start or after whitespace (read back as an inline comment); a new key that
+  starts with `[`, `;` or `#` (a header or comment), or holds `=`, `:`, a
+  line break, or surrounding whitespace; a new section name holding `]` or a
+  line break.
 - **`envspaced`** - the `.env` document model with a **whitespace separator**
   (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
   entirely; a `Dialect` picks only how the key ends, since the separator is the
@@ -344,7 +356,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   coercion in storage. Set the bytes after the separator; preserve everything
   else. (There is no single `.env` grammar: docker-compose, dotenv libs, and
   shell `source` disagree, so "correctly" parsing it is a bottomless bug queue.
-  We don't.)
+  We don't.) The flip side of no quoting: a value or key the line scanner
+  would read back differently **errors** (exit 2), never gets invented
+  quotes. That is a value with a line break (it would inject another entry)
+  or leading/trailing whitespace (read back trimmed), and a new key that is
+  empty (`envspaced`), starts with `#`/`!`, holds the separator (`=`/`:`, or
+  whitespace in `envspaced`), a line break, or surrounding whitespace.
 - **YAML** - a byte splice over the span tree (see Architecture). Assigning
   a **mapping or sequence** writes it in the file's own layout (#83): **flow
   under flow** (a slot inside `[...]`/`{...}`, or a value that already was a
@@ -402,7 +419,10 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
   occurrences); replacing a whole node body wholesale is refused rather than
-  reflowed.
+  reflowed. A new node copies the layout of the sibling it follows (its
+  indent on a line of its own, or a `;`-separated slot in a single-line
+  `{ a 1; b 2 }` block), and anything nested inside it indents by the file's
+  own unit. Deleting a block's first child keeps the `{` line intact.
 - **Frontmatter** (`edikt-frontmatter`, `-t markdown`): a **lens**, not a
   format. It splits the file into an opaque opening fence, the metadata block,
   and an opaque suffix (closing fence plus the whole body), hands the block to

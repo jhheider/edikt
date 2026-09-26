@@ -928,6 +928,18 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_step_in_a_computed_value_points_at_the_document_edit() {
+        // Comment editing shipped; the value-level refusal must say how to do
+        // it rather than promise a future release.
+        let input = Value::Object(vec![("a".into(), Value::Int(1))]);
+        for src in [r#".a.# = "x""#, r#".a.# |= "x""#, "del(.a.#)"] {
+            let msg = eval(&parse(src).unwrap(), &input).unwrap_err().to_string();
+            assert!(!msg.contains("planned"), "{src}: {msg}");
+            assert!(msg.contains("mutation of the file"), "{src}: {msg}");
+        }
+    }
+
+    #[test]
     fn comments_stream_records_and_paths() {
         use crate::comment::{Commented, CommentedNode, Comments};
         // A little commented tree: web (head), web.image (inline), debug (inline).

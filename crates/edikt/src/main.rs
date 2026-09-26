@@ -86,7 +86,8 @@ struct Args {
     )]
     output: Option<PathBuf>,
 
-    /// Force the input format: jsonc | json5 | json | ini | env | properties | envspaced | toml | yaml | kdl | markdown.
+    /// Force the input format: jsonc | json5 | json | ini | env | properties | envspaced | toml | yaml | kdl | markdown
+    /// (aliases: cfg, conf, props, spaced, yml, md, mdx, qmd, rmd, frontmatter, fm; any case).
     #[arg(short = 't', long = "type", value_name = "FMT")]
     format: Option<String>,
 
@@ -313,24 +314,72 @@ const ALL_FORMATS: [Format; 8] = [
     Format::Kdl,
 ];
 
+/// Whether a [`FORMAT_ALIASES`] name is also a file extension that
+/// auto-detects, or a `-t`/`-T` name only.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Alias {
+    /// A `-t`/`-T` name and a detected extension (`.yml`).
+    Ext,
+    /// A `-t`/`-T` name only: `envspaced` is never auto-detected, and
+    /// `frontmatter`/`fm` are not extensions.
+    Name,
+}
+
+/// The one table of format names: `-t`/`-T` accept every entry, extension
+/// detection accepts the [`Alias::Ext`] ones, and error messages list them
+/// all. Matching is case-insensitive in both places.
+const FORMAT_ALIASES: &[(&str, Format, Alias)] = &[
+    ("jsonc", Format::Jsonc, Alias::Ext),
+    ("json5", Format::Jsonc, Alias::Ext),
+    ("json", Format::Json, Alias::Ext),
+    ("ini", Format::Ini, Alias::Ext),
+    ("cfg", Format::Ini, Alias::Ext),
+    ("conf", Format::Ini, Alias::Ext),
+    ("env", Format::Env, Alias::Ext),
+    ("properties", Format::Env, Alias::Ext),
+    ("props", Format::Env, Alias::Ext),
+    ("envspaced", Format::EnvSpaced, Alias::Name),
+    ("spaced", Format::EnvSpaced, Alias::Name),
+    ("toml", Format::Toml, Alias::Ext),
+    ("yaml", Format::Yaml, Alias::Ext),
+    ("yml", Format::Yaml, Alias::Ext),
+    ("kdl", Format::Kdl, Alias::Ext),
+    ("markdown", Format::Frontmatter, Alias::Ext),
+    ("md", Format::Frontmatter, Alias::Ext),
+    ("mdx", Format::Frontmatter, Alias::Ext),
+    ("qmd", Format::Frontmatter, Alias::Ext),
+    ("rmd", Format::Frontmatter, Alias::Ext),
+    ("frontmatter", Format::Frontmatter, Alias::Name),
+    ("fm", Format::Frontmatter, Alias::Name),
+];
+
 /// Every format name accepted by `-t`/`-T`, for error messages.
-const FORMAT_NAMES: &str = "jsonc, json5, json, ini, cfg, conf, env, properties, \
-     envspaced, toml, yaml, yml, kdl, markdown";
+fn format_names() -> String {
+    FORMAT_ALIASES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Look `name` up in [`FORMAT_ALIASES`], case-insensitively; `ext_only`
+/// restricts the match to names that are also file extensions.
+fn lookup_format(name: &str, ext_only: bool) -> Option<Format> {
+    FORMAT_ALIASES
+        .iter()
+        .find(|(n, _, kind)| n.eq_ignore_ascii_case(name) && (!ext_only || *kind == Alias::Ext))
+        .map(|(_, f, _)| *f)
+}
 
 /// Resolve a `-t`/`-T` format name.
 fn format_from_name(name: &str) -> Result<Format> {
-    match name.to_ascii_lowercase().as_str() {
-        "json" => Ok(Format::Json),
-        "jsonc" | "json5" => Ok(Format::Jsonc),
-        "ini" | "cfg" | "conf" => Ok(Format::Ini),
-        "env" | "properties" | "props" => Ok(Format::Env),
-        "envspaced" | "spaced" => Ok(Format::EnvSpaced),
-        "toml" => Ok(Format::Toml),
-        "yaml" | "yml" => Ok(Format::Yaml),
-        "kdl" => Ok(Format::Kdl),
-        "markdown" | "md" | "mdx" | "qmd" | "frontmatter" | "fm" => Ok(Format::Frontmatter),
-        other => bail!("unknown format `{other}` (expected one of: {FORMAT_NAMES})"),
-    }
+    lookup_format(name, false).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown format `{}` (expected one of: {})",
+            name.to_ascii_lowercase(),
+            format_names()
+        )
+    })
 }
 
 /// Parse `src` in the given format into a boxed, format-agnostic document.
@@ -1130,16 +1179,16 @@ fn detect_format(path: Option<&Path>, forced: Option<&str>) -> Result<Format> {
     // indistinguishable from a malformed `.env` line. Guessing would silently
     // edit the wrong bytes, so it is `-t envspaced` or nothing.
     match path.and_then(|p| p.extension()).and_then(|e| e.to_str()) {
-        Some("json") => Ok(Format::Json),
-        Some("jsonc" | "json5") => Ok(Format::Jsonc),
-        Some("ini" | "cfg" | "conf") => Ok(Format::Ini),
-        Some("env" | "properties" | "props") => Ok(Format::Env),
-        Some("toml") => Ok(Format::Toml),
-        Some("yaml" | "yml") => Ok(Format::Yaml),
-        Some("kdl") => Ok(Format::Kdl),
-        Some("md" | "markdown" | "mdx" | "qmd" | "rmd") => Ok(Format::Frontmatter),
-        Some(ext) => bail!("cannot infer format from `.{ext}`; pass -t (one of: {FORMAT_NAMES})"),
-        None => bail!("cannot infer format (no extension); pass -t (one of: {FORMAT_NAMES})"),
+        Some(ext) => lookup_format(ext, true).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot infer format from `.{ext}`; pass -t (one of: {})",
+                format_names()
+            )
+        }),
+        None => bail!(
+            "cannot infer format (no extension); pass -t (one of: {})",
+            format_names()
+        ),
     }
 }
 
