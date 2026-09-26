@@ -175,6 +175,17 @@ pub fn eval(expr: &Expr, input: &Value) -> Result<Vec<Value>, EvalError> {
             }
             Ok(vec![Value::Object(obj)])
         }
+        // A path-expression target (`(.xs[] | select(...) | .n) = v`) lowers
+        // to one plain-path mutation per match; apply them in turn.
+        Expr::Assign(..) | Expr::UpdateAssign(..) | Expr::AddAssign(..)
+            if crate::paths::path_expr_target(expr).is_some() =>
+        {
+            let mut out = input.clone();
+            for m in crate::paths::lower_mutation(expr, || input.clone())?.unwrap_or_default() {
+                out = eval(&m, &out)?.into_iter().next().unwrap_or(out);
+            }
+            Ok(vec![out])
+        }
         Expr::Assign(lhs, rhs) => {
             let steps = assign_path(lhs)?;
             let mut out = Vec::new();
