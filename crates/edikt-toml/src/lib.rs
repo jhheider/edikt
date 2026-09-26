@@ -62,7 +62,7 @@ impl Toml {
     /// an array or array-of-tables element (`.foo[0] = { ... }` -> `[[foo]]`).
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let Some((last, parent)) = path.split_last() else {
-            return Err(EditError::new("cannot set the whole document"));
+            return self.set_root(value);
         };
         match last {
             Step::Field(key) => {
@@ -137,6 +137,30 @@ impl Toml {
                 "TOML set targets object keys or array indices",
             )),
         }
+    }
+
+    /// Set the document itself (`. = v`, `. |= f`, jhheider/edikt#107). The
+    /// root is a standard table, so it is updated the same way: an unchanged
+    /// value is a no-op, and any other table is brought to `value` key by key,
+    /// so untouched keys and tables keep their bytes. A TOML document is
+    /// always a table, so anything else errors.
+    fn set_root(&mut self, value: &Value) -> Result<(), EditError> {
+        let Value::Object(entries) = value else {
+            return Err(EditError::new(format!(
+                "a TOML document is a table, so `.` can only be set to an object (got {})",
+                value.type_name()
+            )));
+        };
+        if self.to_value().identical(value) {
+            return Ok(());
+        }
+        let stale: Vec<String> = self
+            .doc
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .filter(|k| entries.iter().all(|(n, _)| n != k))
+            .collect();
+        self.update_table(&[], entries, &stale)
     }
 
     /// Bring the standard table at `path` to `entries`: each key set in place

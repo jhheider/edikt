@@ -771,6 +771,25 @@ fn toml_query_and_edit_keeps_comment() {
 }
 
 #[test]
+fn toml_document_updates_like_a_table() {
+    // #107: `. |= .` used to exit 2, "cannot set the whole document".
+    let src = "top = 1 # c\n\n[t]\na = 1\n";
+    for expr in [". |= .", ". = ."] {
+        let (out, err, code) = run(&["-t", "toml", expr], src);
+        assert_eq!((out.as_str(), code), (src, 0), "{expr}: {err}");
+    }
+    let (out, err, code) = run(&["-t", "toml", ". |= {top: 2, t: .t}"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("top = 2 # c\n\n[t]\na = 1\n", 0),
+        "{err}"
+    );
+    let (_o, err, code) = run(&["-t", "toml", ". = [1]"], src);
+    assert_eq!(code, 2);
+    assert!(err.contains("a TOML document is a table"), "{err}");
+}
+
+#[test]
 fn convert_toml_to_json_and_back() {
     let (out, _e, code) = run(&["-t", "toml", "-T", "json"], "[a]\nb = 1\n");
     assert_eq!(out, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");

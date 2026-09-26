@@ -579,11 +579,13 @@ fn set_and_del_path_guards() {
         edit_err("[a]\nx = 1\n", ".a[0].y = 5"),
         "`a` is not an array"
     );
-    // set: the whole document cannot be replaced.
+    // set: the whole document is a table, and only ever set to one (#107).
     assert_eq!(
         edit_err("a = 1\n", ". = 5"),
-        "cannot set the whole document"
+        "a TOML document is a table, so `.` can only be set to an object (got number)"
     );
+    assert_eq!(edit_src("a = 1 # c\n", ". |= ."), "a = 1 # c\n");
+    assert_eq!(edit_src("a = 1 # c\n", r#". = {a: 1}"#), "a = 1 # c\n");
     // del: a parent step that cannot match is still a silent no-op, whether
     // that is a missing key or, as here, a key that is not an array.
     assert_eq!(edit_src("[a]\nx = 1\n", "del(.a[0].y)"), "[a]\nx = 1\n");

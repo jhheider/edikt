@@ -489,7 +489,13 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   sibling table spelled as dotted keys (`edition.workspace = true`), it is a
   dotted key too (`rust-version.workspace = true`); with no dotted precedent
   it gets its own `[a.b]` header (intermediates stay implicit, so `.a.b.c = 1`
-  writes only `[a.b]`).
+  writes only `[a.b]`). A value set to itself changes nothing, and a
+  `[table]` given a new object is updated key by key (changed keys set in
+  place, new ones added, missing ones deleted), so it stays a table and its
+  untouched keys keep their bytes. The document itself is such a table:
+  `. |= .` is a no-op, `. |= f` or `. = {...}` updates the root key by key
+  (#107), and setting `.` to anything but an object errors, since a TOML
+  document is always a table.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,
