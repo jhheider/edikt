@@ -61,16 +61,39 @@ enum Tok {
 }
 
 /// Scan `src` into the flat event list (with byte marks), or a parse error string.
+///
+/// libyaml-safer 0.3 panics ("unexpected end of input") on a block scalar
+/// that ends the input without a line break (`a: |\n  t`), so a source that
+/// lacks a final newline is scanned with one appended. The padding is never
+/// part of the document: marks are clamped back to `src`, and a block
+/// scalar's value loses the one line break the padding gave it, since
+/// without it the value ends at its last character (`"t"`, under clip or
+/// keep chomping alike).
 fn parse_events(src: &str) -> Result<Vec<Ev>, String> {
-    let mut bytes = src.as_bytes();
+    let padded;
+    let scanned = if src.is_empty() || src.ends_with('\n') {
+        src
+    } else {
+        padded = format!("{src}\n");
+        &padded
+    };
+    let mut bytes = scanned.as_bytes();
     let mut parser = Parser::new();
     parser.set_input(&mut bytes);
 
     let mut evs = Vec::new();
     loop {
-        let event = parser.parse().map_err(|e| e.to_string())?;
-        let start = event.start_mark.index as usize;
-        let end = event.end_mark.index as usize;
+        let mut event = parser.parse().map_err(|e| e.to_string())?;
+        let raw_end = event.end_mark.index as usize;
+        if raw_end > src.len()
+            && let EventData::Scalar { value, style, .. } = &mut event.data
+            && matches!(style, ScalarStyle::Literal | ScalarStyle::Folded)
+            && value.ends_with('\n')
+        {
+            value.pop();
+        }
+        let start = (event.start_mark.index as usize).min(src.len());
+        let end = raw_end.min(src.len());
         let done = matches!(event.data, EventData::StreamEnd);
         let tok = match event.data {
             EventData::StreamStart { .. } => Tok::StreamStart,

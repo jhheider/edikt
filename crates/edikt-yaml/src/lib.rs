@@ -271,6 +271,27 @@ mod tests {
         doc.to_source()
     }
 
+    #[test]
+    fn block_scalar_at_eof_without_a_newline_parses() {
+        // libyaml-safer panicked on these ("unexpected end of input").
+        let s = |v: &str| vec![Value::Str(v.into())];
+        // With no line break after it, the value ends at its last character.
+        assert_eq!(q("a: |\n  t", ".a"), s("t"));
+        assert_eq!(q("a: |+\n  t", ".a"), s("t"));
+        assert_eq!(q("a: |-\n  t", ".a"), s("t"));
+        assert_eq!(q("a: >\n  t\n  u", ".a"), s("t u"));
+        assert_eq!(q("- |\n  x\n  y", ".[0]"), s("x\ny"));
+        // Blank lines kept by `+` stay; only the padding's break goes.
+        assert_eq!(q("a: |+\n  t\n", ".a"), s("t\n"));
+        // The same text with its final newline reads as before.
+        assert_eq!(q("a: |\n  t\n", ".a"), s("t\n"));
+        // Round trip and edits keep the missing final newline missing.
+        let src = "a: |\n  t";
+        assert_eq!(parse(src).unwrap().to_source(), src);
+        assert_eq!(edit(src, ".b = 1"), "a: |\n  t\nb: 1");
+        assert_eq!(edit("x: 1\na: |\n  t", ".x = 2"), "x: 2\na: |\n  t");
+    }
+
     /// Query mapped over every document, concatenated (as the CLI does).
     fn qall(src: &str, expr: &str) -> Vec<Value> {
         let e = parse_expr(expr).unwrap();

@@ -2097,3 +2097,15 @@ fn strict_conversion_of_a_comment_free_file_with_a_hash_in_a_string() {
         assert!(out.contains(want), "{fmt}: {out}");
     }
 }
+
+#[test]
+fn yaml_block_scalar_at_eof_without_newline_does_not_panic() {
+    // libyaml-safer panicked ("unexpected end of input") on a block scalar
+    // ending the input with no line break.
+    let src = "a: |\n  t";
+    let (out, err, code) = run(&["-t", "yaml", ".a"], src);
+    assert_eq!((out.as_str(), code), ("t\n", 0), "{err}");
+    let (out, err, code) = run(&["-t", "yaml", ".b = 1"], src);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "a: |\n  t\nb: 1");
+}
