@@ -312,9 +312,11 @@ fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
     }
 }
 
-/// The message for a comment edit, which lands in v0.2 Phase 2.
+/// The message for a comment step inside a computed value: comments live in
+/// the document, so they are edited by a mutation of the file itself.
 pub(crate) fn comment_mutation_unsupported() -> &'static str {
-    "editing comments (`#`) is not supported yet (planned for v0.2); reading works, e.g. `edikt '.foo.#' file`"
+    "a comment (`#`) belongs to the document, not to a computed value: edit it \
+     as a mutation of the file, e.g. `.foo.# = \"text\"` or `del(.foo.#)`"
 }
 
 fn length(v: &Value) -> Result<Value, EvalError> {

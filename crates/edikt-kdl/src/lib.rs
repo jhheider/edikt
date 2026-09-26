@@ -64,7 +64,8 @@ impl Kdl {
         if path.is_empty() {
             return Err(EditError::new("cannot set the whole document"));
         }
-        edit::set_in_doc(&mut self.doc, path, value, 0)
+        let unit = edit::indent_unit(&self.doc);
+        edit::set_in_doc(&mut self.doc, path, value, 0, &unit)
     }
 
     /// The value at `path`, or `None`.
@@ -80,7 +81,7 @@ impl Kdl {
         if path.is_empty() {
             return Err(EditError::new("del(.) is not allowed"));
         }
-        edit::delete_in_doc(&mut self.doc, path)
+        edit::delete_in_doc(&mut self.doc, path, false)
     }
 }
 
@@ -520,11 +521,61 @@ mod tests {
 
     #[test]
     fn a_bare_node_grows_a_children_block() {
-        // The autoformatter attaches the fresh children block directly (no space).
+        // The fresh block is set off by a space, as a parsed one is; with no
+        // nesting in the file to learn from, it indents by kdl-rs's four.
         assert_eq!(
             edit_src("flag\n", ".flag.child = 1"),
-            "flag{\n    child 1\n}\n"
+            "flag {\n    child 1\n}\n"
         );
+        // A nested file's own indent wins, closing brace included.
+        assert_eq!(
+            edit_src("a {\n\tflag\n}\n", ".a.flag.child = 1"),
+            "a {\n\tflag {\n\t\tchild 1\n\t}\n}\n"
+        );
+    }
+
+    #[test]
+    fn deleting_a_blocks_first_child_keeps_the_brace_line() {
+        // kdl-rs keeps the `{` line's break in the first child's leading
+        // decor; deleting that child must not pull the next one up.
+        let src = "server {\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(
+            edit_src(src, "del(.server.host)"),
+            "server {\n  port 80\n}\n"
+        );
+        // A comment trailing the brace stays; the deleted child's own head
+        // comment goes with it.
+        let src = "s { // hi\n  // head\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(edit_src(src, "del(.s.host)"), "s { // hi\n  port 80\n}\n");
+        // One occurrence of a repeated first child, and a single-line block.
+        let src = "s {\n  b 1\n  b 2\n}\n";
+        assert_eq!(edit_src(src, "del(.s.b[0])"), "s {\n  b 2\n}\n");
+        assert_eq!(edit_src("s { a 1; b 2 }\n", "del(.s.a)"), "s { b 2 }\n");
+    }
+
+    #[test]
+    fn a_new_child_copies_its_siblings_indent() {
+        let src = "server {\n  host \"a\"\n  port 80\n}\n";
+        assert_eq!(
+            edit_src(src, ".server.tls = true"),
+            "server {\n  host \"a\"\n  port 80\n  tls #true\n}\n"
+        );
+        // A nested object indents by the file's unit, closing braces too.
+        let src = "a {\n\tb {\n\t\tc 1\n\t}\n}\n";
+        assert_eq!(
+            edit_src(src, ".a.b.d = {x: {y: 1}}"),
+            "a {\n\tb {\n\t\tc 1\n\t\td {\n\t\t\tx {\n\t\t\t\ty 1\n\t\t\t}\n\t\t}\n\t}\n}\n"
+        );
+    }
+
+    #[test]
+    fn a_new_child_on_a_single_line_block_stays_a_separate_node() {
+        // Without a terminator the new node would read as more arguments of
+        // `port` (`port 80 tls #true`).
+        let out = edit_src("s { host \"a\"; port 80 }\n", ".s.tls = true");
+        assert_eq!(out, "s { host \"a\"; port 80; tls #true }\n");
+        assert_eq!(q(&out, ".s.port"), vec![Value::Int(80)]);
+        assert_eq!(q(&out, ".s.tls"), vec![Value::Bool(true)]);
     }
 
     #[test]
@@ -546,6 +597,9 @@ mod tests {
         // path refuses a `#` step cleanly.
         assert!(edit_err(SAMPLE, ".layout.# = \"x\"").contains("editing comments"));
         assert!(edit_err(SAMPLE, "del(.layout.#)").contains("deleting comments"));
+        // Comment editing shipped: the refusal explains, it doesn't promise.
+        assert!(!edit_err(SAMPLE, ".layout.# = \"x\"").contains("planned"));
+        assert!(!edit_err(SAMPLE, "del(.layout.#)").contains("planned"));
     }
 
     // --- set: replace_args prefix-append / rebuild ------------------------

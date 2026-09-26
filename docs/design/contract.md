@@ -402,7 +402,10 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
   occurrences); replacing a whole node body wholesale is refused rather than
-  reflowed.
+  reflowed. A new node copies the layout of the sibling it follows (its
+  indent on a line of its own, or a `;`-separated slot in a single-line
+  `{ a 1; b 2 }` block), and anything nested inside it indents by the file's
+  own unit. Deleting a block's first child keeps the `{` line intact.
 - **Frontmatter** (`edikt-frontmatter`, `-t markdown`): a **lens**, not a
   format. It splits the file into an opaque opening fence, the metadata block,
   and an opaque suffix (closing fence plus the whole body), hands the block to

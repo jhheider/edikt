@@ -195,8 +195,8 @@ impl Jsonc {
             }
             Step::Iterate => unreachable!("`[]` fanned out above"),
             Step::Comment(_) => Err(EditError::new(
-                "deleting a comment (`#`) is a comment edit, not a value edit: use \
-                 `Document::delete_comment` (the CLI routes `del(.path.#)` there)",
+                "deleting comments (`#`): the comment step must end the path and be \
+                 deleted on its own, e.g. `del(.foo.#)`",
             )),
         }
     }
@@ -1106,8 +1106,12 @@ mod tests {
             "iterate create"
         );
         assert!(
-            edit_err("{}", ".a.# = 1").contains("use `Document::set_comment`"),
+            edit_err("{}", ".a.# = 1").contains("editing comments"),
             "comment create"
+        );
+        assert!(
+            !edit_err("{}", ".a.# = 1").contains("planned"),
+            "comment editing shipped; no stale roadmap promise"
         );
     }
 
@@ -1188,8 +1192,12 @@ mod tests {
         // del of a comment through the plain edit path is refused (comment edits
         // route elsewhere).
         assert!(
-            edit_err("{ \"a\": 1 }", "del(.a.#)").contains("use `Document::delete_comment`"),
+            edit_err("{ \"a\": 1 }", "del(.a.#)").contains("deleting comments"),
             "del(.a.#)"
+        );
+        assert!(
+            !edit_err("{ \"a\": 1 }", "del(.a.#)").contains("planned"),
+            "comment editing shipped; no stale roadmap promise"
         );
         // Deleting through an absent parent is a silent no-op.
         assert_eq!(edit_src("{ \"a\": 1 }", "del(.nope.deep)"), "{ \"a\": 1 }");

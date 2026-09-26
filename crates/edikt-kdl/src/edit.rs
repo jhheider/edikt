@@ -9,7 +9,9 @@ use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
 use crate::spell::spell_like;
 use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
-use kdl::{FormatConfig, KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
+use kdl::{
+    FormatConfig, KdlDocument, KdlDocumentFormat, KdlEntry, KdlEntryFormat, KdlNode, KdlValue,
+};
 
 pub fn apply(doc: &mut Kdl, expr: &Expr) -> Result<(), EditError> {
     // A path-expression target (`(.xs[] | select(...) | .n) = v`, #88)
@@ -91,6 +93,7 @@ pub(crate) fn set_in_doc(
     path: &[Step],
     value: &Value,
     depth: usize,
+    unit: &str,
 ) -> Result<(), EditError> {
     let Some(Step::Field(name)) = path.first() else {
         return Err(EditError::new(
@@ -106,7 +109,8 @@ pub(crate) fn set_in_doc(
             if path.len() > 1 {
                 return Err(EditError::new(format!("no node `{name}`")));
             }
-            insert_nodes(doc, value_to_nodes(name, value)?, doc.nodes().len(), depth);
+            let at = doc.nodes().len();
+            insert_nodes(doc, value_to_nodes(name, value)?, at, depth, unit);
             Ok(())
         }
         1 => {
@@ -114,7 +118,7 @@ pub(crate) fn set_in_doc(
             if path.len() == 1 {
                 set_node(node, value)
             } else {
-                set_in_node(node, &path[1..], value, depth + 1)
+                set_in_node(node, &path[1..], value, depth + 1, unit)
             }
         }
         n => match path.get(1) {
@@ -125,10 +129,10 @@ pub(crate) fn set_in_doc(
                 if path.len() == 2 {
                     set_node(node, value)
                 } else {
-                    set_in_node(node, &path[2..], value, depth + 1)
+                    set_in_node(node, &path[2..], value, depth + 1, unit)
                 }
             }
-            None => extend_repeated(doc, name, &occurrences, value, depth),
+            None => extend_repeated(doc, name, &occurrences, value, depth, unit),
             _ => Err(EditError::new(format!(
                 "`{name}` is repeated: address one occurrence (.{name}[i])"
             ))),
@@ -141,6 +145,7 @@ fn set_in_node(
     path: &[Step],
     value: &Value,
     depth: usize,
+    unit: &str,
 ) -> Result<(), EditError> {
     match &path[0] {
         Step::Field(k) if k == ARGS_KEY => match path.get(1) {
@@ -159,10 +164,26 @@ fn set_in_node(
                 return Ok(());
             }
             if node.children().is_some() {
-                set_in_doc(node.children_mut().as_mut().unwrap(), path, value, depth)
+                set_in_doc(
+                    node.children_mut().as_mut().unwrap(),
+                    path,
+                    value,
+                    depth,
+                    unit,
+                )
             } else if node.entries().is_empty() {
-                // A bare node grows a children block.
-                set_in_doc(node.ensure_children(), path, value, depth)
+                // A bare node grows a children block, set off by a space
+                // (`name {`) as a parsed block is.
+                if let Some(f) = node.format_mut()
+                    && f.before_children.is_empty()
+                {
+                    f.before_children = " ".into();
+                }
+                let children = node.ensure_children();
+                // The closing `}` sits at the node's own level (`depth` is
+                // the children's).
+                children.set_format(block_format(unit, depth.saturating_sub(1)));
+                set_in_doc(children, path, value, depth, unit)
             } else {
                 Err(EditError::new(format!(
                     "`{}` holds arguments, not children; cannot create `{k}` inside it",
@@ -175,7 +196,8 @@ fn set_in_node(
             "`[]` in assignment paths is not supported for KDL",
         )),
         Step::Comment(_) => Err(EditError::new(
-            "editing comments (`#`) is not supported yet (planned for v0.2)",
+            "editing comments (`#`): the comment step must end the path and be \
+             edited on its own, e.g. `.foo.# = \"text\"`",
         )),
     }
 }
@@ -253,6 +275,7 @@ fn extend_repeated(
     occurrences: &[usize],
     value: &Value,
     depth: usize,
+    unit: &str,
 ) -> Result<(), EditError> {
     let Value::Array(items) = value else {
         return Err(EditError::new(format!(
@@ -275,13 +298,19 @@ fn extend_repeated(
         new_nodes.extend(value_to_nodes(name, v)?);
     }
     let at = occurrences.last().unwrap() + 1;
-    insert_nodes(doc, new_nodes, at, depth);
+    insert_nodes(doc, new_nodes, at, depth, unit);
     Ok(())
 }
 
 // --- delete ----------------------------------------------------------------
 
-pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), EditError> {
+/// `in_children` marks a node's children block, whose first child's leading
+/// decor also holds the rest of the `{` line (see [`remove_nodes`]).
+pub(crate) fn delete_in_doc(
+    doc: &mut KdlDocument,
+    path: &[Step],
+    in_children: bool,
+) -> Result<(), EditError> {
     // Fan-out delete: `.foo[]` iterates the projection - repeated occurrences
     // when `/foo` is an array of objects, the node's contents otherwise -
     // expanded to concrete paths and deleted back-to-front.
@@ -313,13 +342,13 @@ pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), 
                 .filter(|n| n.name().value() == name)
                 .count();
             if occurrences > 1 {
-                return delete_in_doc(doc, &path[..1]);
+                return delete_in_doc(doc, &path[..1], in_children);
             }
         }
         let paths = edikt_core::expand_delete_paths(path, &whole)
             .map_err(|e| EditError::new(e.to_string()))?;
         for p in &paths {
-            delete_in_doc(doc, p)?;
+            delete_in_doc(doc, p, in_children)?;
         }
         return Ok(());
     }
@@ -333,7 +362,7 @@ pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), 
         return Ok(()); // jq semantics: deleting a miss is a no-op
     }
     if path.len() == 1 {
-        doc.nodes_mut().retain(|n| n.name().value() != name);
+        remove_nodes(doc, &occurrences, in_children);
         return Ok(());
     }
     if let Step::Index(i) = path[1] {
@@ -347,7 +376,7 @@ pub(crate) fn delete_in_doc(doc: &mut KdlDocument, path: &[Step]) -> Result<(), 
                 return Ok(());
             };
             if path.len() == 2 {
-                doc.nodes_mut().remove(occurrences[idx]);
+                remove_nodes(doc, &occurrences[idx..=idx], in_children);
                 return Ok(());
             }
             return delete_in_node(&mut doc.nodes_mut()[occurrences[idx]], &path[2..]);
@@ -393,7 +422,7 @@ fn delete_in_node(node: &mut KdlNode, path: &[Step]) -> Result<(), EditError> {
                 return Ok(());
             }
             match node.children_mut() {
-                Some(children) => delete_in_doc(children, path),
+                Some(children) => delete_in_doc(children, path, true),
                 None => Ok(()), // nothing there: no-op
             }
         }
@@ -403,8 +432,32 @@ fn delete_in_node(node: &mut KdlNode, path: &[Step]) -> Result<(), EditError> {
         }
         Step::Iterate => Err(EditError::new("del(.[]) is not supported for KDL")),
         Step::Comment(_) => Err(EditError::new(
-            "deleting comments (`#`) is not supported yet (planned for v0.2)",
+            "deleting comments (`#`): the comment step must end the path and be \
+             deleted on its own, e.g. `del(.foo.#)`",
         )),
+    }
+}
+
+/// Remove the nodes at `indices` (ascending). In a children block, kdl-rs
+/// keeps the rest of the `{` line (its line break, and any comment trailing
+/// the brace) in the first child's leading decor; when that child goes, the
+/// first survivor inherits that prefix so the block keeps its line break.
+/// The rest of the removed decor (the node's own head comment and indent)
+/// goes with it.
+fn remove_nodes(doc: &mut KdlDocument, indices: &[usize], in_children: bool) {
+    let brace_line = (in_children && indices.first() == Some(&0))
+        .then(|| {
+            let leading = doc.nodes()[0].format().map_or("", |f| f.leading.as_str());
+            leading.find('\n').map(|nl| leading[..=nl].to_owned())
+        })
+        .flatten();
+    for &i in indices.iter().rev() {
+        doc.nodes_mut().remove(i);
+    }
+    if let Some(prefix) = brace_line
+        && let Some(f) = doc.nodes_mut().first_mut().and_then(|n| n.format_mut())
+    {
+        f.leading.insert_str(0, &prefix);
     }
 }
 
@@ -479,14 +532,119 @@ fn one_node(name: &str, value: &Value) -> Result<KdlNode, EditError> {
     Ok(node)
 }
 
-/// Insert freshly built nodes at position `at`, formatted to sit at `depth`
-/// (indentation matches the level; internals autoformat below it).
-fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: usize) {
-    let config = FormatConfig::builder().indent_level(depth).build();
+/// Insert freshly built nodes at position `at`, formatted to sit at `depth`.
+///
+/// The new node copies the layout of the sibling it follows: its indentation
+/// on a line of its own, or a `;`-separated slot on a single-line block
+/// (`{ a 1; b 2 }`). Internals autoformat below it, indented by the file's
+/// own `unit`. With no sibling to copy, the level is `unit` x `depth`.
+fn insert_nodes(doc: &mut KdlDocument, nodes: Vec<KdlNode>, at: usize, depth: usize, unit: &str) {
+    let config = FormatConfig::builder()
+        .indent_level(depth)
+        .indent(unit)
+        .build();
+    let level_indent = own_line_indents(doc).next().map(str::to_owned);
     for (i, mut node) in nodes.into_iter().enumerate() {
         node.autoformat_config(&config);
-        doc.nodes_mut().insert(at + i, node);
+        close_blocks(&mut node, unit, depth);
+        let pos = at + i;
+        let prev_fmt = pos
+            .checked_sub(1)
+            .and_then(|p| doc.nodes().get(p))
+            .and_then(|p| p.format().cloned());
+        if let (Some(prev), Some(f)) = (prev_fmt, node.format_mut()) {
+            if prev.terminator.contains('\n') || prev.trailing.contains('\n') {
+                // Line layout: the previous line break is already there.
+                if let Some(indent) = &level_indent {
+                    f.leading = indent.clone();
+                }
+            } else {
+                // The previous node ends its line without a break: a `;` or
+                // the block's closing `}`. Join the same line, and make sure
+                // a terminator separates the two nodes (without one, the new
+                // node would read as more arguments of the previous one).
+                f.leading = if prev.leading.contains('\n') {
+                    format!("\n{}", level_indent.as_deref().unwrap_or(""))
+                } else {
+                    " ".into()
+                };
+                f.before_terminator = prev.before_terminator.clone();
+                f.terminator = prev.terminator.clone();
+                if prev.terminator.is_empty()
+                    && let Some(pf) = doc.nodes_mut()[pos - 1].format_mut()
+                {
+                    pf.before_terminator.clear();
+                    pf.terminator = ";".into();
+                }
+            }
+        }
+        doc.nodes_mut().insert(pos, node);
     }
+}
+
+/// Decor for a fresh children block of a node at `level`: the `{` ends its
+/// line and the closing `}` is indented to the node's own level.
+fn block_format(unit: &str, level: usize) -> KdlDocumentFormat {
+    KdlDocumentFormat {
+        leading: "\n".into(),
+        trailing: unit.repeat(level),
+    }
+}
+
+/// kdl-rs's autoformat leaves a built node's children blocks without decor,
+/// and then indents their closing `}` by four spaces a level whatever the
+/// configured indent; give each block the file's own indentation instead.
+fn close_blocks(node: &mut KdlNode, unit: &str, level: usize) {
+    if let Some(children) = node.children_mut() {
+        if children.format().is_none() {
+            children.set_format(block_format(unit, level));
+        }
+        for child in children.nodes_mut() {
+            close_blocks(child, unit, level + 1);
+        }
+    }
+}
+
+fn is_indent(s: &str) -> bool {
+    s.chars().all(|c| c == ' ' || c == '\t')
+}
+
+/// The indentation of each node in `doc` that starts a line of its own: the
+/// whitespace after the line break, which sits either at the end of the
+/// node's own `leading` decor (a block's first child, or after a comment) or
+/// in the previous node's terminator.
+fn own_line_indents(doc: &KdlDocument) -> impl Iterator<Item = &str> {
+    let mut prev_broke = false;
+    doc.nodes().iter().filter_map(move |node| {
+        let f = node.format()?;
+        let indent = match f.leading.rsplit_once('\n') {
+            Some((_, tail)) => Some(tail),
+            None if prev_broke => Some(f.leading.as_str()),
+            None => None,
+        }
+        .filter(|s| is_indent(s));
+        prev_broke = f.terminator.contains('\n') || f.trailing.contains('\n');
+        indent
+    })
+}
+
+/// The file's indentation unit, learned from its first indented node on a
+/// line of its own (its indent divided by its depth); kdl-rs's four spaces
+/// when nothing nested sits on its own line.
+pub(crate) fn indent_unit(doc: &KdlDocument) -> String {
+    fn walk(doc: &KdlDocument, depth: usize) -> Option<String> {
+        if depth > 0
+            && let Some(indent) =
+                own_line_indents(doc).find(|s| !s.is_empty() && s.len() % depth == 0)
+        {
+            return Some(indent[..indent.len() / depth].to_owned());
+        }
+        doc.nodes()
+            .iter()
+            .filter_map(|n| n.children())
+            .find_map(|c| walk(c, depth + 1))
+    }
+    walk(doc, 0).unwrap_or_else(|| "    ".into())
 }
 
 // --- emit -------------------------------------------------------------------
