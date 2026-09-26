@@ -2122,3 +2122,15 @@ fn yaml_block_scalar_at_eof_without_newline_does_not_panic() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "a: |\n  t\nb: 1");
 }
+
+#[test]
+fn add_assign_evaluates_its_right_side_before_the_lookup() {
+    // jq's order, in every format: a missing target with a bad right side
+    // reports the right side, not the miss (INI, KDL and `.env` used to look
+    // the target up first and say "path not found" / "key not found").
+    for (ty, src) in [("ini", "a = 1\n"), ("kdl", "a 1\n"), ("env", "A=1\n")] {
+        let (_o, err, code) = run(&["-t", ty, r#".nope += (1 + "a")"#], src);
+        assert_eq!(code, 2, "{ty}");
+        assert!(err.contains("cannot add number and string"), "{ty}: {err}");
+    }
+}
