@@ -8,7 +8,7 @@
 //!
 //! The format-agnostic seams live here too: the [`Document`] trait every format
 //! implements, the mutation driver ([`apply_mutation`] over a format's
-//! [`Mutable`] primitives), comment editing ([`apply_comment_mutation`]), and the
+//! `Mutable` primitives), comment editing ([`apply_comment_mutation`]), and the
 //! data-model helpers conversion shares ([`convert`]). There is no conversion
 //! trait; each format crate exports its own `emit` functions.
 
@@ -35,15 +35,18 @@ pub mod wrap;
 
 pub use ast::{BinOp, Expr, Step, render_path};
 pub use comment::{CommentKind, Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
-pub use comment_edit::{
-    LineComment, apply_comment_mutation, line_index, place_line_comment, sanitize_comment_line,
-};
+pub use comment_edit::{apply_comment_mutation, line_index};
+// Cross-crate plumbing for the format crates, not advertised as stable API.
+#[doc(hidden)]
+pub use comment_edit::{LineComment, place_line_comment, sanitize_comment_line};
 pub use document::{Document, check_doc_index};
 pub use error::EditError;
 pub use eval::{EvalError, eval, eval_with_comments, expand_delete_paths, expand_iter_paths};
 pub use feature::Feature;
 pub use index::{normalize_index, resolve_index};
-pub use mutate::{Mutable, MutationKind, add_values, apply_mutation};
+pub use mutate::apply_mutation;
+#[doc(hidden)]
+pub use mutate::{Mutable, MutationKind, add_values};
 pub use parser::{ParseError, hyphen_hint_for_unknown_function, parse};
 pub use paths::{eval_paths, lower_mutation, path_expr_target};
 pub use value::Value;

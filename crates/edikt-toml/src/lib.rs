@@ -17,7 +17,7 @@ pub use edit::{apply, emit};
 // crate's own `parse` is the document parser.
 use edikt_core::eval;
 pub use edikt_core::{
-    CommentKind, Commented, Document, EditError, Expr, Feature, Mutable, Step, Value, json,
+    CommentKind, Commented, Document, EditError, Expr, Feature, Step, Value, json,
     parse as parse_expr,
 };
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue};
