@@ -36,7 +36,7 @@ impl Mutable for Kdl {
         Kdl::value_at(self, path)
     }
     fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        Kdl::set(self, path, value)
+        self.set_value(path, value)
     }
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         Kdl::delete(self, path)

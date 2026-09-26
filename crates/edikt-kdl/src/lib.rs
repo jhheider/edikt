@@ -59,23 +59,31 @@ impl Kdl {
     /// Set the value at `path`, format-preserving. Existing arguments and
     /// properties update in place; a missing leaf node is created; a run of
     /// repeated nodes extends when the assignment's array matches its prefix.
-    /// A node (or the document) given a new object is updated key by key
-    /// (see [`Kdl::update_object`]); replacing a node's body with anything
-    /// else is refused (like YAML).
+    /// A collection over a collection is diffed by `edikt_core::assign`
+    /// (#117), so a node (or the document) given a new object is updated key
+    /// by key; replacing a node's body with anything else is refused (like
+    /// YAML). A set that fails partway leaves the document as it was.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        let before = self.doc.clone();
+        let result = edikt_core::assign(self, path, value);
+        if result.is_err() {
+            self.doc = before;
+        }
+        result
+    }
+
+    /// The primitive behind [`Kdl::set`], one value written in place.
+    pub(crate) fn set_value(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         if path.is_empty() {
-            let Value::Object(entries) = value else {
+            if !matches!(value, Value::Object(_)) {
                 return Err(EditError::new(format!(
                     "a KDL document is a list of nodes, so `.` can only be set to an object (got {})",
                     value.type_name()
                 )));
-            };
-            return self.update_object(path, &self.to_value(), entries);
-        }
-        if let Value::Object(entries) = value
-            && let Some(current @ Value::Object(_)) = self.value_at(path)
-        {
-            return self.update_object(path, &current, entries);
+            }
+            // The document always reads as an object, so this diffs, never
+            // comes back.
+            return edikt_core::assign(self, path, value);
         }
         let before = self.doc.to_string();
         let unit = edit::indent_unit(&self.doc);
@@ -90,58 +98,6 @@ impl Kdl {
             if fixed != after {
                 self.doc = KdlDocument::parse(&fixed)
                     .map_err(|e| EditError::new(format!("internal: re-reading an edit: {e}")))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Bring the object at `path` (the document, or a node's arguments,
-    /// properties and children) from `current` to `entries` in place: a key
-    /// whose value didn't change is left alone (so an unchanged value is a
-    /// no-op), a key that is gone is deleted, and every other key is set on
-    /// its own, under the same rules as `.path.key = v`. When one key can't
-    /// be set, the update is refused whole, the document left as it was.
-    fn update_object(
-        &mut self,
-        path: &[Step],
-        current: &Value,
-        entries: &[(String, Value)],
-    ) -> Result<(), EditError> {
-        let before = self.doc.clone();
-        let result = self.update_keys(path, current, entries);
-        if result.is_err() {
-            self.doc = before;
-        }
-        result
-    }
-
-    fn update_keys(
-        &mut self,
-        path: &[Step],
-        current: &Value,
-        entries: &[(String, Value)],
-    ) -> Result<(), EditError> {
-        let Value::Object(current) = current else {
-            unreachable!("callers pass an object");
-        };
-        let at = |k: &str| {
-            let mut p = path.to_vec();
-            p.push(Step::Field(k.to_string()));
-            p
-        };
-        for (k, _) in current
-            .iter()
-            .filter(|(k, _)| entries.iter().all(|(n, _)| n != k))
-        {
-            self.delete(&at(k))?;
-        }
-        for (k, v) in entries {
-            let same = current
-                .iter()
-                .find(|(n, _)| n == k)
-                .is_some_and(|(_, was)| was.identical(v));
-            if !same {
-                self.set(&at(k), v)?;
             }
         }
         Ok(())
