@@ -130,7 +130,7 @@ file.
 dotfiles), then the extension: `.json`, `.jsonc`/`.json5`, `.ini`/`.cfg`/`.conf`,
 `.env`/`.properties`/`.props`, `.toml`, `.yaml`/`.yml`, `.kdl`,
 `.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd`, both in any case (`up.YAML`, `.ENV`). One alias
-table (`FORMAT_ALIASES` in `crates/edikt/src/main.rs`) feeds `-t`/`-T`,
+table (`FORMAT_ALIASES` in `crates/edikt/src/format.rs`) feeds `-t`/`-T`,
 extension detection, and the error listing, so every detected extension is
 also a `-t` name; `envspaced`/`spaced` and `frontmatter`/`fm` are `-t` names
 only. There is no content sniffing: **stdin without `-t`,
