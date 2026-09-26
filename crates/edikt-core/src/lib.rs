@@ -46,7 +46,7 @@ pub use feature::Feature;
 pub use index::{normalize_index, resolve_index};
 pub use mutate::apply_mutation;
 #[doc(hidden)]
-pub use mutate::{Mutable, MutationKind, add_values};
+pub use mutate::{Mutable, MutationKind, add_values, assign, diff_grows};
 pub use parser::{ParseError, hyphen_hint_for_unknown_function, parse};
 pub use paths::{eval_paths, lower_mutation, path_expr_target};
 pub use value::Value;

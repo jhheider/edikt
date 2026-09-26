@@ -17,6 +17,8 @@
 use edikt_core::{EditError, Expr, Mutable, Step, Value, eval, render_path};
 
 use crate::Yaml;
+use crate::compose::NodeKind;
+use crate::layout::is_flow;
 use guard::Intent;
 
 mod delete;
@@ -132,6 +134,33 @@ impl Mutable for InDoc<'_> {
     }
     fn miss(&self, path: &[Step]) -> Result<(), EditError> {
         miss(self.strict, path)
+    }
+    /// The diff is declined, and the collection replaced whole, where
+    /// element edits can't express it: an alias (`*b`), which reads as its
+    /// anchor's collection but is one scalar token here; a flow collection
+    /// that grows (it is respelled, as a new one would be); a mapping with a
+    /// duplicate key, where a key names more than one entry; and a mapping
+    /// with a `<<` merge that loses a key, which may be one the merge
+    /// supplies, or one that would uncover a merged value when deleted.
+    fn diffs(&self, path: &[Step], current: &Value, value: &Value) -> bool {
+        let text = &self.doc.source;
+        let resolve::Resolved::Found(node) = resolve::resolve(self.doc.root(self.idx), path) else {
+            return false;
+        };
+        if is_flow(text, node) && edikt_core::diff_grows(current, value) {
+            return false;
+        }
+        match (&node.kind, current, value) {
+            (NodeKind::Sequence(_), _, Value::Array(_)) => true,
+            (NodeKind::Mapping(entries), Value::Object(old), Value::Object(new)) => {
+                let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+                let duplicate = (1..keys.len()).any(|i| keys[..i].contains(&keys[i]));
+                let merge = keys.contains(&"<<");
+                let loses = old.iter().any(|(k, _)| new.iter().all(|(n, _)| n != k));
+                !duplicate && !(merge && loses)
+            }
+            _ => false,
+        }
     }
 }
 

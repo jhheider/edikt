@@ -500,6 +500,39 @@ fn assigning_a_scalar_to_repeated_nodes_errors() {
 }
 
 #[test]
+fn a_collection_over_a_collection_keeps_what_it_keeps() {
+    // #117: repeated nodes and argument rows shrink in place.
+    let src = "bind 1 // one\nbind 2 // two\nbind 3\n";
+    assert_eq!(edit_src(src, ".bind = [1, 3]"), "bind 1 // one\nbind 3\n");
+    assert_eq!(
+        edit_src(src, ".bind |= [.[0], .[2]]"),
+        "bind 1 // one\nbind 3\n"
+    );
+    assert_eq!(
+        edit_src(src, ".bind = [1, 3, 4]"),
+        "bind 1 // one\nbind 3\nbind 4\n"
+    );
+    assert_eq!(edit_src("n 1 2 3 // n\n", ".n = [1, 3]"), "n 1 3 // n\n");
+    // A reorder is a wholesale replacement, which KDL refuses.
+    assert!(edit_err(src, ".bind = [3, 2, 1]").contains("wholesale"));
+    // Nested blocks diff too, and CRLF lines stay CRLF.
+    assert_eq!(
+        edit_src(
+            "o {\n    a 1 // a\n    b 2\n    p {\n        x 1 // x\n        y 2\n    }\n}\n",
+            ".o = {a: 1, p: {x: 1}}"
+        ),
+        "o {\n    a 1 // a\n    p {\n        x 1 // x\n    }\n}\n"
+    );
+    assert_eq!(
+        edit_src(
+            "o {\r\n    a 1 // a\r\n    b 2\r\n}\r\n",
+            ".o = {a: 1, c: 3}"
+        ),
+        "o {\r\n    a 1 // a\r\n    c 3\r\n}\r\n"
+    );
+}
+
+#[test]
 fn an_edit_that_fails_partway_leaves_the_document_as_it_was() {
     // The first edit of the chain applies, the second is refused: the
     // document must not keep the first.
@@ -510,8 +543,17 @@ fn an_edit_that_fails_partway_leaves_the_document_as_it_was() {
 }
 
 #[test]
-fn assigning_a_non_prefix_array_to_repeated_nodes_errors() {
-    let err = edit_err(SAMPLE, ".bind = [[\"nomatch\"], [\"y\"]]");
+fn assigning_repeated_nodes_diffs_or_errors() {
+    // Each occurrence is its own element, so a new array of the same length
+    // sets each one's arguments in place (#117).
+    assert_eq!(
+        edit_src(SAMPLE, ".bind = [[\"nomatch\"], [\"y\"]]"),
+        SAMPLE
+            .replace("\"Mod+h\" \"focus-left\"", "nomatch")
+            .replace("\"Mod+l\" \"focus-right\"", "y")
+    );
+    // One the diff can't reach is a wholesale replacement, still refused.
+    let err = edit_err(SAMPLE, ".bind = [[\"y\"]]");
     assert!(err.contains("wholesale is not supported"), "got: {err}");
 }
 

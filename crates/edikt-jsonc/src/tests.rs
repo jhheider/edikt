@@ -1308,3 +1308,60 @@ fn json5_comments_are_still_addressable() {
         "expected the bare key in the comment projection: {flat:?}"
     );
 }
+
+#[test]
+fn a_collection_over_a_collection_keeps_what_it_keeps() {
+    // #117: `=`/`|=` of a collection over a collection edits only what
+    // changed, so the other elements keep their comments and layout.
+    let obj = "{\n  \"o\": {\n    \"a\": 1, // one\n    \"b\": 2\n  }\n}\n";
+    assert_eq!(
+        edit_src(obj, ".o = {a: 1}"),
+        "{\n  \"o\": {\n    \"a\": 1 // one\n  }\n}\n"
+    );
+    assert_eq!(
+        edit_src(obj, ".o = {a: 1, b: 3, c: 4}"),
+        "{\n  \"o\": {\n    \"a\": 1, // one\n    \"b\": 3,\n    \"c\": 4\n  }\n}\n"
+    );
+    // Nested objects diff too.
+    assert_eq!(
+        edit_src(
+            "{\n  \"o\": {\n    \"p\": {\n      \"x\": 1, // x\n      \"y\": 2\n    }\n  }\n}\n",
+            ".o = {p: {x: 1}}"
+        ),
+        "{\n  \"o\": {\n    \"p\": {\n      \"x\": 1 // x\n    }\n  }\n}\n"
+    );
+    let arr = "{\n  \"k\": [\n    1, // one\n    2, // two\n    3 // three\n  ]\n}\n";
+    let with = |body: &str| format!("{{\n  \"k\": [\n{body}  ]\n}}\n");
+    assert_eq!(
+        edit_src(arr, ".k = [1, 3]"),
+        with("    1, // one\n    3 // three\n")
+    );
+    assert_eq!(
+        edit_src(arr, ".k |= [.[0], .[2]]"),
+        with("    1, // one\n    3 // three\n")
+    );
+    assert_eq!(
+        edit_src(arr, ".k = [1, 3, 4]"),
+        with("    1, // one\n    3, // three\n    4\n")
+    );
+    // In-place change at an index keeps the comment beside it.
+    assert_eq!(
+        edit_src(arr, ".k = [1, 5, 3]"),
+        with("    1, // one\n    5, // two\n    3 // three\n")
+    );
+    // Duplicates: the first ones stay, the later one goes.
+    assert_eq!(
+        edit_src("[\n  1, // a\n  1, // b\n  2\n]\n", ". = [1, 2]"),
+        "[\n  1, // a\n  2\n]\n"
+    );
+    // A reorder is one replacement, as before.
+    assert_eq!(edit_src(arr, ".k = [3, 2, 1]"), "{\n  \"k\": [3,2,1]\n}\n");
+    // CRLF: the removed line goes whole, the added one takes CRLF.
+    assert_eq!(
+        edit_src(
+            "{\r\n  \"a\": 1, // one\r\n  \"b\": 2\r\n}\r\n",
+            ". = {a: 1, c: 3}"
+        ),
+        "{\r\n  \"a\": 1, // one\r\n  \"c\": 3\r\n}\r\n"
+    );
+}

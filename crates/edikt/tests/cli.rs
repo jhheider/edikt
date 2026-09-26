@@ -2552,3 +2552,57 @@ fn add_assign_evaluates_its_right_side_before_the_lookup() {
         assert!(err.contains("cannot add number and string"), "{ty}: {err}");
     }
 }
+
+#[test]
+fn a_collection_over_a_collection_keeps_unchanged_elements() {
+    // #117's repros, and the same edits in the other formats: the elements
+    // the new value keeps keep their bytes and comments.
+    for (ty, src, expr, want) in [
+        (
+            "jsonc",
+            "{\n  \"o\": {\n    \"a\": 1, // one\n    \"b\": 2\n  }\n}\n",
+            ".o = {a: 1}",
+            "{\n  \"o\": {\n    \"a\": 1 // one\n  }\n}\n",
+        ),
+        (
+            "yaml",
+            "k:\n  - 1 # one\n  - 2 # two\n  - 3\n",
+            ".k = [1, 3]",
+            "k:\n  - 1 # one\n  - 3\n",
+        ),
+        (
+            "toml",
+            "k = [\n  1, # one\n  2, # two\n  3,\n]\n",
+            ".k = [1, 3]",
+            "k = [\n  1, # one\n  3,\n]\n",
+        ),
+        (
+            "toml",
+            "k = [\n  1, # one\n  2, # two\n  3,\n]\n",
+            ".k |= [.[0], .[2]]",
+            "k = [\n  1, # one\n  3,\n]\n",
+        ),
+        (
+            "yaml",
+            "k: [\n  1, # one\n  2, # two\n  3\n]\n",
+            ".k = [1, 3]",
+            "k: [\n  1, # one\n  3\n]\n",
+        ),
+        (
+            "jsonc",
+            "[\n  1, // one\n  2, // two\n  3\n]\n",
+            ". = [1, 3, 4]",
+            "[\n  1, // one\n  3,\n  4\n]\n",
+        ),
+        (
+            "kdl",
+            "bind 1 // one\nbind 2 // two\nbind 3\n",
+            ".bind = [1, 3]",
+            "bind 1 // one\nbind 3\n",
+        ),
+    ] {
+        let (out, err, code) = run(&["-t", ty, expr], src);
+        assert_eq!((code, err.as_str()), (0, ""), "{ty} {expr}");
+        assert_eq!(out, want, "{ty} {expr}");
+    }
+}
