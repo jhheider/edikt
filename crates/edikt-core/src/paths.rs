@@ -161,8 +161,9 @@ fn step_paths<'v>(
         },
         Step::Comment(_) => {
             return Err(EvalError::new(
-                "a comment (`#`) can't be part of a path expression; \
-                 a comment edit takes a plain path like `.foo.#`",
+                "a comment (`#`) is not a value path, so `path(...)` can't resolve \
+                 one; a comment edit ends its target in `.#`, e.g. \
+                 `(.xs[] | select(...) | .n.#) = \"text\"`",
             ));
         }
     }
@@ -397,6 +398,15 @@ mod tests {
         assert_eq!(
             ns(&one("del(.items[] | select(.n != 2))")),
             vec![json!([2])]
+        );
+        // jq's postfix step after the group (#105) is the same target.
+        assert_eq!(
+            ns(&one(r#"(.items[] | select(.id == "b")).n = 5"#)),
+            vec![json!([1, 5, 3])]
+        );
+        assert_eq!(
+            paths(r#"(.items[] | select(.n > 1))[]"#, &doc)[..2],
+            [".items[1].id", ".items[1].n"]
         );
         // Zero matches: the document is unchanged.
         assert_eq!(one(r#"(.items[] | select(.id == "zz") | .n) = 5"#), doc);

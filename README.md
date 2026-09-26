@@ -42,9 +42,15 @@ edikt -i '.services.web.replicas = 3' compose.yaml
 # compute, not just place
 edikt -i '.version |= . + "-dev"' package.jsonc
 
+# merge keys into an object (jq's `+`); its other entries keep their bytes
+edikt -i '.compilerOptions += {strict: true, noEmit: true}' tsconfig.json
+
 # edit a list entry by its key, not its index - select() in the path, as in jq
-edikt -i '(.npcs[] | select(.id == "tobin") | .status) = "found"' npcs.yaml
+edikt -i '(.npcs[] | select(.id == "tobin")).status = "found"' npcs.yaml
 edikt -i 'del(.plugins[] | select(.enabled == false))' plugins.jsonc
+
+# comments are addressable too: annotate every match
+edikt -i '(.npcs[] | select(.status == "dead")).status.#.inline = "RIP"' npcs.yaml
 
 # stream-first, like sed (stdin has no extension, so name the format)
 cat settings.jsonc | edikt -t jsonc 'del(.telemetry) | .theme = "dark"'

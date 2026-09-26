@@ -178,6 +178,10 @@ an *edit* language, not a general-purpose one.
 - index `.arr[0]`, `.arr[-1]`
 - iterate `.arr[]`, `.obj[]`
 - pipe `EXPR | EXPR`
+- a path step after a parenthesized expression, as in jq: `(EXPR).n`,
+  `(EXPR)[0]`, `(EXPR)[]`, `(EXPR).#` are `(EXPR) | .n` and so on, in a query
+  and as an assignment target (#105). Only a parenthesized group takes one;
+  `f(x).n` and `[...][0]` still need the `|`
 - multi-output `.a, .b, .c`
 - alternative `EXPR // EXPR` - the left's truthy outputs, else the right
   (a miss, `null`, or `false` falls back; a type *error* still propagates)
@@ -209,7 +213,10 @@ an *edit* language, not a general-purpose one.
 **Mutation**
 - assign `PATH = <expr>` - the RHS is evaluated in the value calculus
 - update-assign `PATH |= <expr>` - RHS sees the current value as `.`
-- append `.arr += [<expr>]`
+- append `.arr += [<expr>]`; merge `.obj += {k: <expr>}` (jq's `+` on two
+  objects, applied as one keyed edit per right-hand key: a shared key's value
+  is replaced in place, a new key is added at the end, and the object's other
+  entries, comments and layout are untouched)
 - delete `del(PATH)`
 
   **Mutations fan out over `[]`** exactly like jq: `.a[] |= f` maps `f` over
@@ -231,8 +238,9 @@ an *edit* language, not a general-purpose one.
   composed freely and parenthesized as in jq:
   `(.items[] | select(.id == "b") | .n) = 5`,
   `(.bin[] | select(.name | startswith("x")) | .path) |= ltrimstr("./")`,
-  `del(.items[] | select(.stale))`. (A step can't follow a parenthesized group
-  yet, so it is `(... | .n)`, not jq's `(...).n`.) The semantics are jq's: the left side
+  `del(.items[] | select(.stale))`. jq's postfix spelling works too:
+  `(.items[] | select(.id == "b")).n = 5` is the same target as
+  `(... | .n)` (see Navigation). The semantics are jq's: the left side
   first resolves, against the document as it stands before this assignment, to
   a **set of concrete paths** (`.items[1].n`, ...), and each is then edited on
   its own through the ordinary single-path splice, so every untouched byte
@@ -258,8 +266,16 @@ an *edit* language, not a general-purpose one.
     `select(...)`/`^dN` scope, and it judges each assignment against the
     document as the program started, so a path created by an earlier
     statement of the same program isn't seen.
-  - Comment steps (`.#`) don't compose with a path expression yet; a comment
-    edit takes a plain path.
+  - **A comment edit takes a path expression too** (#109), when it ends in a
+    comment step: `(.items[] | select(.id == "b") | .n.#) = "x"`,
+    `(.items[] | select(.id == "b")).n.#.inline |= ascii_upcase`,
+    `del(.items[] | select(.stale) | .#)`. The path part resolves to concrete
+    paths exactly as above, per document of a stream, and each node's comment
+    is then edited as `.items[1].n.# = "x"` would edit it (same kinds, same
+    wrapping, same layout rules). Zero matches is the same noted no-op. One
+    gap: `del` of a comment this way over a **multi-document** stream errors
+    (the per-document delete doesn't exist yet), rather than risk deleting a
+    comment at the same path in a document that didn't match.
 
   `path(f)` is the same resolution as a query: it outputs each concrete path
   as a jq path array (`path(.items[] | select(.id == "b"))` is `["items",1]`),
@@ -279,7 +295,13 @@ doesn't just place literals):
   select a few keys. Quoted (`{"a.b"}`) and hyphenated (`{default-features}`)
   keys pluck too; a key the input lacks yields `null`, as in jq
 - arithmetic on numbers: `+ - * / %`
-- string concat with `+`
+- string concat with `+`, and jq's other `+` overloads: arrays concatenate,
+  and **two objects merge shallowly** (#106): `{a: 1, b: 2} + {b: 3, c: 4}` is
+  `{a: 1, b: 3, c: 4}`, the right operand's value winning a shared key, the
+  left's keys first in their own order, then the right's new keys. `null` is
+  `+`'s identity on either side (`null + x` is `x`). This is jq compatibility
+  of an existing operator, not a new builtin; there is no deep merge (`*` on
+  objects stays an error)
 - a small function registry, jq-named: `length`, `keys`, `has`, `type`,
   `tostring`, `tonumber`, `ascii_upcase`, `ascii_downcase`, `ltrimstr`,
   `rtrimstr`, `startswith`, `endswith`, `split`, `join`, and the regex family
@@ -337,7 +359,9 @@ edikt is in exactly one mode per run, decided by the expression:
 - **structural, otherwise** (computed result, or output ≠ input) -> the value
   **emitted via the output format's emitter**. Layout is the emitter's own, but
   a **pure-path** selection carries its **comments** across (the uniform
-  comment model; see conversion below); a synthesized value has none to carry.
+  comment model; see conversion below); a synthesized value has none to carry
+  (and warns that they were dropped only when it was built from source
+  values, not for `path(...)`, `keys` and the like).
   Lossy degradations warn (`--strict` promotes); a value the output format
   **cannot represent errors, naming the formats that can** (derived from
   `Feature` sets).
@@ -541,7 +565,15 @@ N-out against one model, not N×N per pair. A kind the target's grammar can't
 hold **remaps** to one it can, with a warning (env has no inline comments ->
 own line); a target with no `Comments` feature at all (JSON) **drops** them,
 with a warning. Comments ride **pure-path** selections; a computed result has
-none to carry, so converting a commented source through one warns. `-T FMT`
+none to carry, so converting a commented source through one warns, **when the
+result could hold source values** (#110): a structural result built from
+paths or `select` (`{first: .items[0]}`, `[.xs[] | select(.on)]`, `.a + {b:
+1}`) warns, while one the language computed fresh never carried a comment
+and doesn't (`path(...)`, `keys`, `split`/`match`/`capture`, `{n: length}`,
+literals, arithmetic, comparisons). The judgment is on the expression, and
+errs toward the warning: an unknown call counts as carrying. Which source
+nodes a projected value came from isn't tracked, so the check stays
+document-level (any comment in the source). `-T FMT`
 (≠ input) parses -> `Value` (+ commented projection) -> applies the expression ->
 **emits the target format**.
 

@@ -178,8 +178,15 @@ fn run(args: Args) -> Result<ExitCode> {
             // A comment mutation (`.foo.# = ...`) writes through the comment
             // methods; everything else through the value edit path.
             if mexpr.has_comment() {
+                // A comment edit through a path expression that matches
+                // nothing is the same noted no-op as a value edit's (#109).
+                let unmatched = unmatched_targets(mexpr, &doc.to_values());
                 let warnings = edikt_core::apply_comment_mutation(doc.as_mut(), mexpr)
                     .with_context(|| loc.clone())?;
+                for lhs in &unmatched {
+                    eprintln!("edikt: note: {loc}: `{lhs}` matched nothing; no change");
+                }
+                unmatched_edit |= !unmatched.is_empty();
                 warn(args.strict, &loc, &warnings)?;
             } else {
                 // `=` auto-vivifies missing paths (jq-style). Surface every
@@ -321,10 +328,14 @@ fn run(args: Args) -> Result<ExitCode> {
         // A synthesized result carries no comments; converting a commented
         // source through one still loses them, and that stays honest. But a
         // comment query (`.foo.#`, `comments`) *surfaces* comments; its result
-        // is the comment text, nothing is dropped, so it never warns.
+        // is the comment text, nothing is dropped, so it never warns. Nor
+        // does a value the language computed fresh (`path(...)`, `keys`,
+        // `{n: length}`): it never came from the source, so it never had a
+        // comment to drop (#110).
         if target != in_fmt
             && annotated.is_none()
             && !expr.has_comment()
+            && expr.projects_input()
             && doc.has_comments()
             && results
                 .iter()

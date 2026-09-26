@@ -60,12 +60,23 @@ pub trait Mutable {
 
     /// `path += addend`, where `current` is the value there: array onto
     /// array goes through [`Mutable::append`] when the format has one;
+    /// object onto object is jq's shallow merge, written as one keyed `set`
+    /// per right-hand entry, so the object's other entries keep their bytes;
     /// anything else writes `current + addend`.
     fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
         if let (Value::Array(_), Value::Array(items)) = (current, addend)
             && let Some(done) = self.append(path, items)
         {
             return done;
+        }
+        if let (Value::Object(_), Value::Object(entries)) = (current, addend) {
+            let mut at = path.to_vec();
+            for (k, v) in entries {
+                at.push(Step::Field(k.clone()));
+                self.set(&at, v)?;
+                at.pop();
+            }
+            return Ok(());
         }
         let sum = add_values(current, addend)?;
         self.set(path, &sum)
@@ -135,10 +146,16 @@ pub fn apply_mutation<M: Mutable + ?Sized>(doc: &mut M, expr: &Expr) -> Result<(
             let whole = doc.whole();
             let addend = eval_one(rhs, &whole)?;
             if fans_out::<M>(steps) {
-                // `.a[] += x`: jq's `.a[] |= . + x`, per element.
-                return set_each(doc, steps, &whole, false, |current| {
-                    add_values(current, &addend)
-                });
+                // `.a[] += x`: jq's `.a[] |= . + x`, per element, each
+                // through the format's own `add` (in-place append, keyed
+                // merge) like a hand-typed `.a[i] += x`.
+                for path in expand_iter_paths(steps, &whole)? {
+                    let Some(current) = doc.value_at(&path) else {
+                        return doc.miss(&path);
+                    };
+                    doc.add(&path, &current, &addend)?;
+                }
+                return Ok(());
             }
             let Some(current) = doc.value_at(steps) else {
                 return doc.miss(steps);
@@ -288,6 +305,59 @@ mod tests {
             ok("(.xs[] | select(. == 2)) = 9"),
             with(json!(1), json!([1, 9]), json!("x"))
         );
+    }
+
+    /// A document on the trait's default `add`, recording each `set` path.
+    struct Keyed {
+        mem: Mem,
+        sets: Vec<String>,
+    }
+
+    impl Mutable for Keyed {
+        fn whole(&self) -> Value {
+            self.mem.whole()
+        }
+        fn value_at(&self, path: &[Step]) -> Option<Value> {
+            self.mem.value_at(path)
+        }
+        fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+            self.sets.push(crate::render_path(path));
+            self.mem.set(path, value)
+        }
+        fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
+            self.mem.delete(path)
+        }
+    }
+
+    #[test]
+    fn object_add_assign_is_one_keyed_set_per_right_hand_entry() {
+        // #106: `+=` of an object is jq's shallow merge, written key by key
+        // so a format leaves the object's other entries alone.
+        let run = |expr: &str| {
+            let mut k = Keyed {
+                mem: Mem {
+                    v: json!({"o": {"a": 1, "b": 2}, "xs": [{"a": 1}, {"b": 2}]}),
+                    adds: 0,
+                },
+                sets: Vec::new(),
+            };
+            apply_mutation(&mut k, &parse(expr).unwrap()).unwrap();
+            (k.mem.v, k.sets)
+        };
+        let (v, sets) = run(".o += {b: 3, c: 4}");
+        assert_eq!(sets, [".o.b", ".o.c"]);
+        assert_eq!(
+            v.to_json(),
+            r#"{"o":{"a":1,"b":3,"c":4},"xs":[{"a":1},{"b":2}]}"#
+        );
+        // Fan-out and path-expression targets merge per element the same way.
+        let (_v, sets) = run(".xs[] += {c: 0}");
+        assert_eq!(sets, [".xs[0].c", ".xs[1].c"]);
+        let (_v, sets) = run("(.xs[] | select(.b)) += {c: 0}");
+        assert_eq!(sets, [".xs[1].c"]);
+        // Anything but object onto object still writes the sum.
+        let (_v, sets) = run(".o.a += 1");
+        assert_eq!(sets, [".o.a"]);
     }
 
     #[test]

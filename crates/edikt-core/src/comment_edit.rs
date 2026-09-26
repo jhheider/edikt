@@ -3,7 +3,7 @@
 //! write methods. The evaluator computes the new text in the value calculus
 //! (so `.foo.# |= gsub("a"; "b")` works); the format splices it in place.
 
-use crate::{CommentKind, Document, EditError, Expr, Step, Value, eval};
+use crate::{CommentKind, Document, EditError, Expr, Step, Value, eval, eval_paths};
 
 /// Apply a comment-mutation expression via the document's comment write
 /// methods, returning any warnings (layout expansion, kind remap). Comment-free
@@ -32,25 +32,27 @@ fn apply_inner(
             let append = matches!(expr, Expr::AddAssign(..));
             bulk_edit(doc, rhs, append, warnings)
         }
-        Expr::Assign(lhs, rhs) => {
-            let (prefix, kind) = comment_target(lhs)?;
-            let text = eval_text(rhs, &doc.to_value())?;
-            warnings.extend(doc.set_comment(prefix, kind, &text)?);
-            Ok(())
-        }
-        Expr::UpdateAssign(lhs, rhs) => {
-            let (prefix, kind) = comment_target(lhs)?;
-            // `|=` sees the current comment (or "" if absent) as `.`.
-            let current = current_comment(doc, prefix, kind).unwrap_or_default();
-            let text = eval_text(rhs, &Value::Str(current))?;
-            warnings.extend(doc.set_comment(prefix, kind, &text)?);
-            Ok(())
-        }
-        Expr::AddAssign(lhs, rhs) => {
-            let (prefix, kind) = comment_target(lhs)?;
-            let mut text = current_comment(doc, prefix, kind).unwrap_or_default();
-            text.push_str(&eval_text(rhs, &doc.to_value())?);
-            warnings.extend(doc.set_comment(prefix, kind, &text)?);
+        Expr::Assign(lhs, rhs) | Expr::UpdateAssign(lhs, rhs) | Expr::AddAssign(lhs, rhs) => {
+            let (targets, kind) = comment_targets(doc, lhs)?;
+            // `=` and `+=` evaluate their right side once, against the whole
+            // document, as a value edit does.
+            let whole = match expr {
+                Expr::UpdateAssign(..) => None,
+                _ => Some(eval_text(rhs, &doc.to_value())?),
+            };
+            for (di, prefix) in targets {
+                // `|=` sees the current comment (or "" if absent) as `.`.
+                let current = || current_comment(doc, di, &prefix, kind).unwrap_or_default();
+                let text = match (expr, &whole) {
+                    (Expr::AddAssign(..), Some(tail)) => current() + tail,
+                    (_, Some(text)) => text.clone(),
+                    _ => eval_text(rhs, &Value::Str(current()))?,
+                };
+                warnings.extend(match di {
+                    Some(di) => doc.set_comment_in_doc(di, &prefix, kind, &text)?,
+                    None => doc.set_comment(&prefix, kind, &text)?,
+                });
+            }
             Ok(())
         }
         Expr::Call(name, args) if name == "del" => {
@@ -60,11 +62,19 @@ fn apply_inner(
             if is_comments_stream(&args[0]) {
                 return bulk_delete(doc);
             }
-            let steps = args[0]
-                .as_path()
-                .ok_or_else(|| EditError::new("del(...) takes a path"))?;
-            let (prefix, kind) = split_comment(steps)?;
-            doc.delete_comment(prefix, kind)
+            let (targets, kind) = comment_targets(doc, &args[0])?;
+            if targets.iter().any(|(di, _)| di.is_some()) && doc.to_values().len() > 1 {
+                // `delete_comment` has no per-document form, and a concrete
+                // path from one document may name a comment in another.
+                return Err(EditError::new(
+                    "deleting a comment through a path expression isn't supported \
+                     on a multi-document stream yet; use a plain path like `del(.a.#)`",
+                ));
+            }
+            for (_, prefix) in targets {
+                doc.delete_comment(&prefix, kind)?;
+            }
+            Ok(())
         }
         // Document selection with a comment edit: comment edits already apply
         // to every document, and per-document comment editing is a follow-up.
@@ -141,12 +151,65 @@ fn bulk_delete(doc: &mut dyn Document) -> Result<(), EditError> {
     Ok(())
 }
 
-/// The (value-prefix, kind) of a comment-assignment left side.
-fn comment_target(lhs: &Expr) -> Result<(&[Step], CommentKind), EditError> {
-    let steps = lhs
-        .as_path()
-        .ok_or_else(|| EditError::new("left side of a comment assignment must be a path"))?;
-    split_comment(steps)
+/// One node a comment edit targets: the document it was resolved in (`None`
+/// for a plain path, which the format applies across a stream itself), and
+/// its path.
+type Target = (Option<usize>, Vec<Step>);
+
+/// A comment edit's targets: the nodes whose `kind` comment it edits, each
+/// with the document it was resolved in.
+///
+/// A plain path (`.a.b.#`) is one target, `None`: the format applies it as it
+/// always has. A path expression ending in a comment step
+/// (`(.xs[] | select(.id == "b") | .n.#)`, #109) resolves its value part
+/// against each document to concrete paths, exactly as a value edit through
+/// a path expression does (#88), and each becomes a target in its own
+/// document. Resolving to nothing is a no-op.
+fn comment_targets(
+    doc: &dyn Document,
+    lhs: &Expr,
+) -> Result<(Vec<Target>, CommentKind), EditError> {
+    if let Some(steps) = lhs.as_path() {
+        let (prefix, kind) = split_comment(steps)?;
+        return Ok((vec![(None, prefix.to_vec())], kind));
+    }
+    let (value_part, kind) = split_comment_target(lhs).ok_or_else(|| {
+        EditError::new(
+            "left side of a comment assignment must be a path ending in `.#` \
+             (a plain path, or a path expression like `(.xs[] | select(...) | .n.#)`)",
+        )
+    })?;
+    let mut targets = Vec::new();
+    for (di, value) in doc.to_values().iter().enumerate() {
+        for path in eval_paths(&value_part, value)? {
+            targets.push((Some(di), path));
+        }
+    }
+    Ok((targets, kind))
+}
+
+/// Split a comment-edit target that is a path expression into its value part
+/// and the comment kind: `(f | .n.#)` and `(f).n.#` are `(f | .n, head)`.
+/// `None` when the expression doesn't end in a comment step (or is a plain
+/// path, which needs no splitting).
+pub fn split_comment_target(lhs: &Expr) -> Option<(Expr, CommentKind)> {
+    match lhs {
+        Expr::Path(steps) => match steps.split_last() {
+            Some((Step::Comment(kind), prefix)) => Some((Expr::Path(prefix.to_vec()), *kind)),
+            _ => None,
+        },
+        Expr::Pipe(a, b) => {
+            let (rest, kind) = split_comment_target(b)?;
+            // `f | .#`: the comment of `f`'s own nodes.
+            let value = if rest.as_path().is_some_and(<[Step]>::is_empty) {
+                (**a).clone()
+            } else {
+                Expr::Pipe(a.clone(), Box::new(rest))
+            };
+            Some((value, kind))
+        }
+        _ => None,
+    }
 }
 
 /// Split a `#`-terminated path into its value prefix and the comment kind.
@@ -309,11 +372,20 @@ pub fn line_index(source: &str, at: usize) -> usize {
     source[..at.min(source.len())].matches('\n').count()
 }
 
-/// The current text of the comment at `prefix`/`kind`, if any.
-fn current_comment(doc: &dyn Document, prefix: &[Step], kind: CommentKind) -> Option<String> {
+/// The current text of the comment at `prefix`/`kind`, if any: in document
+/// `di` of a stream, or (`None`) the document a plain comment edit reads.
+fn current_comment(
+    doc: &dyn Document,
+    di: Option<usize>,
+    prefix: &[Step],
+    kind: CommentKind,
+) -> Option<String> {
     let mut path = prefix.to_vec();
     path.push(Step::Comment(kind));
-    let commented = doc.to_commented()?;
+    let commented = match di {
+        Some(di) => doc.to_commented_all().into_iter().nth(di)?,
+        None => doc.to_commented()?,
+    };
     match commented.resolve_comment(&path).into_iter().next() {
         Some(Value::Str(s)) => Some(s),
         _ => None,
@@ -379,5 +451,38 @@ mod tests {
         assert_eq!(place("A=1\n# old", 0, false, None), "A=1");
         // A terminated file stays terminated.
         assert_eq!(place("A=1\n", 0, false, Some("x")), "A=1\n# x\n");
+    }
+
+    #[test]
+    fn a_comment_target_through_a_path_expression_splits_off_its_kind() {
+        // #109: the value part resolves to concrete paths; the kind rides along.
+        let split = |src: &str| {
+            let (value, kind) = split_comment_target(&crate::parse(src).unwrap()).unwrap();
+            (value, kind)
+        };
+        let p = |src: &str| crate::parse(src).unwrap();
+        assert_eq!(
+            split(r#".items[] | select(.id == "b") | .n.#"#),
+            (
+                p(r#".items[] | select(.id == "b") | .n"#),
+                CommentKind::Head
+            )
+        );
+        assert_eq!(
+            split(r#"(.items[] | select(.id == "b")).n.#.inline"#),
+            (
+                p(r#".items[] | select(.id == "b") | .n"#),
+                CommentKind::Inline
+            )
+        );
+        // `f | .#` is the comment of `f`'s own nodes.
+        assert_eq!(
+            split(".items[] | .#.foot"),
+            (p(".items[]"), CommentKind::Foot)
+        );
+        assert_eq!(split(".a.#"), (p(".a"), CommentKind::Head));
+        // Not a comment target.
+        assert!(split_comment_target(&p(".items[] | .n")).is_none());
+        assert!(split_comment_target(&p(".a.# | ascii_upcase")).is_none());
     }
 }
