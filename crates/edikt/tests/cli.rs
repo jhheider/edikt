@@ -1203,6 +1203,37 @@ fn packager_flags_emit_docs() {
 }
 
 #[test]
+fn format_names_and_extensions_share_one_alias_table() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    // Extension detection ignores case, like `-t` always has.
+    let y = format!("{dir}/alias-up.YAML");
+    std::fs::write(&y, "a: 1\n").unwrap();
+    let (out, err, code) = run(&[".a", &y], "");
+    assert_eq!((code, out.as_str()), (0, "1\n"), "{err}");
+    let m = format!("{dir}/alias-README.MD");
+    std::fs::write(&m, "---\ntitle: x\n---\nbody\n").unwrap();
+    let (out, err, code) = run(&[".title", &m], "");
+    assert_eq!((code, out.as_str()), (0, "x\n"), "{err}");
+    // Every detected extension is also a `-t` name (`rmd` was detect-only).
+    let (out, err, code) = run(&["-t", "rmd", ".title"], "---\ntitle: x\n---\n");
+    assert_eq!((code, out.as_str()), (0, "x\n"), "{err}");
+    let (out, err, code) = run(&["-t", "YML", ".a"], "a: 1\n");
+    assert_eq!((code, out.as_str()), (0, "1\n"), "{err}");
+    // The error lists the aliases too, not just the canonical names.
+    let (_o, err, code) = run(&["-t", "bogus", "."], "a: 1\n");
+    assert_eq!(code, 2);
+    for alias in ["props", "spaced", "rmd", "frontmatter", "fm", "mdx"] {
+        assert!(err.contains(alias), "{alias} missing: {err}");
+    }
+    // `-t`-only names are not extensions: envspaced is never auto-detected.
+    let s = format!("{dir}/alias-x.spaced");
+    std::fs::write(&s, "Port 22\n").unwrap();
+    let (_o, err, code) = run(&[".Port", &s], "");
+    assert_eq!(code, 2);
+    assert!(err.contains("cannot infer format from `.spaced`"), "{err}");
+}
+
+#[test]
 fn helpful_error_messages() {
     // Unknown format names the valid choices.
     let (_o, err, code) = run(&["-t", "bogus", "."], "a: 1\n");

@@ -86,7 +86,7 @@ edikt -f script.edk [-f ...] [FILE...]
 | `-e, --expr EXPR` | inline expression; repeatable; applied in order |
 | `-f, --file PATH` | read a script (statements, newline/`;` separated); repeatable; composes with `-e` in order. Scripts may open with **header directives** - `toFormat: FMT`, `type: FMT` - which CLI flags override; `#` header lines (comments, shebangs) are skipped |
 | `-i, --in-place[=SUFFIX]` | write result back to each FILE; `-i.bak` keeps a backup (sed/perl style). Requires FILE; errors on stdin. Needs a mutating expression or a conversion (`-T`) |
-| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`\|`kdl`\|`markdown`; aliases `cfg`, `conf`, `props`, `spaced`, `yml`, `md`, `mdx`, `qmd`, `frontmatter`, `fm`) |
+| `-t, --type FMT` | force **input** format (`jsonc`\|`json5`\|`json`\|`ini`\|`env`\|`properties`\|`envspaced`\|`toml`\|`yaml`\|`kdl`\|`markdown`; aliases `cfg`, `conf`, `props`, `spaced`, `yml`, `md`, `mdx`, `qmd`, `rmd`, `frontmatter`, `fm`; any case) |
 | `-T, --to FMT` | **output** format (default: the input format, preserved). `--json`/`--jsonc`/`--ini`/`--toml`/`--yaml`/`--kdl` are shorthands for `-T <fmt>`. `markdown` is an input lens and never an output format |
 | `-o, --output FILE` | write to FILE instead of stdout; queries/conversions infer the output format from FILE's extension (`-T` wins), mutations treat it as a sink. Nothing is written on a query miss |
 | `-r, --raw` | force raw scalar output (default for scalars already) |
@@ -108,8 +108,11 @@ file.
 **Format detection:** `-t` wins; otherwise the file name (`.env` and `.env.*`
 dotfiles), then the extension: `.json`, `.jsonc`/`.json5`, `.ini`/`.cfg`/`.conf`,
 `.env`/`.properties`/`.props`, `.toml`, `.yaml`/`.yml`, `.kdl`,
-`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd` (see `detect_format` in
-`crates/edikt/src/main.rs`). There is no content sniffing: **stdin without `-t`,
+`.md`/`.markdown`/`.mdx`/`.qmd`/`.rmd`, in any case (`up.YAML`). One alias
+table (`FORMAT_ALIASES` in `crates/edikt/src/main.rs`) feeds `-t`/`-T`,
+extension detection, and the error listing, so every detected extension is
+also a `-t` name; `envspaced`/`spaced` and `frontmatter`/`fm` are `-t` names
+only. There is no content sniffing: **stdin without `-t`,
 or an unknown extension, is an error** (predictable beats magic). `envspaced` is
 never auto-detected (see Per-format semantics).
 
