@@ -751,6 +751,236 @@ fn block_scalar_set_keeps_its_style() {
     );
 }
 
+/// The content lines of the block scalar `key: >...` in `out`, `\r`
+/// stripped: every line after the header up to the next line at the key's
+/// indent or less.
+fn block_lines<'a>(out: &'a str, key: &str) -> Vec<&'a str> {
+    let mut lines = out.lines();
+    let header = lines
+        .by_ref()
+        .find(|l| l.trim_start().starts_with(&format!("{key}: >")))
+        .unwrap_or_else(|| panic!("no `{key}: >` in {out:?}"));
+    let indent = header.len() - header.trim_start().len();
+    lines
+        .map(|l| l.trim_end_matches('\r'))
+        .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() > indent)
+        .collect()
+}
+
+/// A text line `width` chars long at `indent`, filled to the brim: any
+/// next word would have overrun it.
+fn brim(indent: usize, width: usize) -> String {
+    format!("{}{} b", " ".repeat(indent), "a".repeat(width - indent - 2))
+}
+
+/// `x: <header>` holding a value filled to `width` (at indent 2), then `y`.
+fn filled(header: &str, width: usize, nl: &str) -> String {
+    format!("x: {header}{nl}{}{nl}  c{nl}y: 1{nl}", brim(2, width))
+}
+
+/// `n` copies of `word`, `per` to a line, each line at `indent`.
+fn words(word: &str, n: usize, per: usize, indent: &str) -> String {
+    let all = vec![word; n];
+    all.chunks(per)
+        .map(|c| format!("{indent}{}", c.join(" ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn folded_scalar_refolds_to_the_file_width() {
+    // jhheider/edikt#108: prose in a `>-` field filled to 100 columns (as
+    // the-drowning-coast's registries are) is folded back to that width.
+    let old = "npcs:\n  - id: a\n    fate: >-\n      \
+        Decided at his table, the evening after the warehouse burns. He offers the PCs three things:\n      \
+        join him (and he sends them south), leave the city, or die. Refused, he fights, and he usually\n      \
+        dies in his courtyard.\n\n  - id: b\n";
+    let width = old.lines().map(|l| l.chars().count()).max().unwrap();
+    assert_eq!(width, 100);
+    let new = "Told the truth about the smuggler, with proof, he can stand down: he goes to \
+        ground, or hands himself to the captain. Every branch ends his story in Book 1 and puts \
+        the PCs on the south road; he never flees to the lowlands.";
+    assert_eq!(
+        set_block(old, ".npcs[0].fate", new),
+        "npcs:\n  - id: a\n    fate: >-\n      \
+        Told the truth about the smuggler, with proof, he can stand down: he goes to ground, or hands\n      \
+        himself to the captain. Every branch ends his story in Book 1 and puts the PCs on the south\n      \
+        road; he never flees to the lowlands.\n\n  - id: b\n"
+    );
+
+    // Exact, at 40 (the least width folded at): 38 chars past the indent.
+    let nato = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+    assert_eq!(
+        set_block(&filled(">-", 40, "\n"), ".x", nato),
+        "x: >-\n  alpha bravo charlie delta echo foxtrot\n  golf hotel india juliet\ny: 1\n"
+    );
+    // A word longer than the width gets a line of its own, unsplit.
+    let long = "z".repeat(50);
+    assert_eq!(
+        set_block(&filled(">", 40, "\n"), ".x", &format!("a {long} b c\n")),
+        format!("x: >\n  a\n  {long}\n  b c\ny: 1\n")
+    );
+    // Width is in chars, not bytes.
+    let e = "é".repeat(10);
+    assert_eq!(
+        set_block(&filled(">-", 40, "\n"), ".x", &[e.as_str(); 4].join(" ")),
+        format!("x: >-\n  {e} {e} {e}\n  {e}\ny: 1\n")
+    );
+    // A run of spaces, a tab, and a space at an end are never break points.
+    let (a, b) = ("a".repeat(30), "b".repeat(10));
+    assert_eq!(
+        set_block(
+            &filled(">-", 40, "\n"),
+            ".x",
+            &format!("{a}  {b} ccccc\tddddd e ")
+        ),
+        format!("x: >-\n  {a}  {b}\n  ccccc\tddddd e \ny: 1\n")
+    );
+    // Paragraphs fold one by one; a more-indented line, and the breaks
+    // around it, are written as they are.
+    let code = "  a long code line that runs past the width of forty";
+    assert_eq!(
+        set_block(
+            &filled(">", 40, "\n"),
+            ".x",
+            &format!("alpha bravo charlie delta echo foxtrot golf\n\nhotel\n{code}\nindia\n")
+        ),
+        format!(
+            "x: >\n  alpha bravo charlie delta echo foxtrot\n  golf\n\n\n  hotel\n  {code}\n  india\ny: 1\n"
+        )
+    );
+    // CRLF files get CRLF lines.
+    assert_eq!(
+        set_block(&filled(">-", 40, "\r\n"), ".x", nato),
+        "x: >-\r\n  alpha bravo charlie delta echo foxtrot\r\n  golf hotel india juliet\r\ny: 1\r\n"
+    );
+}
+
+#[test]
+fn folded_scalar_width_is_file_wide() {
+    // A short value that wraps, in a file of prose filled to 100 columns,
+    // folds at 100, not at its own few columns.
+    let src = format!("a: >-\n{}\n  c\nb: >-\n  old\n  text\n", brim(2, 100));
+    let out = set_block(&src, ".b", &words("word", 40, 40, ""));
+    assert_eq!(
+        out,
+        format!(
+            "a: >-\n{}\n  c\nb: >-\n{}\n",
+            brim(2, 100),
+            words("word", 40, 19, "  ")
+        )
+    );
+    // When the file's evidence isn't filled prose (one sentence per line
+    // in `a`), the value's own filling (60) is the width.
+    let src = format!(
+        "a: >\n  Short sentence.\n  A much longer sentence that runs past the first one here.\n\
+         b: >-\n{}\n  c\n",
+        brim(2, 60)
+    );
+    assert_eq!(
+        set_block(&src, ".b", &words("word", 40, 40, "")),
+        format!(
+            "a: >\n  Short sentence.\n  A much longer sentence that runs past the first one here.\n\
+             b: >-\n{}\n",
+            words("word", 40, 11, "  ")
+        )
+    );
+    // A value that was one line stays one line, whatever the file's width.
+    let src = format!("a: >-\n{}\n  c\nb: >-\n  old\n", brim(2, 100));
+    let long = words("word", 40, 40, "");
+    assert_eq!(
+        set_block(&src, ".b", &long),
+        format!("a: >-\n{}\n  c\nb: >-\n  {long}\n", brim(2, 100))
+    );
+}
+
+#[test]
+fn folded_scalar_without_filled_evidence_is_not_refolded() {
+    let long = words("word", 40, 40, "");
+    for old in [
+        // One line, or one line per paragraph, or lines kept apart by a
+        // more-indented one: it never wrapped.
+        "x: >-\n  aaa\ny: 1\n",
+        "x: >-\n  aaa\n\n  bbb\ny: 1\n",
+        "x: >-\n  aaa\n    code\n  bbb\ny: 1\n",
+        // One sentence per line: the second sentence's first word had
+        // room on the first line, so the text wasn't filled to a width.
+        "x: >-\n  The first sentence is short.\n  The second sentence is a good deal longer than it.\ny: 1\n",
+        // Wrapped by hand with room to spare.
+        "x: >-\n  Some text broken early\n  on purpose, then carried on for a good long while more.\ny: 1\n",
+        // Filled, but narrower than 40: too thin to go on (jhheider/edikt#89's
+        // `old` / `text`).
+        "x: >-\n  old\n  text\ny: 1\n",
+        "x: >-\n  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b\n  c\ny: 1\n",
+    ] {
+        assert_eq!(
+            set_block(old, ".x", &long),
+            format!("x: >-\n  {long}\ny: 1\n"),
+            "{old:?}"
+        );
+    }
+    // A literal scalar is never folded, however well filled.
+    assert_eq!(
+        set_block(&filled("|-", 60, "\n"), ".x", &long),
+        format!("x: |-\n  {long}\ny: 1\n")
+    );
+}
+
+#[test]
+fn folded_scalar_refold_reads_back() {
+    // Every folded spelling reads back as exactly the assigned string
+    // (`set_block` checks), stays a folded block, and keeps each line of
+    // text within the width unless it has no break point.
+    let values = [
+        "one two three four five six seven eight nine ten",
+        "  leading spaces then words and more words",
+        "trailing spaces after words   ",
+        "double  spaces  between  every  word  here",
+        "tabs\tbetween words\tand\t more \twords",
+        " a b c d e f g h i j k l m n o p q r s t u v w x y z ",
+        "ünïcödé wörds ïn ä rüw thät ärë wïdër ïn bytës",
+        "averyveryverylongwordthatcannotbesplitbyanymeansatallreally and short ones",
+        "para one is here\n\npara two is here\n",
+        "text line\n  more indented line with words\n\tand a tab one\nback to text\n",
+        "x\n\n\n\ny z w v u t s\n\n",
+        "# not a comment: - [not] {flow} & * ! | > ' \" % @ `",
+        "---\n...\n--- a b c",
+        "word",
+        "",
+        "\n",
+    ];
+    let mut folded = 0;
+    for width in 40..=64 {
+        for header in [">", ">-", ">+"] {
+            let old = filled(header, width, "\n");
+            for value in values {
+                let value = [value; 3].join(" ");
+                let out = set_block(&old, ".x", &value);
+                assert!(out.starts_with("x: >"), "{out:?}");
+                let lines = block_lines(&out, "x");
+                folded += usize::from(lines.iter().filter(|l| !l.is_empty()).count() > 3);
+                for line in lines {
+                    let text = &line[2.min(line.len())..];
+                    let breakable = text.char_indices().any(|(i, c)| {
+                        c == ' '
+                            && i > 0
+                            && !text[..i].ends_with([' ', '\t'])
+                            && !text[i + 1..].is_empty()
+                            && !text[i + 1..].starts_with([' ', '\t'])
+                    });
+                    assert!(
+                        line.chars().count() <= width
+                            || !breakable
+                            || text.starts_with([' ', '\t']),
+                        "{line:?} over {width} in {out:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(folded > 400, "only {folded} folded");
+}
+
 #[test]
 fn block_scalar_chomping_follows_the_value() {
     // Chomping stays while it fits the value's trailing line breaks, and

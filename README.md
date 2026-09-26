@@ -229,7 +229,10 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   can't be written in it (a line break into single quotes, or a plain YAML
   scalar that would read as another type, like `yes` or `1.10`). A YAML block
   scalar (`|` or `>`) stays a block at its own indent, with its text written
-  as-is on lines (never reflowed); only its chomping sign changes, and only
+  as-is on lines. A `>` block is folded, at spaces only, to the width the
+  file's `>` prose is visibly filled to (40 columns or more); prose broken
+  by sentence or by hand, and any `|` block, is never folded. Only its chomping
+  sign changes, and only
   when the value's trailing newlines need it (`"x"` into `notes: |` writes
   `notes: |-`).
 - **A new list or map follows the file.** Assigning a sequence or mapping in

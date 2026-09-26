@@ -43,9 +43,30 @@ byte-for-byte. This is the entire reason the tool exists. Guard it:
     A **block scalar** (`|` literal, `>` folded) stays one (#89): the new
     text goes on lines at the scalar's own content indent, under its own
     header (indicators and comment kept), and the blank lines after it stay.
-    Nothing is reflowed. A line of `>` text is written as one line however
-    long, since edikt can't know the width a file wraps at, and a line break
-    in the value is written as the blank line `>` spells it with. The
+    Literal `|` text is never reflowed. Folded `>` text is folded to the
+    width the file fills its `>` prose to, when there is evidence of one
+    (#108). Only a value that itself wrapped is folded: when the old value
+    was one line (per paragraph), the new one is too. The width comes first
+    from the file: every folded break (two text lines at a `>` scalar's
+    content indent, one after the other) in every other `>` scalar in the
+    file. The edited scalar's old layout, about to be replaced, doesn't get
+    a say there, so a short value that wrapped (`old` / `text`) can't veto
+    the width the file's prose shows. The candidate width W is the longest
+    text line among the scalars with such a break, in chars, indent
+    included, and it counts only if the text was filled to it: at every
+    break, the next line's first word would not have fit on the line before
+    (that line + a space + the word > W). When a break fails that (one
+    sentence per line, a line broken by hand with room to spare), or the
+    file has no other evidence, the edited scalar's own breaks are tried the
+    same way, alone. A W under 40 counts for nothing, so a lone short value
+    that happens to wrap never narrows the text to a few columns. Folding
+    breaks each line of the new text
+    greedily at single spaces between two non-blank characters, so no line
+    passes W unless one word does. A word is never split, a run of spaces
+    or a tab is never a break point, and a more-indented line (and the
+    breaks around it) is written as it is. Without a width, each line of
+    the new text is written as one line, however long. Either way a line
+    break in the value is written as the blank line `>` spells it with. The
     chomping indicator stays while it fits the value's trailing line breaks
     (none for `-`, exactly one for clip, any number for `+`) and changes to
     the one that fits when it doesn't, so the value reads back as assigned:
