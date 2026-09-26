@@ -723,10 +723,84 @@ fn comment_write_errors() {
         cedit_err("k = 1\n", ".# = \"banner\""),
         "document-level (`.#`) comment editing for TOML is a follow-up"
     );
-    // A non-field parent step in a comment path is rejected.
+    // An index steps only into an array of tables.
     assert_eq!(
         cedit_err("[a]\nx = 1\n", ".a[0].b.# = \"note\""),
-        "TOML comment paths are object keys"
+        "`a` is not an array of tables; TOML comment paths index only `[[a]]` elements"
+    );
+    assert_eq!(
+        cedit_err("a = [1]\n", ".a[0].# = \"note\""),
+        "`a` is not an array of tables; TOML comment paths index only `[[a]]` elements"
+    );
+}
+
+#[test]
+fn comments_on_array_of_tables_elements() {
+    // #113: these failed with "no table `items`", or claimed `.items[0].#`
+    // was the document banner.
+    let src = "[[items]]\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n";
+    // A key inside an element: head (replacing the old one) and inline.
+    assert_eq!(
+        cedit(src, ".items[1].id.# = \"x\""),
+        "[[items]]\nid = \"a\"\n\n[[items]]\n# x\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, ".items[0].id.#.inline = \"y\""),
+        "[[items]]\nid = \"a\" # y\n\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, "del(.items[1].id.#)"),
+        "[[items]]\nid = \"a\"\n\n[[items]]\nid = \"b\"\n"
+    );
+    // The element itself: its `[[items]]` header, like a `[table]`'s.
+    assert_eq!(
+        cedit(src, ".items[0].#.inline = \"first\""),
+        "[[items]] # first\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, ".items[-1].# = \"second\""),
+        "[[items]]\nid = \"a\"\n\n# second\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(
+            "# one\n[[items]] # i\nid = \"a\"\n",
+            "del(.items[0].#) | del(.items[0].#.inline)"
+        ),
+        "[[items]]\nid = \"a\"\n"
+    );
+    // Nested: an element's sub-table and a key under it.
+    let nested = "[[items]]\nid = \"a\"\n[items.meta]\nk = 1\n";
+    assert_eq!(
+        cedit(nested, ".items[0].meta.k.# = \"k\""),
+        "[[items]]\nid = \"a\"\n[items.meta]\n# k\nk = 1\n"
+    );
+    // The array as a whole has no header to hold a comment (writing into its
+    // key used to produce `[[# x\nitems]]`), and an index must be in range.
+    assert_eq!(
+        cedit_err(src, ".items.# = \"x\""),
+        "`items` is an array of tables, with no header of its own; comment one of its elements (`.items[0].#`)"
+    );
+    assert_eq!(
+        cedit_err(src, ".items[5].# = \"x\""),
+        "`items[5]` is out of range (length 2)"
+    );
+    // The foot slot is unsupported here as on every TOML target.
+    assert_eq!(
+        cedit_err(src, ".items[0].#.foot = \"x\""),
+        "setting a foot comment isn't supported for TOML yet"
+    );
+}
+
+#[test]
+fn comments_on_an_inline_table_sit_on_its_line() {
+    // These panicked: an inline table was taken for a `[table]`.
+    assert_eq!(
+        cedit("t = { a = 1 }\n", ".t.# = \"x\""),
+        "# x\nt = { a = 1 }\n"
+    );
+    assert_eq!(
+        cedit("t = { a = 1 }\n", ".t.#.inline = \"x\""),
+        "t = { a = 1 } # x\n"
     );
 }
 

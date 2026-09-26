@@ -817,6 +817,33 @@ fn toml_edit_keeps_a_key_spelled_two_ways() {
 }
 
 #[test]
+fn toml_comments_on_array_of_tables_elements() {
+    // #113: "no table `items`", and `.items[0].#` taken for the banner.
+    let src = "[[items]]\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n";
+    for expr in [
+        ".items[1].id.# = \"x\"",
+        // Through a path expression (#109), the case that made this common.
+        "(.items[] | select(.id == \"b\") | .id.#) = \"x\"",
+    ] {
+        let (out, err, code) = run(&["-t", "toml", expr], src);
+        assert_eq!(
+            (out.as_str(), code),
+            ("[[items]]\nid = \"a\"\n\n[[items]]\n# x\nid = \"b\"\n", 0),
+            "{expr}: {err}"
+        );
+    }
+    let (out, err, code) = run(&["-t", "toml", ".items[0].#.inline = \"x\""], src);
+    assert_eq!(
+        (out.as_str(), code),
+        (
+            "[[items]] # x\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n",
+            0
+        ),
+        "{err}"
+    );
+}
+
+#[test]
 fn kdl_document_updates_node_by_node() {
     // `. |= .` used to exit 2, "cannot set the whole document".
     let src = "// c\nserver \"a\" port=80 {\n    tls #true\n}\nname x\n";
