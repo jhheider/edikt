@@ -613,6 +613,27 @@ mod tests {
         assert!(warnings[0].contains("flattened"), "got: {warnings:?}");
     }
 
+    #[test]
+    fn emit_refuses_what_the_file_could_not_read_back() {
+        let one =
+            |k: &str, v: &str| Value::Object(vec![(k.to_string(), Value::Str(v.to_string()))]);
+        // Each of these used to emit a line that parses as something else.
+        for (value, dialect, why) in [
+            (one("A", "x\ny"), Dialect::Punctuated, "line break"),
+            (one("A", " padded "), Dialect::Punctuated, "whitespace"),
+            (one("a=b", "1"), Dialect::Punctuated, "`=` or `:`"),
+            (one("#a", "1"), Dialect::Punctuated, "comment"),
+            (one("two words", "1"), Dialect::Spaced, "whitespace"),
+        ] {
+            let c = edikt_core::Commented::from_value(&value);
+            let err = emit_commented_with(&c, dialect).unwrap_err().to_string();
+            assert!(err.contains(why), "{value:?}: got {err}");
+            assert!(err.contains("no quoting"), "{value:?}: got {err}");
+        }
+        // What reads back as itself still emits.
+        assert_eq!(emit(&one("A", "x y")).unwrap().0, "A=x y\n");
+    }
+
     // --- Document trait surface + syntax accessor ---------------------------
 
     #[test]

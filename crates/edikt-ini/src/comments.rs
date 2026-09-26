@@ -242,7 +242,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
         });
         flattened |= flat.iter().any(|e| e.key.contains('.'));
         for e in &flat {
-            push_flat_entry(&mut out, e);
+            push_flat_entry(&mut out, e)?;
         }
     }
 
@@ -257,6 +257,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
         for l in &v.comments.head {
             push_comment(&mut out, l);
         }
+        crate::edit::check_section(name)?;
         out.push_str(&format!("[{name}]"));
         if let Some(inline) = &v.comments.inline {
             out.push_str(&format!("  ; {}", sanitize(inline)));
@@ -271,7 +272,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
         let flat = flatten_commented(&body);
         flattened |= flat.iter().any(|e| e.key.contains('.'));
         for e in &flat {
-            push_flat_entry(&mut out, e);
+            push_flat_entry(&mut out, e)?;
         }
         for l in &v.comments.foot {
             push_comment(&mut out, l);
@@ -291,7 +292,11 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
     Ok((out, warnings))
 }
 
-fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) {
+/// One `key = value` line with its comments; a key or value INI would read back
+/// as something else errors, as it does for `set`.
+fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) -> Result<(), EditError> {
+    crate::edit::check_key(&e.key)?;
+    crate::edit::check_value(&e.value)?;
     for l in &e.comments.head {
         push_comment(out, l);
     }
@@ -303,6 +308,7 @@ fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) {
     for l in &e.comments.foot {
         push_comment(out, l);
     }
+    Ok(())
 }
 
 fn push_comment(out: &mut String, line: &str) {

@@ -712,6 +712,38 @@ mod tests {
     }
 
     #[test]
+    fn emit_refuses_what_the_file_could_not_read_back() {
+        let s = |v: &str| Value::Str(v.to_string());
+        let obj = |entries: Vec<(&str, Value)>| {
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            )
+        };
+        // Each of these used to emit a line that parses as something else.
+        for (value, why) in [
+            (obj(vec![("a", s("x\ny"))]), "line break"),
+            (obj(vec![("a", s("x ; y"))]), "inline comment"),
+            (obj(vec![("a", s(" x"))]), "whitespace"),
+            (obj(vec![("a=b", s("1"))]), "`=` or `:`"),
+            (obj(vec![("[a", s("1"))]), "section header"),
+            (obj(vec![("sec", obj(vec![("k:x", s("1"))]))]), "`=` or `:`"),
+            (
+                obj(vec![("a]b", obj(vec![("k", s("1"))]))]),
+                "close the header",
+            ),
+        ] {
+            let err = emit(&value).unwrap_err().to_string();
+            assert!(err.contains(why), "{value:?}: got {err}");
+            assert!(err.contains("no quoting"), "{value:?}: got {err}");
+        }
+        // What reads back as itself still emits.
+        assert_eq!(emit(&obj(vec![("a", s("x;y"))])).unwrap().0, "a = x;y\n");
+    }
+
+    #[test]
     fn emit_commented_places_banners_headers_feet_and_flattens() {
         use edikt_core::{Commented, CommentedNode, Comments};
         // A document banner + foot, a preamble entry with a foot, and a section

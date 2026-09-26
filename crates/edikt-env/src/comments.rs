@@ -171,6 +171,9 @@ pub fn emit_commented_with(
             remapped_inline = true;
             push_comment(&mut out, inline);
         }
+        // Refuse what would read back as something else, as `set` does.
+        crate::edit::check_key(&e.key, dialect)?;
+        crate::edit::check_value(&e.value, dialect)?;
         let sep = match dialect {
             Dialect::Punctuated => "=",
             Dialect::Spaced => " ",

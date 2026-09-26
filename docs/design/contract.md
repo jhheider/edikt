@@ -358,7 +358,9 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   start or after whitespace (read back as an inline comment); a new key that
   starts with `[`, `;` or `#` (a header or comment), or holds `=`, `:`, a
   line break, or surrounding whitespace; a new section name holding `]` or a
-  line break.
+  line break. `-T ini` output follows the same rules: a key, value or section
+  name it would have to write that way is an error naming the formats that
+  can hold it.
 - **`envspaced`** - the `.env` document model with a **whitespace separator**
   (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
   entirely; a `Dialect` picks only how the key ends, since the separator is the
@@ -382,7 +384,8 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   quotes. That is a value with a line break (it would inject another entry)
   or leading/trailing whitespace (read back trimmed), and a new key that is
   empty (`envspaced`), starts with `#`/`!`, holds the separator (`=`/`:`, or
-  whitespace in `envspaced`), a line break, or surrounding whitespace.
+  whitespace in `envspaced`), a line break, or surrounding whitespace. `-T env`
+  and `-T envspaced` output refuse the same keys and values.
 - **YAML** - a byte splice over the span tree (see Architecture). Assigning
   a **mapping or sequence** writes it in the file's own layout (#83): **flow
   under flow** (a slot inside `[...]`/`{...}`, or a value that already was a
