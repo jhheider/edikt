@@ -1,247 +1,18 @@
-//! Format-preserving edits by byte splice over the span tree.
-//!
-//! An edit resolves the target node's byte range (from the marks composed in
-//! [`crate::compose`]) and replaces exactly those bytes; every other byte of the
-//! source is left verbatim, so comments, indentation, and layout survive
-//! untouched. After each splice we recompose from the new source, so a later step
-//! in the same program sees the updated document.
-//!
-//! Supported: setting any value (`=`, `|=`), a scalar or a mapping/sequence in
-//! place of either; appending items to a sequence (`+=`); deleting a mapping
-//! entry or a sequence item (`del`); and creating a new **leaf key** on an
-//! existing mapping, with any missing parent mappings above it (`=` creates
-//! them, as in every format). A new collection is laid out in the file's own
-//! style (see [`crate::splice`]); a replacement that keeps a collection's
-//! shape edits only the elements that change.
+//! The span-tree edit primitives on [`Yaml`]: set (replacing a value in
+//! place, element by element when a collection keeps its shape, or creating
+//! a missing key), append, delete, and the recompose after each splice.
 
-use edikt_core::{
-    EditError, Expr, Mutable, Step, Value, add_values, eval, normalize_index, render_path,
-};
-use std::ops::Range;
-
+use super::extent::{block_end, newline, trim_newline};
+use super::resolve::{Resolved, in_flow, nest, resolve, slot_of};
+use super::{Strictness, miss};
 use crate::Yaml;
 use crate::block::BlockScalar;
 use crate::compose::{Node, NodeKind, collect_merge, node_to_value};
 use crate::layout::{Indent, column, flow_text, inline_text, is_flow, line_start};
 use crate::scalar::{QuoteStyle, emit_scalar_styled, kept_properties, split_properties};
 use crate::splice::{Slot, append_items, block_replace, new_key, scalar_to_block};
-
-/// Apply a mutation expression to `doc`, preserving format everywhere untouched.
-///
-/// A multi-document stream (`---`-separated) maps the edit over **every**
-/// document by default. A leading `select(pred)` narrows it to the documents
-/// whose value satisfies `pred` - so `select(.kind == "Service") | .spec.x = 1`
-/// edits only the Service documents. A single-document stream (the common case)
-/// behaves exactly as before.
-pub fn apply(doc: &mut Yaml, expr: &Expr) -> Result<Vec<String>, EditError> {
-    let n = doc.docs.len();
-    let mut warnings = Vec::new();
-
-    // `^dN` names one document by position; the edit is strict there (you asked
-    // for that specific document).
-    if let Expr::DocSelect(idx, body) = expr {
-        edikt_core::check_doc_index(*idx, n)?;
-        apply_one(doc, *idx, body, Strictness::Strict)?;
-        return Ok(warnings);
-    }
-
-    // A leading `select(pred)` picks documents by content; the rest is the edit.
-    if let Some((pred, inner)) = peel_select(expr) {
-        for idx in 0..n {
-            let val = doc.doc_value(idx);
-            // A predicate that can't be evaluated against a document (e.g. a
-            // scalar document when the predicate indexes a field) means "does
-            // not match": skip it, with a warning, rather than aborting the
-            // whole edit. `select` picks by content, so a heterogeneous stream
-            // shouldn't fail because one document has the wrong shape.
-            match doc_matches(pred, &val) {
-                Ok(true) => apply_one(doc, idx, &inner, Strictness::Lenient)?,
-                Ok(false) => {}
-                Err(e) => warnings.push(format!("select skipped document {idx}: {e}")),
-            }
-        }
-        return Ok(warnings);
-    }
-
-    // No selector: single doc keeps the strict, prior behavior (a missing path
-    // errors, a new leaf key is created); across many docs, apply to each with a
-    // missing path treated as a per-document no-op.
-    if n <= 1 {
-        apply_one(doc, 0, expr, Strictness::Strict)?;
-    } else {
-        for idx in 0..n {
-            apply_one(doc, idx, expr, Strictness::Lenient)?;
-        }
-    }
-    Ok(warnings)
-}
-
-/// Whether a path that doesn't resolve is an error (`Strict`, single-doc/named)
-/// or a silent no-op (`Lenient`, one of many mapped documents).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Strictness {
-    Strict,
-    Lenient,
-}
-
-/// Apply one edit program to document `idx` in isolation.
-fn apply_one(doc: &mut Yaml, idx: usize, expr: &Expr, strict: Strictness) -> Result<(), EditError> {
-    edikt_core::apply_mutation(&mut InDoc { doc, idx, strict }, expr)
-}
-
-/// One document of the stream, as the shared mutation driver sees it: its own
-/// value for the right side, and a miss that is an error or a no-op
-/// depending on how the document was addressed.
-struct InDoc<'a> {
-    doc: &'a mut Yaml,
-    idx: usize,
-    strict: Strictness,
-}
-
-impl Mutable for InDoc<'_> {
-    fn whole(&self) -> Value {
-        self.doc.doc_value(self.idx)
-    }
-    fn value_at(&self, path: &[Step]) -> Option<Value> {
-        self.doc.value_at(self.idx, path)
-    }
-    fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        self.doc.set(self.idx, path, value, self.strict)
-    }
-    fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
-        self.doc.delete(self.idx, path)
-    }
-    fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
-        match (current, addend) {
-            (Value::Array(_), Value::Array(items)) => {
-                self.doc.append(self.idx, path, items, self.strict)
-            }
-            _ => self.set(path, &add_values(current, addend)?),
-        }
-    }
-    fn miss(&self, path: &[Step]) -> Result<(), EditError> {
-        miss(self.strict, path)
-    }
-}
-
-/// A path that didn't resolve: an error when strict, a no-op when lenient.
-fn miss(strict: Strictness, steps: &[Step]) -> Result<(), EditError> {
-    match strict {
-        Strictness::Strict => Err(EditError::new(format!(
-            "path not found: {}",
-            render_path(steps)
-        ))),
-        Strictness::Lenient => Ok(()),
-    }
-}
-
-/// If `expr` is a pipe whose leftmost stage is `select(pred)`, return that
-/// predicate and the edit expression with the select removed. Handles a
-/// left-associated chain (`select(p) | .a = 1 | .b = 2`).
-fn peel_select(expr: &Expr) -> Option<(&Expr, Expr)> {
-    let Expr::Pipe(left, right) = expr else {
-        return None;
-    };
-    match left.as_ref() {
-        Expr::Call(name, args) if name == "select" && args.len() == 1 => {
-            Some((&args[0], (**right).clone()))
-        }
-        Expr::Pipe(..) => {
-            let (pred, rest) = peel_select(left)?;
-            Some((pred, Expr::Pipe(Box::new(rest), right.clone())))
-        }
-        _ => None,
-    }
-}
-
-/// Does document value `val` satisfy `pred`? Reuses the `select` filter: a
-/// document matches when `select(pred)` keeps it.
-fn doc_matches(pred: &Expr, val: &Value) -> Result<bool, EditError> {
-    let filter = Expr::Call("select".into(), vec![pred.clone()]);
-    let kept = eval(&filter, val)?;
-    Ok(!kept.is_empty())
-}
-
-/// The result of walking a path over the span tree.
-enum Resolved<'a, 'p> {
-    /// The path landed on an existing node.
-    Found(&'a Node),
-    /// Field `key` is absent on this (existing) mapping: an insert point.
-    /// `rest` is the rest of the path below it (empty for a leaf key), all
-    /// fields; `=` creates those levels as nested mappings (jhheider/edikt#85).
-    MissingField {
-        parent: &'a Node,
-        key: String,
-        rest: &'p [Step],
-    },
-    /// A missing key with an index below it: `=` can't invent array elements.
-    Uncreatable,
-    /// The path does not resolve (bad step, missing intermediate, out of range).
-    NotFound,
-}
-
-fn resolve<'a, 'p>(node: &'a Node, path: &'p [Step]) -> Resolved<'a, 'p> {
-    let Some((step, rest)) = path.split_first() else {
-        return Resolved::Found(node);
-    };
-    match step {
-        Step::Field(k) => match &node.kind {
-            NodeKind::Mapping(entries) => match entries.iter().find(|e| &e.key == k) {
-                Some(e) => resolve(&e.value, rest),
-                None if rest.iter().all(|s| matches!(s, Step::Field(_))) => {
-                    Resolved::MissingField {
-                        parent: node,
-                        key: k.clone(),
-                        rest,
-                    }
-                }
-                None if rest.iter().any(|s| matches!(s, Step::Index(_))) => Resolved::Uncreatable,
-                None => Resolved::NotFound,
-            },
-            _ => Resolved::NotFound,
-        },
-        Step::Index(i) => match &node.kind {
-            NodeKind::Sequence(items) => {
-                let idx = normalize_index(*i, items.len());
-                match idx.and_then(|n| items.get(n)) {
-                    Some(item) => resolve(item, rest),
-                    None => Resolved::NotFound,
-                }
-            }
-            _ => Resolved::NotFound,
-        },
-        Step::Iterate => Resolved::NotFound,
-        // Comment edits (`#`) are a Phase-2 feature; resolve treats them as
-        // absent so the set/delete paths fall through to their clean errors.
-        Step::Comment(_) => Resolved::NotFound,
-    }
-}
-
-/// Does the node at `path` sit inside a flow collection (`[...]`/`{...}`),
-/// where a plain scalar ends at the first `,[]{}`?
-fn in_flow(source: &str, root: &Node, path: &[Step]) -> bool {
-    let mut node = root;
-    for step in path {
-        let (_, body) = split_properties(&source[node.span.clone()]);
-        if body.starts_with(['[', '{']) {
-            return true;
-        }
-        let next = match (step, &node.kind) {
-            (Step::Field(k), NodeKind::Mapping(entries)) => {
-                entries.iter().find(|e| &e.key == k).map(|e| &e.value)
-            }
-            (Step::Index(i), NodeKind::Sequence(items)) => {
-                normalize_index(*i, items.len()).and_then(|n| items.get(n))
-            }
-            _ => None,
-        };
-        match next {
-            Some(n) => node = n,
-            None => return false,
-        }
-    }
-    false
-}
+use edikt_core::{EditError, Step, Value, render_path};
+use std::ops::Range;
 
 impl Yaml {
     /// The root node of document `idx`.
@@ -594,39 +365,11 @@ impl Yaml {
     }
 }
 
-/// The nested mapping a missing path's tail names: `[.b, .c]` with `v` is
-/// `{b: {c: v}}`. `rest` is all fields ([`resolve`] guarantees it).
-fn nest(rest: &[Step], value: &Value) -> Value {
-    rest.iter()
-        .rev()
-        .fold(value.clone(), |inner, step| match step {
-            Step::Field(k) => Value::Object(vec![(k.clone(), inner)]),
-            _ => inner,
-        })
-}
-
-/// Where the node at `path` sits: the document root, a mapping value (with
-/// its key's span), or a sequence item.
-fn slot_of(root: &Node, path: &[Step]) -> Slot {
-    let Some((last, parent)) = path.split_last() else {
-        return Slot::Root;
-    };
-    if let (Step::Field(k), Resolved::Found(parent)) = (last, resolve(root, parent))
-        && let NodeKind::Mapping(entries) = &parent.kind
-        && let Some(e) = entries.iter().find(|e| &e.key == k)
-    {
-        return Slot::Value {
-            key: (e.key_span.start, e.key_span.end),
-        };
-    }
-    Slot::Item
-}
-
 /// Exactly the same value: same types, same float bits, keys in the same
 /// order. Stricter than `==`, which is jq's (`1 == 1.0`, key order ignored),
 /// because an element judged unchanged keeps its bytes, and `.a = 1.0` over
 /// `a: 1` must still write `1.0`.
-fn identical(a: &Value, b: &Value) -> bool {
+pub(crate) fn identical(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -648,10 +391,10 @@ fn identical(a: &Value, b: &Value) -> bool {
 
 /// A replacement applied element by element: the changed elements, the items
 /// to append, and the keys to add.
-struct Plan {
-    changes: Vec<(Step, Value)>,
-    append: Vec<Value>,
-    add: Vec<(String, Value)>,
+pub(crate) struct Plan {
+    pub(crate) changes: Vec<(Step, Value)>,
+    pub(crate) append: Vec<Value>,
+    pub(crate) add: Vec<(String, Value)>,
 }
 
 /// Plan `value` as element edits to the collection `node` when it keeps the
@@ -661,7 +404,7 @@ struct Plan {
 /// |= . + [x]` appends one line instead of rewriting the list. A flow
 /// collection takes element edits only when nothing is added, so a growing
 /// one is respelled whole. `None` means a wholesale replacement.
-fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
+pub(crate) fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
     let mut plan = Plan {
         changes: Vec::new(),
         append: Vec::new(),
@@ -720,145 +463,4 @@ fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
     }
     let grows = !plan.append.is_empty() || !plan.add.is_empty();
     (!(grows && is_flow(source, node))).then_some(plan)
-}
-
-/// The newline style the document uses, so inserted lines match it (a lone `\n`
-/// spliced into a CRLF file would leave observably mixed line endings): the
-/// dominant one, so a mostly-LF file with one stray CRLF stays LF.
-pub(crate) fn newline(source: &str) -> &'static str {
-    edikt_core::text::dominant(source)
-}
-
-/// Whether the source already ends with a line break (`\n`, hence also `\r\n`).
-pub(crate) fn ends_with_newline(source: &str) -> bool {
-    source.ends_with('\n')
-}
-
-/// The byte offset just after the newline that ends the line at/after `end`.
-///
-/// libyaml lands scalar end-marks mid-line (right after the text) but collection
-/// end-marks at the *next* line's start; this normalizes both to "start of the
-/// following line" (or EOF).
-fn line_after(source: &str, end: usize) -> usize {
-    let bytes = source.as_bytes();
-    if end == 0 || bytes.get(end - 1) == Some(&b'\n') {
-        return end;
-    }
-    match source[end..].find('\n') {
-        Some(i) => end + i + 1,
-        None => source.len(),
-    }
-}
-
-/// `end` with the line break just before it (`\n` or `\r\n`) excluded.
-pub(crate) fn trim_newline(source: &str, end: usize) -> usize {
-    let s = &source[..end];
-    let s = s.strip_suffix('\n').unwrap_or(s);
-    s.strip_suffix('\r').unwrap_or(s).len()
-}
-
-/// The byte offset just after the last physical line of `node`.
-///
-/// A collection's own end-mark is unreliable for line math; libyaml lands it on
-/// the *next sibling's* text (past that sibling's indent), which would overshoot.
-/// So we drill to the node's deepest last scalar and take the line after *it*.
-pub(crate) fn block_end(source: &str, node: &Node) -> usize {
-    match &node.kind {
-        NodeKind::Scalar(_) => line_after(source, node.span.end),
-        NodeKind::Sequence(items) => match items.last() {
-            Some(last) => block_end(source, last),
-            None => line_after(source, node.span.end),
-        },
-        NodeKind::Mapping(entries) => match entries.last() {
-            Some(last) => block_end(source, &last.value),
-            None => line_after(source, node.span.end),
-        },
-    }
-}
-
-/// Where a key or item added after `node` goes: [`block_end`], except that a
-/// block scalar ending the node leaves its trailing blank lines after the
-/// insertion, where they keep separating it from what follows (#90). Only a
-/// keep-chomped (`+`) scalar owns those lines, so an insertion goes past them.
-pub(crate) fn insert_end(source: &str, node: &Node) -> usize {
-    match &node.kind {
-        NodeKind::Scalar(_) => {
-            BlockScalar::of(source, node).map_or_else(|| block_end(source, node), |b| b.insert_at())
-        }
-        NodeKind::Sequence(items) => items
-            .last()
-            .map_or_else(|| block_end(source, node), |n| insert_end(source, n)),
-        NodeKind::Mapping(entries) => entries
-            .last()
-            .map_or_else(|| block_end(source, node), |e| insert_end(source, &e.value)),
-    }
-}
-
-/// The original source text of each node selected by `path`, in document order
-/// (aligned with the evaluator). See [`slice_of`] for the per-node form.
-pub(crate) fn source_slices(source: &str, root: &Node, path: &[Step]) -> Vec<String> {
-    let mut current: Vec<&Node> = vec![root];
-    for step in path {
-        let mut next: Vec<&Node> = Vec::new();
-        for node in &current {
-            match step {
-                Step::Field(k) => {
-                    if let NodeKind::Mapping(entries) = &node.kind
-                        && let Some(e) = entries.iter().find(|e| &e.key == k)
-                    {
-                        next.push(&e.value);
-                    }
-                }
-                Step::Index(i) => {
-                    if let NodeKind::Sequence(items) = &node.kind
-                        && let Some(item) =
-                            normalize_index(*i, items.len()).and_then(|n| items.get(n))
-                    {
-                        next.push(item);
-                    }
-                }
-                Step::Iterate => match &node.kind {
-                    NodeKind::Sequence(items) => next.extend(items.iter()),
-                    NodeKind::Mapping(entries) => next.extend(entries.iter().map(|e| &e.value)),
-                    _ => {}
-                },
-                // A comment addresses no value node; source slices never
-                // resolve one (the CLI reads comments via `to_commented`).
-                Step::Comment(_) => {}
-            }
-        }
-        current = next;
-    }
-    current.iter().map(|n| slice_of(source, n)).collect()
-}
-
-/// The source form of one node: a scalar or flow collection (`[...]`/`{...}`) is
-/// returned verbatim; a block collection is returned as its full-line region,
-/// dedented to the left margin so the fragment is valid standalone YAML.
-fn slice_of(source: &str, node: &Node) -> String {
-    match &node.kind {
-        NodeKind::Scalar(_) => source[node.span.clone()].to_string(),
-        _ if matches!(source.as_bytes().get(node.span.start), Some(b'[' | b'{')) => {
-            source[node.span.clone()].to_string()
-        }
-        _ => {
-            let start = line_start(source, node.span.start);
-            let end = block_end(source, node);
-            dedent(source[start..end].trim_end_matches(['\n', '\r']))
-        }
-    }
-}
-
-/// Strip the common leading whitespace of every non-blank line.
-fn dedent(text: &str) -> String {
-    let min = text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    text.lines()
-        .map(|l| if l.len() >= min { &l[min..] } else { l })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
