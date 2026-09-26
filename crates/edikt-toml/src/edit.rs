@@ -22,10 +22,34 @@ impl Mutable for Toml {
         Toml::value_at(self, path)
     }
     fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        Toml::set(self, path, value)
+        self.set_value(path, value)
     }
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         Toml::delete(self, path)
+    }
+    /// An array grows in its own layout (#91): each item through
+    /// [`push_in_layout`], each table of an array of tables as its own
+    /// `[[key]]` block. Declined (a whole-array write instead) for a path
+    /// that doesn't end in a key, and for a non-table onto an array of
+    /// tables.
+    fn append(&mut self, path: &[Step], items: &[Value]) -> Option<Result<(), EditError>> {
+        let Some((Step::Field(key), parent)) = path.split_last() else {
+            return None;
+        };
+        let table = crate::tree::walk_tables(self.doc.as_table_mut(), parent)?;
+        match table.get_mut(key)? {
+            Item::ArrayOfTables(aot) if items.iter().all(|v| matches!(v, Value::Object(_))) => {
+                Some(items.iter().try_for_each(|v| {
+                    aot.push(value_to_table(v)?);
+                    Ok(())
+                }))
+            }
+            Item::Value(TomlValue::Array(arr)) => Some(items.iter().try_for_each(|v| {
+                push_in_layout(arr, value_to_toml(v)?);
+                Ok(())
+            })),
+            _ => None,
+        }
     }
 }
 
@@ -57,55 +81,6 @@ pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
             TomlValue::InlineTable(t)
         }
     })
-}
-
-/// Replace `arr` with `new` by appending, when `new` extends it (its first
-/// elements equal the current ones): the kept elements stay byte-for-byte and
-/// each extra one goes in through [`push_in_layout`], so `.a += [x]` on a
-/// one-item-per-line array adds one line. Returns `false`, touching nothing,
-/// when `new` is not an extension; the caller then rewrites the array.
-pub(crate) fn extend_in_layout(arr: &mut Array, new: &[Value]) -> Result<bool, EditError> {
-    if new.len() < arr.len()
-        || arr
-            .iter()
-            .zip(new)
-            .any(|(old, new)| crate::project::toml_value_to_value(old) != *new)
-    {
-        return Ok(false);
-    }
-    let extra = new[arr.len()..]
-        .iter()
-        .map(value_to_toml)
-        .collect::<Result<Vec<_>, _>>()?;
-    for v in extra {
-        push_in_layout(arr, v);
-    }
-    Ok(true)
-}
-
-/// [`extend_in_layout`] for an array of tables: when `new` extends `aot` with
-/// more tables, each goes in as its own `[[key]]` block, rather than the whole
-/// array collapsing to an inline array of inline tables.
-pub(crate) fn extend_aot(aot: &mut ArrayOfTables, new: &[Value]) -> Result<bool, EditError> {
-    if new.len() < aot.len()
-        || aot
-            .iter()
-            .zip(new)
-            .any(|(old, new)| crate::project::table_to_value(old) != *new)
-        || !new[aot.len()..]
-            .iter()
-            .all(|v| matches!(v, Value::Object(_)))
-    {
-        return Ok(false);
-    }
-    let extra = new[aot.len()..]
-        .iter()
-        .map(value_to_table)
-        .collect::<Result<Vec<_>, _>>()?;
-    for t in extra {
-        aot.push(t);
-    }
-    Ok(true)
 }
 
 /// Append `v` to `arr` in the array's own layout (jhheider/edikt#91).
