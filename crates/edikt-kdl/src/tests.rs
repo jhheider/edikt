@@ -900,3 +900,64 @@ fn document_trait_surface() {
     Document::apply(&mut doc, &parse_expr(".a = 2").unwrap()).unwrap();
     assert_eq!(doc.to_source(), "a 2\n");
 }
+
+#[test]
+fn the_document_updates_node_by_node() {
+    // `. |= .` used to error "cannot set the whole document".
+    for expr in [". |= .", ". = .", ". |= {layout: .layout, bind: .bind}"] {
+        assert_eq!(edit_src(SAMPLE, expr), SAMPLE, "`{expr}`");
+    }
+    // Only what changed is touched: a new node appends, a dropped name is
+    // deleted, a changed property is set in place.
+    let tail = "bind \"Mod+h\" \"focus-left\"\nbind \"Mod+l\" \"focus-right\"\n";
+    assert_eq!(
+        edit_src(
+            SAMPLE,
+            r#". |= {layout: .layout, bind: .bind, theme: "dark"}"#
+        ),
+        format!("{SAMPLE}theme dark\n")
+    );
+    assert_eq!(
+        edit_src(SAMPLE, ". |= {layout: .layout}"),
+        SAMPLE.replace(tail, "")
+    );
+    assert_eq!(
+        edit_src(SAMPLE, ". |= (.layout.gaps = 4)"),
+        SAMPLE.replace("gaps=8", "gaps=4")
+    );
+    // A node given an object updates the same way, key by key.
+    assert_eq!(edit_src(SAMPLE, ".layout |= ."), SAMPLE);
+    assert_eq!(
+        edit_src(
+            SAMPLE,
+            r#".layout = {"-": "wide", gaps: 8, border: {width: 3}}"#
+        ),
+        SAMPLE
+            .replace("\"tall\"", "\"wide\"")
+            .replace("width=2", "width=3")
+    );
+    assert_eq!(
+        edit_src(SAMPLE, r#".layout |= del(.["-"])"#),
+        SAMPLE.replace("layout \"tall\" ", "layout ")
+    );
+    // Where a key can't be set in place, the whole update is refused with
+    // that key's reason: here, a node body replaced by a scalar.
+    assert_eq!(
+        edit_err(SAMPLE, ". |= {layout: 1, bind: .bind}"),
+        "replacing the whole body of `layout` is not supported; set its keys instead"
+    );
+    // The keys before the refused one are not left half-applied.
+    let mut doc = parse(SAMPLE).unwrap();
+    assert!(
+        apply(
+            &mut doc,
+            &parse_expr(". |= {bind: .bind, layout: {gaps: 9, border: 1}}").unwrap()
+        )
+        .is_err()
+    );
+    assert_eq!(doc.to_source(), SAMPLE);
+    assert_eq!(
+        edit_err(SAMPLE, ". = 5"),
+        "a KDL document is a list of nodes, so `.` can only be set to an object (got number)"
+    );
+}

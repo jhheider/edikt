@@ -521,8 +521,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   - paths read as printed: `.keybinds.normal.bind[0].["-"]`. Arrays of arrays
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
-  occurrences); replacing a whole node body wholesale is refused rather than
-  reflowed. A new node copies the layout of the sibling it follows (its
+  occurrences). A node given a new object, and the document itself (`. |=
+  f`, `. = {...}`), is updated key by key: unchanged keys are left alone (so
+  `. |= .` is a no-op), missing ones deleted, and each changed one set under
+  these same rules; if any key can't be, the whole update is refused and the
+  document left as it was. Replacing a node body with anything else is
+  refused rather than reflowed, and `.` can only be set to an object. A new node copies the layout of the sibling it follows (its
   indent on a line of its own, or a `;`-separated slot in a single-line
   `{ a 1; b 2 }` block), and anything nested inside it indents by the file's
   own unit. Deleting a block's first child keeps the `{` line intact.

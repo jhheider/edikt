@@ -817,6 +817,31 @@ fn toml_edit_keeps_a_key_spelled_two_ways() {
 }
 
 #[test]
+fn kdl_document_updates_node_by_node() {
+    // `. |= .` used to exit 2, "cannot set the whole document".
+    let src = "// c\nserver \"a\" port=80 {\n    tls #true\n}\nname x\n";
+    for expr in [". |= .", ". = ."] {
+        let (out, err, code) = run(&["-t", "kdl", expr], src);
+        assert_eq!((out.as_str(), code), (src, 0), "{expr}: {err}");
+    }
+    let (out, err, code) = run(&["-t", "kdl", ". |= (.server.port = 81)"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        (
+            "// c\nserver \"a\" port=81 {\n    tls #true\n}\nname x\n",
+            0
+        ),
+        "{err}"
+    );
+    let (_o, err, code) = run(&["-t", "kdl", ". = {server: 1}"], src);
+    assert_eq!(code, 2);
+    assert!(
+        err.contains("replacing the whole body of `server`"),
+        "{err}"
+    );
+}
+
+#[test]
 fn convert_toml_to_json_and_back() {
     let (out, _e, code) = run(&["-t", "toml", "-T", "json"], "[a]\nb = 1\n");
     assert_eq!(out, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");
