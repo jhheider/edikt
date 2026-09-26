@@ -15,8 +15,6 @@ pub fn apply(doc: &mut Env, expr: &Expr) -> Result<(), EditError> {
 /// Paths are a single `.key`, which [`Mutable::check_path`] enforces before
 /// any of the primitives below see one.
 impl Mutable for Env {
-    const FANS_OUT: bool = false;
-
     fn whole(&self) -> Value {
         self.to_value()
     }
@@ -28,9 +26,6 @@ impl Mutable for Env {
     }
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
         Env::delete(self, single_key(path)?)
-    }
-    fn miss(&self, _path: &[Step]) -> Result<(), EditError> {
-        Err(EditError::new("key not found"))
     }
     fn check_path(&self, path: &[Step], _kind: MutationKind) -> Result<(), EditError> {
         single_key(path).map(|_| ())
