@@ -1,12 +1,13 @@
 [package]
 name = "edikt"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "Lossless, format-preserving config editor: JSONC/JSON5, INI, .env/.properties, TOML, YAML, KDL, Markdown frontmatter - jq-flavored expressions, sed-shaped I/O."
 readme = { workspace = true }
+rust-version = "1.95"
 
 [dependencies]
 edikt-core = { workspace = true }

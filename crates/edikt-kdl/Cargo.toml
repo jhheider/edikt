@@ -1,12 +1,13 @@
 [package]
 name = "edikt-kdl"
-version = "0.4.1"
+version = "0.5.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "edikt KDL format module: lossless edits via kdl-rs, implementing Document."
 readme = { workspace = true }
+rust-version = "1.95"
 
 [dependencies]
 kdl = { workspace = true }
