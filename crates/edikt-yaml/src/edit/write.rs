@@ -3,6 +3,7 @@
 //! a missing key), append, delete, and the recompose after each splice.
 
 use super::extent::{newline, trim_newline};
+use super::flow;
 use super::resolve::{Resolved, in_flow, nest, resolve, slot_of};
 use super::{Strictness, miss};
 use crate::Yaml;
@@ -50,6 +51,17 @@ impl Yaml {
                 // Missing levels below the key are created as nested mappings,
                 // laid out like any other new collection (jhheider/edikt#85).
                 let value = nest(rest, value);
+                // A `[k: v]` pair inside a flow sequence has no brackets to
+                // grow inside, and block lines can't go there (#111).
+                let at = path.len() - rest.len() - 1;
+                if !is_flow(&self.source, parent)
+                    && in_flow(&self.source, self.root(idx), &path[..at])
+                {
+                    return Err(EditError::new(format!(
+                        "cannot add a key to the single-pair mapping at {} in place",
+                        render_path(&path[..at])
+                    )));
+                }
                 let indent = Indent::infer(&self.source, &self.docs);
                 new_key(&self.source, parent, &key, &value, indent)?
             }
@@ -115,7 +127,11 @@ impl Yaml {
             } else {
                 emit_scalar_styled(value, QuoteStyle::of(body), ctx_flow, body)?
             };
-            (node.span.clone(), format!("{props}{text}"))
+            // A `[k: v]` pair's span runs on past its comma; stop at its value.
+            (
+                node.span.start..flow::content_end(source, node),
+                format!("{}{props}{text}", null_lead(source, node, true)?),
+            )
         } else if scalar && let Some(text) = inline_text(value) {
             // A scalar takes the old body's quote style; an empty collection
             // is `[]`/`{}`.
@@ -124,7 +140,10 @@ impl Yaml {
             } else {
                 emit_scalar_styled(value, QuoteStyle::of(body), false, body)?
             };
-            (node.span.clone(), format!("{props}{text}"))
+            (
+                node.span.clone(),
+                format!("{}{props}{text}", null_lead(source, node, false)?),
+            )
         } else {
             let slot = slot_of(root, path);
             let indent = Indent::infer(source, &self.docs);
@@ -209,7 +228,7 @@ impl Yaml {
     }
 
     /// Put back `source`, a state this document held before (so it parses).
-    fn restore(&mut self, source: String) -> Result<(), EditError> {
+    pub(super) fn restore(&mut self, source: String) -> Result<(), EditError> {
         let end = self.source.len();
         self.commit(0..end, &source)
     }
@@ -269,15 +288,45 @@ impl Yaml {
     pub(super) fn commit(&mut self, range: Range<usize>, text: &str) -> Result<(), EditError> {
         let mut new_source = self.source.clone();
         new_source.replace_range(range, text);
-        let mut docs = crate::compose::compose_all(&new_source)
-            .map_err(|e| EditError::new(format!("edit produced invalid YAML: {e}")))?
-            .into_vec();
+        let composed = crate::compose::compose_all(&new_source)
+            .map_err(|e| EditError::new(format!("edit produced invalid YAML: {e}")))?;
+        // Removing or replacing an anchored node would silently turn its
+        // aliases into nulls (#111). A file that already had a dangling
+        // alias is the file's business.
+        if let Some(name) = &composed.dangling
+            && crate::compose::compose_all(&self.source).is_ok_and(|d| d.dangling.is_none())
+        {
+            return Err(EditError::new(format!(
+                "cannot edit this in place: it would remove anchor &{name}, which *{name} still names"
+            )));
+        }
+        let mut docs = composed.into_vec();
         if docs.is_empty() {
             docs.push(crate::compose::null_node());
         }
         self.source = new_source;
         self.docs = docs;
         Ok(())
+    }
+}
+
+/// What a value written over `node` needs in front of it when `node` is an
+/// implicit null, which has no bytes (#111). libyaml marks one right after
+/// its `:` or `-`, where a space keeps the value off the indicator (`a:1`
+/// would be a key), or, for a bare key in a flow mapping (`{a, b: 1}`), right
+/// after the key, which needs its `: `. A `? key` with no value in block
+/// context is refused; its null sits at the start of the next line.
+fn null_lead(source: &str, node: &Node, flow: bool) -> Result<&'static str, EditError> {
+    if !node.span.is_empty() || !matches!(node.kind, NodeKind::Scalar(Value::Null)) {
+        return Ok("");
+    }
+    match source[..node.span.start].bytes().last() {
+        Some(b':' | b'-') => Ok(" "),
+        Some(b' ' | b'\t') => Ok(""),
+        _ if flow => Ok(": "),
+        _ => Err(EditError::new(
+            "cannot set the value of a `?` key that has none in place yet",
+        )),
     }
 }
 

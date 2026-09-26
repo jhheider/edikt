@@ -1,0 +1,18 @@
+# Compact sequence items, whose first element shares the dash's line (#111).
+people:
+  - name: ada
+    role: math
+  - name: alan
+    langs:
+      - - en
+        - de
+      - [fr]
+  - lone: key
+matrix:
+  - - 1
+    - 2
+  - - 3
+empty_value:
+bare_item:
+  -
+  - 1

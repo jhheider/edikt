@@ -137,6 +137,17 @@ impl BlockScalar {
         }
     }
 
+    /// The header with strip chomping (`-`), its indentation indicator and
+    /// comment kept. A scalar that ends the input with no line break has no
+    /// final break in its value, whatever its chomping; once a line follows
+    /// it, only `-` keeps it that way.
+    pub(crate) fn stripped_header(&self, source: &str) -> String {
+        let style = &source[self.header.start..self.header.start + 1];
+        let digit = self.digit.map(|d| d.to_string()).unwrap_or_default();
+        let rest = self.header_rest(source);
+        format!("{style}{digit}{}{rest}", Chomp::Strip.indicator())
+    }
+
     /// The header past its indicators: the spacing and comment after them.
     pub(crate) fn header_rest<'a>(&self, source: &'a str) -> &'a str {
         &source[self.header.start + self.indicators..self.header.end]

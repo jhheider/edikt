@@ -19,6 +19,7 @@
 use edikt_core::{EditError, Value};
 use std::ops::Range;
 
+use crate::block::{BlockScalar, Chomp};
 use crate::compose::{Node, NodeKind};
 use crate::edit::{block_end, ends_with_newline, insert_end, newline, trim_newline};
 use crate::layout::{
@@ -226,7 +227,8 @@ pub(crate) fn new_key(
     let mut lines = Vec::new();
     let entry = Value::Object(vec![(key.to_string(), value.clone())]);
     block_lines(&entry, col, indent, &mut lines)?;
-    Ok(after_block(source, insert_end(source, &last.value), &lines))
+    let at = insert_end(source, &last.value);
+    Ok(after_block(source, at, &lines, &last.value))
 }
 
 /// Append `items` to the sequence `node`: into a flow sequence in flow style,
@@ -244,18 +246,42 @@ pub(crate) fn append_items(
     let col = column(source, content_start(source, node));
     let mut lines = Vec::new();
     block_lines(&Value::Array(items.to_vec()), col, indent, &mut lines)?;
-    Ok(after_block(source, insert_end(source, node), &lines))
+    Ok(after_block(source, insert_end(source, node), &lines, node))
 }
 
-/// Insert `lines` as whole lines at `at` (the start of the line after a
-/// block), keeping a file without a trailing newline without one.
-fn after_block(source: &str, at: usize, lines: &[String]) -> Splice {
+/// Insert `lines` as whole lines at `at` (the start of the line after
+/// `last`, the node they follow), keeping a file without a trailing newline
+/// without one.
+///
+/// A block scalar ending such a file has no final line break in its value;
+/// the line break the insertion puts after it would add one, so its header
+/// takes strip chomping (`|-`) to keep the value as it was (#111).
+fn after_block(source: &str, at: usize, lines: &[String], last: &Node) -> Splice {
     let nl = newline(source);
     let body = lines.join(nl);
-    if at == source.len() && !ends_with_newline(source) {
-        (at..at, format!("{nl}{body}"))
-    } else {
-        (at..at, format!("{body}{nl}"))
+    if at < source.len() || ends_with_newline(source) {
+        return (at..at, format!("{body}{nl}"));
+    }
+    let leaf = last_leaf(last);
+    if let Some(block) = BlockScalar::of(source, leaf)
+        && block.chomp != Chomp::Strip
+        && matches!(&leaf.kind, NodeKind::Scalar(Value::Str(s)) if !s.is_empty())
+    {
+        let header = block.stripped_header(source);
+        let range = block.header.start..at;
+        let kept = &source[block.header.end..at];
+        return (range, format!("{header}{kept}{nl}{body}"));
+    }
+    (at..at, format!("{nl}{body}"))
+}
+
+/// The node that ends `node` in the source: its last item's or last
+/// value's, all the way down.
+fn last_leaf(node: &Node) -> &Node {
+    match &node.kind {
+        NodeKind::Sequence(items) => items.last().map_or(node, last_leaf),
+        NodeKind::Mapping(entries) => entries.last().map_or(node, |e| last_leaf(&e.value)),
+        NodeKind::Scalar(_) => node,
     }
 }
 
@@ -393,12 +419,90 @@ mod corpus {
                                 Ok(()) => {}
                                 // A mapping reached only through an alias or a merge.
                                 Err(e) if e.to_string().contains("path not found") => continue,
+                                // Refused by the contract, not reflowed.
+                                Err(e)
+                                    if ["multi-line flow collection", "single-pair mapping"]
+                                        .iter()
+                                        .any(|r| e.to_string().contains(r)) =>
+                                {
+                                    continue;
+                                }
                                 Err(e) => panic!("{deep:?} = {shape:?}: {e}\n{src}"),
                             }
                             let got = parse(&doc.to_source()).unwrap();
                             assert_eq!(got.value_at(idx, &deep).as_ref(), Some(shape), "{deep:?}");
                             checked += 1;
                         }
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "only {checked} edits checked");
+    }
+
+    /// Deleting any one element, or appending to any sequence, of every
+    /// fixture changes exactly that element: the document reads back as the
+    /// evaluator's `del(path)` / `path += [x]` (#111). The refusals allowed
+    /// are the documented ones; everything in `flow.yaml` must go through.
+    #[test]
+    fn every_fixture_element_deletes_and_appends_alone() {
+        use edikt_core::{Expr, eval};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
+        let refusals = [
+            "multi-line flow collection",
+            "compact `- ` item",
+            "would remove anchor",
+        ];
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let file = entry.unwrap().path();
+            let src = std::fs::read_to_string(&file).unwrap();
+            let flow_fixture = file.file_name().is_some_and(|n| n == "flow.yaml");
+            let docs = parse(&src).unwrap();
+            for idx in 0..docs.docs.len() {
+                let before = docs.doc_value(idx);
+                let mut all = Vec::new();
+                paths(&before, &mut Vec::new(), &mut all);
+                for path in all.iter().filter(|p| !p.is_empty()) {
+                    let del = Expr::Call("del".into(), vec![Expr::Path(path.clone())]);
+                    let mut edits = vec![(del, true)];
+                    if matches!(docs.value_at(idx, path), Some(Value::Array(_))) {
+                        let add = Expr::AddAssign(
+                            Box::new(Expr::Path(path.clone())),
+                            Box::new(Expr::Literal(json!([9]))),
+                        );
+                        edits.push((add, false));
+                    }
+                    for (expr, is_del) in edits {
+                        let mut doc = parse(&src).unwrap();
+                        let done = if is_del {
+                            doc.delete(idx, path)
+                        } else {
+                            doc.append(idx, path, &[json!(9)], Strictness::Strict)
+                        };
+                        match done {
+                            Ok(()) => {}
+                            // Growing a multi-line flow collection is refused
+                            // by the contract; the rest only elsewhere.
+                            Err(e)
+                                if refusals[..if flow_fixture { 1 } else { refusals.len() }]
+                                    .iter()
+                                    .any(|r| e.to_string().contains(r)) =>
+                            {
+                                continue;
+                            }
+                            Err(e) => panic!("{file:?} {path:?}: {e}"),
+                        }
+                        let out = doc.to_source();
+                        let got = parse(&out).unwrap();
+                        if !src.contains('*') {
+                            let want = eval(&expr, &before).unwrap().remove(0);
+                            assert_eq!(got.doc_value(idx), want, "{file:?} {path:?}\n{out}");
+                        }
+                        for other in (0..docs.docs.len()).filter(|&o| o != idx) {
+                            assert_eq!(got.doc_value(other), docs.doc_value(other));
+                        }
+                        checked += 1;
                     }
                 }
             }

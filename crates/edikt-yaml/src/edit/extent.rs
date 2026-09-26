@@ -3,7 +3,7 @@
 
 use crate::block::BlockScalar;
 use crate::compose::{Node, NodeKind};
-use crate::layout::line_start;
+use crate::layout::{is_flow, line_start};
 use edikt_core::{Step, normalize_index};
 
 /// The newline style the document uses, so inserted lines match it (a lone `\n`
@@ -23,7 +23,7 @@ pub(crate) fn ends_with_newline(source: &str) -> bool {
 /// libyaml lands scalar end-marks mid-line (right after the text) but collection
 /// end-marks at the *next* line's start; this normalizes both to "start of the
 /// following line" (or EOF).
-pub(crate) fn line_after(source: &str, end: usize) -> usize {
+pub(super) fn line_after(source: &str, end: usize) -> usize {
     let bytes = source.as_bytes();
     if end == 0 || bytes.get(end - 1) == Some(&b'\n') {
         return end;
@@ -47,6 +47,11 @@ pub(crate) fn trim_newline(source: &str, end: usize) -> usize {
 /// the *next sibling's* text (past that sibling's indent), which would overshoot.
 /// So we drill to the node's deepest last scalar and take the line after *it*.
 pub(crate) fn block_end(source: &str, node: &Node) -> usize {
+    // A flow collection's span does end at its closing bracket, which may
+    // sit on a line after its last item (#111).
+    if is_flow(source, node) {
+        return line_after(source, node.span.end);
+    }
     match &node.kind {
         NodeKind::Scalar(_) => line_after(source, node.span.end),
         NodeKind::Sequence(items) => match items.last() {
@@ -65,6 +70,9 @@ pub(crate) fn block_end(source: &str, node: &Node) -> usize {
 /// insertion, where they keep separating it from what follows (#90). Only a
 /// keep-chomped (`+`) scalar owns those lines, so an insertion goes past them.
 pub(crate) fn insert_end(source: &str, node: &Node) -> usize {
+    if is_flow(source, node) {
+        return block_end(source, node);
+    }
     match &node.kind {
         NodeKind::Scalar(_) => {
             BlockScalar::of(source, node).map_or_else(|| block_end(source, node), |b| b.insert_at())

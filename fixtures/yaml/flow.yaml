@@ -1,0 +1,28 @@
+# Flow collections in the layouts deletes and edits must keep (#111).
+single: [1, 2, 3]
+trailing: [a, b, c,]
+spaced: [ x , y ]
+one: [only]
+map: {a: 1, b: two, c: [3, 4]}
+nulls: {bare, empty: , set: 1}
+nested: [[1, 2], {k: [v, w], j: {}}, []]
+pairs: [p: 1, q, r: [2]]
+quoted: ["a, b", 'c]', "d # e"]
+props: [&n 1, !!str 2, &m {z: 1}]
+multi: [
+  1,  # one
+  # about two
+  2,
+  3  # three
+]
+multi_trailing: {
+  a: 1,
+  b: [x, y],
+}
+packed: [1, 2,
+  3, 4]
+blocks:
+  - [1, 2]
+  - {a: [1], b: 2}
+  - k: [x, y]
+    l: {m: n}

@@ -38,7 +38,13 @@ fn block_scalar_at_eof_without_a_newline_parses() {
     // Round trip and edits keep the missing final newline missing.
     let src = "a: |\n  t";
     assert_eq!(parse(src).unwrap().to_source(), src);
-    assert_eq!(edit(src, ".b = 1"), "a: |\n  t\nb: 1");
+    // A line after the scalar would add a final break to its value; strip
+    // chomping keeps it "t" (#111). `+` goes the same way; `-` needs nothing.
+    assert_eq!(edit(src, ".b = 1"), "a: |-\n  t\nb: 1");
+    assert_eq!(edit("a: |+2 # c\n  t", ".b = 1"), "a: |2- # c\n  t\nb: 1");
+    assert_eq!(edit("a: >-\n  t", ".b = 1"), "a: >-\n  t\nb: 1");
+    assert_eq!(edit("- |\n  t", ". += [1]"), "- |-\n  t\n- 1");
+    assert_eq!(q(&edit("- |\n  t", ". += [1]"), ".[0]"), s("t"));
     assert_eq!(edit("x: 1\na: |\n  t", ".x = 2"), "x: 2\na: |\n  t");
 }
 
@@ -549,9 +555,12 @@ fn delete_iterate_fans_out() {
     );
     assert_eq!(edit("a: [1, 2]\n", "del(.a[])"), "a: []\n");
     assert_eq!(edit("- 1\n- 2\n", "del(.[])"), "[]\n");
-    // A nested iterate composes the per-item deletes (YAML block semantics:
-    // deleting a subentry removes the item line).
-    assert_eq!(edit("a:\n  - b: 1\n  - b: 2\n", "del(.a[].b)"), "a:\n");
+    // A nested iterate composes the per-item deletes; an item whose only
+    // key goes is left `{}`, as in jq, not deleted with it (#111).
+    assert_eq!(
+        edit("a:\n  - b: 1\n  - b: 2\n", "del(.a[].b)"),
+        "a:\n  - {}\n  - {}\n"
+    );
     // Missing target / empty collection is a no-op.
     assert_eq!(edit("a: []\n", "del(.a[])"), "a: []\n");
     assert_eq!(edit("a: 1\n", "del(.nope[])"), "a: 1\n");

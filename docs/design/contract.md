@@ -469,9 +469,33 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   creates missing parent mappings at any depth (#85), laid out by the same
   rules, in every document of a stream; it can't create an array element or
   a key inside a scalar. A block (`|`/`>`) scalar is set in place, keeping
-  its style (see the moat). Refused rather than reflowed: replacing a quoted
+  its style (see the moat). A line added after a block scalar that ends the
+  file with no line break turns its header to `|-`/`>-`, which keeps its value
+  (without it the value would gain a final line break). Refused rather than
+  reflowed: replacing a quoted
   or plain scalar that wraps over several lines, and growing a multi-line
   flow collection.
+
+  `del` removes exactly the element it names (#111). In a flow collection
+  the element goes with one separator and the collection keeps its layout:
+  `[1, 2, 3]` loses `2, ` or `, 3`, a trailing comma stays trailing, a
+  one-per-line collection loses the element's line (and the comment on it)
+  while comment lines around it stay, and a `[k: v]` pair goes as one
+  element. Deleting the last element of any collection leaves it empty
+  (`a: {}`, `- []`, `k: [1]` to `k: []`), never null, as in jq; comment
+  lines of their own inside an emptied flow collection stay. The first key
+  of a compact `- key: v` item hands the dash line to the next key. Setting
+  an implicit null (`a:`, `-`, `{a, b: 1}`) writes the value after its
+  indicator. Refused rather than guessed, exit 2 with nothing changed: a
+  flow collection with an explicit `? key`, a compact item's first key with
+  comments between it and the next, adding a key to a `[k: v]` pair, setting
+  a `? key` that has no value, and any edit that would remove an anchor an
+  alias still names (the alias would read as null). As a backstop, every
+  edit is checked after it is made: the document must read back as the
+  evaluator's reading of the edit, and every other document unchanged, or
+  the edit is undone and reported as a bug (exit 2). A document with aliases
+  skips the check, since there an edit to an anchored node rightly reaches
+  its aliases.
 - **TOML** - lossless via `toml_edit`'s decor-preserving DOM. `toml_edit`
   keeps one spelling (quoting, spacing around the dots) per key, so a key the
   file spells more than one way would come back one way everywhere
