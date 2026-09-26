@@ -85,6 +85,50 @@ impl Kdl {
     }
 }
 
+/// Whether any decor in `doc` holds a comment. kdl-rs keeps comments (line,
+/// block, and `/-` slashdash) only in decor strings, which otherwise hold
+/// whitespace, so a comment opener there is a comment, while `//` inside a
+/// string value (`url "https://x"`) is never looked at.
+fn comments_in_decor(doc: &KdlDocument) -> bool {
+    fn text(s: &str) -> bool {
+        s.contains("//") || s.contains("/*") || s.contains("/-")
+    }
+    fn node(n: &kdl::KdlNode) -> bool {
+        n.format().is_some_and(|f| {
+            [
+                &f.leading,
+                &f.before_ty_name,
+                &f.after_ty_name,
+                &f.after_ty,
+                &f.before_children,
+                &f.before_terminator,
+                // A line comment ending the node rides in its terminator.
+                &f.terminator,
+                &f.trailing,
+            ]
+            .into_iter()
+            .any(|s| text(s))
+        }) || n.entries().iter().any(|e| {
+            e.format().is_some_and(|f| {
+                [
+                    &f.leading,
+                    &f.trailing,
+                    &f.after_ty,
+                    &f.before_ty_name,
+                    &f.after_ty_name,
+                    &f.after_key,
+                    &f.after_eq,
+                ]
+                .into_iter()
+                .any(|s| text(s))
+            })
+        }) || n.children().is_some_and(comments_in_decor)
+    }
+    doc.format()
+        .is_some_and(|f| text(&f.leading) || text(&f.trailing))
+        || doc.nodes().iter().any(node)
+}
+
 /// Parse KDL source into a [`Kdl`] document.
 pub fn parse(src: &str) -> Result<Kdl, ParseError> {
     let doc = KdlDocument::parse(src).map_err(|e| ParseError { msg: e.to_string() })?;
@@ -105,10 +149,7 @@ impl Document for Kdl {
         edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
-        // kdl-rs keeps comments in decor strings; a `//` or `/*` anywhere in
-        // the serialized form means the source carried one.
-        let s = self.doc.to_string();
-        s.contains("//") || s.contains("/*")
+        comments_in_decor(&self.doc)
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.doc))
@@ -965,6 +1006,35 @@ mod tests {
         let mut doc = parse("a 1\n").unwrap();
         assert!(doc.set(&[], &Value::Int(1)).is_err());
         assert!(doc.delete(&[]).is_err());
+    }
+
+    #[test]
+    fn has_comments_ignores_comment_openers_inside_strings() {
+        // A URL or path in a string is data (`--strict` used to refuse
+        // converting these comment-free files).
+        for src in [
+            "url \"https://example.com\"\n",
+            "glob \"/*\" dash=\"a/-b\"\n",
+            "raw #\"C://x\"#\n",
+            "s {\n  home \"http://h\"\n}\n",
+        ] {
+            assert!(!parse(src).unwrap().has_comments(), "{src:?}");
+        }
+        // Every place a comment can live is still seen.
+        for src in [
+            "// banner\na 1\n",
+            "a 1 // inline\n",
+            "a /* mid */ 1\n",
+            "a 1 k=/* v */2\n",
+            "s {\n  // head\n  b 1\n}\n",
+            "s { // brace\n  b 1\n}\n",
+            "s {\n  b 1\n  // foot\n}\n",
+            "/-gone 1\nkept 2\n",
+            "a 1 /-2\n",
+            "a 1\n// trailing\n",
+        ] {
+            assert!(parse(src).unwrap().has_comments(), "{src:?}");
+        }
     }
 
     #[test]

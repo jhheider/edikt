@@ -274,10 +274,53 @@ pub fn parse(src: &str) -> Result<Toml, ParseError> {
     let doc = src
         .parse::<DocumentMut>()
         .map_err(|e| ParseError { msg: e.to_string() })?;
-    let had_comments = src
-        .lines()
-        .any(|l| l.trim_start().starts_with('#') || l.contains(" #"));
+    let had_comments = has_comment_decor(&doc);
     Ok(Toml { doc, had_comments })
+}
+
+/// Whether any decor in the document holds a comment. `toml_edit` keeps
+/// comments only in decor strings (key, value, and table prefix/suffix, an
+/// array's or inline table's inner whitespace, the document trailer), which
+/// hold nothing but whitespace and comments, so a `#` there is a comment,
+/// while a `#` inside a string value (`tag = "v #1"`) is never looked at.
+fn has_comment_decor(doc: &DocumentMut) -> bool {
+    fn raw(s: Option<&str>) -> bool {
+        s.is_some_and(|s| s.contains('#'))
+    }
+    fn decor(d: &toml_edit::Decor) -> bool {
+        raw(d.prefix().and_then(|r| r.as_str())) || raw(d.suffix().and_then(|r| r.as_str()))
+    }
+    fn key(k: &toml_edit::Key) -> bool {
+        decor(k.leaf_decor()) || decor(k.dotted_decor())
+    }
+    fn value(v: &TomlValue) -> bool {
+        if decor(v.decor()) {
+            return true;
+        }
+        match v {
+            TomlValue::Array(a) => raw(a.trailing().as_str()) || a.iter().any(value),
+            TomlValue::InlineTable(t) => {
+                raw(t.preamble().as_str())
+                    || t.iter()
+                        .any(|(k, _)| t.get_key_value(k).is_some_and(|(k, v)| key(k) || item(v)))
+            }
+            _ => false,
+        }
+    }
+    fn item(i: &Item) -> bool {
+        match i {
+            Item::None => false,
+            Item::Value(v) => value(v),
+            Item::Table(t) => table(t),
+            Item::ArrayOfTables(a) => a.iter().any(table),
+        }
+    }
+    fn table(t: &Table) -> bool {
+        decor(t.decor())
+            || t.iter()
+                .any(|(k, _)| t.get_key_value(k).is_some_and(|(k, i)| key(k) || item(i)))
+    }
+    raw(doc.trailing().as_str()) || table(doc.as_table())
 }
 
 impl Document for Toml {
@@ -923,6 +966,34 @@ mod tests {
             edit_err("a = 1\n", ".xs[] = 1").contains("cannot create through `[]`"),
             "iterate create"
         );
+    }
+
+    #[test]
+    fn has_comments_ignores_a_hash_inside_strings() {
+        // A `#` inside a string is data, not a comment (`--strict` used to
+        // refuse converting these comment-free files).
+        for src in [
+            "tag = \"v #1\"\n",
+            "tag = 'v #1'\n",
+            "t = \"\"\"\nline #1\n\"\"\"\n",
+            "[\"a #b\"]\nk = { x = \"y #z\" }\n",
+            "xs = [\"#1\", \"#2\"]\n",
+        ] {
+            assert!(!parse(src).unwrap().has_comments(), "{src:?}");
+        }
+        // Every place a comment can live is still seen.
+        for src in [
+            "# banner\na = 1\n",
+            "a = 1 # inline\n",
+            "[t] # header\nb = 2\n",
+            "[t]\n# head\nb = 2\n",
+            "xs = [\n  1, # one\n  2,\n]\n",
+            "xs = [\n  1,\n  # trailing\n]\n",
+            "a = 1\n# foot\n",
+            "[[aot]]\n# in aot\nk = 1\n",
+        ] {
+            assert!(parse(src).unwrap().has_comments(), "{src:?}");
+        }
     }
 
     #[test]

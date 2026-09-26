@@ -2021,3 +2021,25 @@ fn path_builtin_shows_what_an_edit_will_touch() {
     );
     assert_eq!((out.as_str(), code), ("", 1));
 }
+
+#[test]
+fn strict_conversion_of_a_comment_free_file_with_a_hash_in_a_string() {
+    // A `#` or `//` inside a string is data, not a comment, so `--strict`
+    // has nothing to refuse. A computed result (`{k}`) is where the
+    // document-level comment check applies.
+    for (fmt, src, expr, want) in [
+        ("toml", "tag = \"v #1\"\n", "{tag}", "v #1"),
+        (
+            "kdl",
+            "url \"https://example.com\"\n",
+            "{url}",
+            "https://example.com",
+        ),
+        ("yaml", "tag: \"v #1\"\n", "{tag}", "v #1"),
+    ] {
+        let (out, err, code) = run(&["-t", fmt, "-T", "json", "--strict", expr], src);
+        assert_eq!(code, 0, "{fmt}: {err}");
+        assert!(err.is_empty(), "{fmt}: {err}");
+        assert!(out.contains(want), "{fmt}: {out}");
+    }
+}
