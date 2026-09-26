@@ -150,6 +150,9 @@ pub(crate) fn compose_source(src: &str) -> Result<Node, String> {
 /// yields one; a `---`-separated stream yields one per document.
 pub(crate) struct Docs {
     docs: Vec<Node>,
+    /// The first alias naming an anchor its document never defined (it
+    /// reads as null): an edit must not leave one behind (#111).
+    pub(crate) dangling: Option<String>,
 }
 
 impl Docs {
@@ -201,7 +204,28 @@ pub(crate) fn compose_all(src: &str) -> Result<Docs, String> {
             }
         }
     }
-    Ok(Docs { docs })
+    Ok(Docs {
+        docs,
+        dangling: dangling_alias(&events),
+    })
+}
+
+/// The first alias whose anchor is not defined before it in its document.
+fn dangling_alias(events: &[Ev]) -> Option<String> {
+    let mut defined: Vec<&str> = Vec::new();
+    for ev in events {
+        match &ev.tok {
+            Tok::DocStart => defined.clear(),
+            Tok::Alias(name) if !defined.contains(&name.as_str()) => return Some(name.clone()),
+            Tok::Scalar {
+                anchor: Some(a), ..
+            }
+            | Tok::SeqStart(Some(a))
+            | Tok::MapStart(Some(a)) => defined.push(a),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Compose the node at `*pos`, advancing `pos` past it. Registers anchors so

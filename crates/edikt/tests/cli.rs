@@ -2480,9 +2480,65 @@ fn yaml_block_scalar_at_eof_without_newline_does_not_panic() {
     let src = "a: |\n  t";
     let (out, err, code) = run(&["-t", "yaml", ".a"], src);
     assert_eq!((out.as_str(), code), ("t\n", 0), "{err}");
+    // A line after it would give `.a` a final line break ("t\n"); strip
+    // chomping keeps it "t" (#111).
     let (out, err, code) = run(&["-t", "yaml", ".b = 1"], src);
     assert_eq!(code, 0, "{err}");
-    assert_eq!(out, "a: |\n  t\nb: 1");
+    assert_eq!(out, "a: |-\n  t\nb: 1");
+    let (out, _, _) = run(&["-t", "yaml", ".a"], &out);
+    assert_eq!(out, "t\n");
+}
+
+#[test]
+fn yaml_del_of_a_flow_element_keeps_the_rest() {
+    // #111: each of these deleted the whole enclosing entry, exit 0.
+    for (src, expr, want) in [
+        ("k: [1, 2]\nz: 3\n", "del(.k[1])", "k: [1]\nz: 3\n"),
+        ("k: {a: 1, b: 2}\nz: 3\n", "del(.k.a)", "k: {b: 2}\nz: 3\n"),
+        (
+            "items:\n  - [1, 2]\n  - [3]\n",
+            "del(.items[0][1])",
+            "items:\n  - [1]\n  - [3]\n",
+        ),
+        (
+            "items:\n  - [1, 2]\n  - [3]\n",
+            "del(.items[0][])",
+            "items:\n  - []\n  - [3]\n",
+        ),
+        (
+            "k: [\n  1,  # one\n  2,\n]\nz: 3\n",
+            "del(.k[0])",
+            "k: [\n  2,\n]\nz: 3\n",
+        ),
+        // A block collection's last element leaves it empty, not null.
+        (
+            "a:\n  - b: 1\n  - b: 2\n",
+            "del(.a[].b)",
+            "a:\n  - {}\n  - {}\n",
+        ),
+    ] {
+        let (out, err, code) = run(&["-t", "yaml", expr], src);
+        assert_eq!((out.as_str(), code), (want, 0), "{expr}: {err}");
+    }
+}
+
+#[test]
+fn yaml_refuses_a_delete_it_cannot_make_exactly() {
+    // Exit 2 with the file untouched, rather than deleting more than asked.
+    for (src, expr, says) in [
+        ("k: {? a : 1, b: 2}\n", "del(.k.b)", "flow collection"),
+        ("- a: &x 1\n  b: *x\n", "del(.[0].a)", "anchor &x"),
+        (
+            "- a: 1 # one\n  # two\n  b: 2\n",
+            "del(.[0].a)",
+            "compact `- ` item",
+        ),
+    ] {
+        let (out, err, code) = run(&["-t", "yaml", expr], src);
+        assert_eq!(code, 2, "{expr}: {out}");
+        assert!(out.is_empty(), "{expr}: {out}");
+        assert!(err.contains(says), "{expr}: {err}");
+    }
 }
 
 #[test]

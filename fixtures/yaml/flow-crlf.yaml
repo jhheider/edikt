@@ -1,0 +1,9 @@
+# Flow collections under CRLF (#111).
+list: [1, 2, 3]
+lines: [
+  a,  # first
+  b,
+  c
+]
+map: {x: 1,
+  y: 2}

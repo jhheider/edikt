@@ -250,6 +250,11 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   TOML arrays grow the same way: `edikt -i '.features.full += ["x"]'
   Cargo.toml` puts `"x"` on its own line when the list is one item per line,
   keeping its indent and trailing comma, and inline when it is inline.
+- **`del` removes just what it names.** In YAML, `del(.k[1])` over
+  `k: [1, 2]` leaves `k: [1]`, separators and comments in place, and the last
+  element out leaves `[]` or `{}` rather than a null. An edit edikt can't make
+  exactly (removing an anchor that an alias still uses, say) exits 2 and
+  leaves the file alone rather than changing more than you asked.
 - **`.env` quotes are part of the value, not syntax.** There is no single `.env`
   grammar (docker-compose, dotenv libraries and shell `source` disagree), so
   edikt interprets nothing: for `APP_NAME="my app"` the value is the seven-plus

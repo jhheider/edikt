@@ -17,8 +17,12 @@
 use edikt_core::{EditError, Expr, Mutable, Step, Value, eval, render_path};
 
 use crate::Yaml;
+use guard::Intent;
 
+mod delete;
 mod extent;
+mod flow;
+mod guard;
 mod resolve;
 mod write;
 
@@ -106,13 +110,25 @@ impl Mutable for InDoc<'_> {
         self.doc.value_at(self.idx, path)
     }
     fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-        self.doc.set(self.idx, path, value, self.strict)
+        let (idx, strict) = (self.idx, self.strict);
+        self.doc
+            .guarded(idx, path, Intent::Set(value), strict, |d| {
+                d.set(idx, path, value, strict)
+            })
     }
     fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
-        self.doc.delete(self.idx, path)
+        let (idx, strict) = (self.idx, self.strict);
+        self.doc
+            .guarded(idx, path, Intent::Delete, strict, |d| d.delete(idx, path))
     }
     fn append(&mut self, path: &[Step], items: &[Value]) -> Option<Result<(), EditError>> {
-        Some(self.doc.append(self.idx, path, items, self.strict))
+        let (idx, strict) = (self.idx, self.strict);
+        Some(
+            self.doc
+                .guarded(idx, path, Intent::Append(items), strict, |d| {
+                    d.append(idx, path, items, strict)
+                }),
+        )
     }
     fn miss(&self, path: &[Step]) -> Result<(), EditError> {
         miss(self.strict, path)
@@ -156,3 +172,6 @@ fn doc_matches(pred: &Expr, val: &Value) -> Result<bool, EditError> {
     let kept = eval(&filter, val)?;
     Ok(!kept.is_empty())
 }
+
+#[cfg(test)]
+mod tests;

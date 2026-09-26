@@ -19,6 +19,7 @@
 use edikt_core::{EditError, Value};
 use std::ops::Range;
 
+use crate::block::{BlockScalar, Chomp};
 use crate::compose::{Node, NodeKind};
 use crate::edit::{block_end, ends_with_newline, insert_end, newline, trim_newline};
 use crate::layout::{
@@ -226,7 +227,8 @@ pub(crate) fn new_key(
     let mut lines = Vec::new();
     let entry = Value::Object(vec![(key.to_string(), value.clone())]);
     block_lines(&entry, col, indent, &mut lines)?;
-    Ok(after_block(source, insert_end(source, &last.value), &lines))
+    let at = insert_end(source, &last.value);
+    Ok(after_block(source, at, &lines, &last.value))
 }
 
 /// Append `items` to the sequence `node`: into a flow sequence in flow style,
@@ -244,18 +246,42 @@ pub(crate) fn append_items(
     let col = column(source, content_start(source, node));
     let mut lines = Vec::new();
     block_lines(&Value::Array(items.to_vec()), col, indent, &mut lines)?;
-    Ok(after_block(source, insert_end(source, node), &lines))
+    Ok(after_block(source, insert_end(source, node), &lines, node))
 }
 
-/// Insert `lines` as whole lines at `at` (the start of the line after a
-/// block), keeping a file without a trailing newline without one.
-fn after_block(source: &str, at: usize, lines: &[String]) -> Splice {
+/// Insert `lines` as whole lines at `at` (the start of the line after
+/// `last`, the node they follow), keeping a file without a trailing newline
+/// without one.
+///
+/// A block scalar ending such a file has no final line break in its value;
+/// the line break the insertion puts after it would add one, so its header
+/// takes strip chomping (`|-`) to keep the value as it was (#111).
+fn after_block(source: &str, at: usize, lines: &[String], last: &Node) -> Splice {
     let nl = newline(source);
     let body = lines.join(nl);
-    if at == source.len() && !ends_with_newline(source) {
-        (at..at, format!("{nl}{body}"))
-    } else {
-        (at..at, format!("{body}{nl}"))
+    if at < source.len() || ends_with_newline(source) {
+        return (at..at, format!("{body}{nl}"));
+    }
+    let leaf = last_leaf(last);
+    if let Some(block) = BlockScalar::of(source, leaf)
+        && block.chomp != Chomp::Strip
+        && matches!(&leaf.kind, NodeKind::Scalar(Value::Str(s)) if !s.is_empty())
+    {
+        let header = block.stripped_header(source);
+        let range = block.header.start..at;
+        let kept = &source[block.header.end..at];
+        return (range, format!("{header}{kept}{nl}{body}"));
+    }
+    (at..at, format!("{nl}{body}"))
+}
+
+/// The node that ends `node` in the source: its last item's or last
+/// value's, all the way down.
+fn last_leaf(node: &Node) -> &Node {
+    match &node.kind {
+        NodeKind::Sequence(items) => items.last().map_or(node, last_leaf),
+        NodeKind::Mapping(entries) => entries.last().map_or(node, |e| last_leaf(&e.value)),
+        NodeKind::Scalar(_) => node,
     }
 }
 
@@ -299,110 +325,4 @@ fn colon_end(source: &str, key_end: usize) -> Result<usize, EditError> {
 mod tests;
 
 #[cfg(test)]
-mod corpus {
-    use crate::edit::Strictness;
-    use crate::{Document, Step, Value, json, parse};
-
-    /// Every path to every node of `v`, the root included.
-    fn paths(v: &Value, at: &mut Vec<Step>, out: &mut Vec<Vec<Step>>) {
-        out.push(at.clone());
-        match v {
-            Value::Array(items) => {
-                for (i, item) in items.iter().enumerate() {
-                    at.push(Step::Index(i as i64));
-                    paths(item, at, out);
-                    at.pop();
-                }
-            }
-            Value::Object(entries) => {
-                for (k, item) in entries {
-                    at.push(Step::Field(k.clone()));
-                    paths(item, at, out);
-                    at.pop();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// `v` with the node at `path` replaced by `new`.
-    fn set_in(v: &mut Value, path: &[Step], new: &Value) {
-        let Some((step, rest)) = path.split_first() else {
-            *v = new.clone();
-            return;
-        };
-        match (step, v) {
-            (Step::Index(i), Value::Array(items)) => set_in(&mut items[*i as usize], rest, new),
-            (Step::Field(k), Value::Object(entries)) => {
-                let e = entries.iter_mut().find(|(ek, _)| ek == k).unwrap();
-                set_in(&mut e.1, rest, new);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn every_fixture_path_takes_every_shape() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/yaml");
-        let shapes = [
-            json!([1, {"a": "x y", "b": [true, null]}]),
-            json!({"k": {"l": [1.5]}, "m": "#no comment"}),
-            json!("plain"),
-            json!([]),
-        ];
-        let mut checked = 0;
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let src = std::fs::read_to_string(entry.unwrap().path()).unwrap();
-            let docs = parse(&src).unwrap();
-            for idx in 0..docs.docs.len() {
-                let mut all = Vec::new();
-                paths(&docs.doc_value(idx), &mut Vec::new(), &mut all);
-                for path in &all {
-                    for shape in &shapes {
-                        let mut doc = parse(&src).unwrap();
-                        let before = doc.doc_value(idx);
-                        match doc.set(idx, path, shape, Strictness::Strict) {
-                            Ok(()) => {}
-                            // An element reached only through an alias or a
-                            // merge has no bytes of its own. Anything else
-                            // is a failure, block scalars included (#89).
-                            Err(e) if e.to_string().contains("path not found") => continue,
-                            Err(e) => panic!("{path:?} = {shape:?}: {e}\n{src}"),
-                        }
-                        let got = parse(&doc.to_source()).unwrap();
-                        assert_eq!(got.value_at(idx, path).as_ref(), Some(shape), "{path:?}");
-                        if !src.contains(['&', '*']) {
-                            let mut want = before;
-                            set_in(&mut want, path, shape);
-                            assert_eq!(got.doc_value(idx), want, "{path:?} = {shape:?}");
-                        }
-                        checked += 1;
-                    }
-                    // Under every mapping, `=` creates two missing levels
-                    // (jhheider/edikt#85) and they read back as assigned.
-                    let base = parse(&src).unwrap();
-                    if matches!(base.value_at(idx, path), Some(Value::Object(_))) {
-                        let deep = [
-                            path.clone(),
-                            vec![Step::Field("zz_new".into()), Step::Field("deep".into())],
-                        ]
-                        .concat();
-                        for shape in &shapes {
-                            let mut doc = parse(&src).unwrap();
-                            match doc.set(idx, &deep, shape, Strictness::Strict) {
-                                Ok(()) => {}
-                                // A mapping reached only through an alias or a merge.
-                                Err(e) if e.to_string().contains("path not found") => continue,
-                                Err(e) => panic!("{deep:?} = {shape:?}: {e}\n{src}"),
-                            }
-                            let got = parse(&doc.to_source()).unwrap();
-                            assert_eq!(got.value_at(idx, &deep).as_ref(), Some(shape), "{deep:?}");
-                            checked += 1;
-                        }
-                    }
-                }
-            }
-        }
-        assert!(checked > 100, "only {checked} edits checked");
-    }
-}
+mod corpus;
