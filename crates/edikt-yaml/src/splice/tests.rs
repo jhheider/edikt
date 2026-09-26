@@ -178,6 +178,9 @@ fn a_collection_over_a_collection_keeps_what_it_keeps() {
         edit("k:\n  - 1 # a\n  - 1 # b\n  - 2\n", ".k = [1, 2]"),
         "k:\n  - 1 # a\n  - 2\n"
     );
+    // A reorder rewrites the list, rather than setting each item in place
+    // under another item's comment.
+    assert_eq!(edit(src, ".k = [3, 2, 1]"), "k:\n  - 3\n  - 2\n  - 1\n");
     // A multi-line flow list shrinks in place.
     assert_eq!(
         edit("k: [\n  1, # one\n  2, # two\n  3\n]\n", ".k = [1, 3]"),

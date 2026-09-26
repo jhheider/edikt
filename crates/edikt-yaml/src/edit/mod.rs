@@ -11,8 +11,9 @@
 //! entry or a sequence item (`del`); and creating a new **leaf key** on an
 //! existing mapping, with any missing parent mappings above it (`=` creates
 //! them, as in every format). A new collection is laid out in the file's own
-//! style (see [`crate::splice`]); a replacement that keeps a collection's
-//! shape edits only the elements that change.
+//! style (see [`crate::splice`]). A collection assigned over a collection
+//! is diffed into element edits by the shared driver (#117); `diffs`
+//! declines what can't be done in place.
 
 use edikt_core::{EditError, Expr, Mutable, Step, Value, eval, render_path};
 

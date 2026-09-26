@@ -1,6 +1,7 @@
 //! The span-tree edit primitives on [`Yaml`]: set (replacing a value in
-//! place, element by element when a collection keeps its shape, or creating
-//! a missing key), append, delete, and the recompose after each splice.
+//! place, or creating a missing key), append, delete, and the recompose
+//! after each splice. A collection written over a collection reaches here
+//! as element edits, diffed by the shared driver (#117).
 
 use super::extent::{newline, trim_newline};
 use super::flow;
@@ -8,7 +9,7 @@ use super::resolve::{Resolved, in_flow, nest, resolve, slot_of};
 use super::{Strictness, miss};
 use crate::Yaml;
 use crate::block::BlockScalar;
-use crate::compose::{Node, NodeKind, collect_merge, node_to_value};
+use crate::compose::{Node, NodeKind, node_to_value};
 use crate::layout::{Indent, column, flow_text, inline_text, is_flow};
 use crate::scalar::{QuoteStyle, emit_scalar_styled, kept_properties, split_properties};
 use crate::splice::{Slot, append_items, block_replace, new_key, scalar_to_block};
@@ -80,9 +81,7 @@ impl Yaml {
     }
 
     /// Replace the existing node at `path` with `value`, laid out for where it
-    /// sits (see [`crate::splice`]). A collection that already holds `value`
-    /// is left alone, and one that `value` only changes or extends in place is
-    /// edited element by element, so untouched elements keep their bytes.
+    /// sits (see [`crate::splice`]).
     fn replace(
         &mut self,
         idx: usize,
@@ -96,12 +95,6 @@ impl Yaml {
             return miss(strict, path);
         };
         let collection = matches!(value, Value::Array(_) | Value::Object(_));
-        if collection && Value::identical(&node_to_value(node), value) {
-            return Ok(());
-        }
-        if let Some(plan) = elementwise(source, node, value) {
-            return self.apply_plan(idx, path, plan, strict);
-        }
         let scalar = matches!(node.kind, NodeKind::Scalar(_));
         if let Some(block) = BlockScalar::of(source, node) {
             return self.replace_block(idx, path, &block, value, strict);
@@ -233,27 +226,6 @@ impl Yaml {
         self.commit(0..end, &source)
     }
 
-    /// Run an [`elementwise`] plan against the collection at `path`.
-    fn apply_plan(
-        &mut self,
-        idx: usize,
-        path: &[Step],
-        plan: Plan,
-        strict: Strictness,
-    ) -> Result<(), EditError> {
-        let child = |step: Step| [path, &[step]].concat();
-        for (step, v) in plan.changes {
-            self.set(idx, &child(step), &v, strict)?;
-        }
-        if !plan.append.is_empty() {
-            self.append(idx, path, &plan.append, strict)?;
-        }
-        for (k, v) in plan.add {
-            self.set(idx, &child(Step::Field(k)), &v, strict)?;
-        }
-        Ok(())
-    }
-
     /// Append `items` to the sequence at `path` in document `idx`.
     pub(crate) fn append(
         &mut self,
@@ -328,83 +300,4 @@ fn null_lead(source: &str, node: &Node, flow: bool) -> Result<&'static str, Edit
             "cannot set the value of a `?` key that has none in place yet",
         )),
     }
-}
-
-/// A replacement applied element by element: the changed elements, the items
-/// to append, and the keys to add.
-pub(crate) struct Plan {
-    pub(crate) changes: Vec<(Step, Value)>,
-    pub(crate) append: Vec<Value>,
-    pub(crate) add: Vec<(String, Value)>,
-}
-
-/// Plan `value` as element edits to the collection `node` when it keeps the
-/// collection's shape: the same kind, every existing key in its order (or
-/// every existing item), and anything new after them. Then only the elements
-/// that change are touched, and the rest keep their bytes and comments; `.a
-/// |= . + [x]` appends one line instead of rewriting the list. A flow
-/// collection takes element edits only when nothing is added, so a growing
-/// one is respelled whole. `None` means a wholesale replacement.
-pub(crate) fn elementwise(source: &str, node: &Node, value: &Value) -> Option<Plan> {
-    let mut plan = Plan {
-        changes: Vec::new(),
-        append: Vec::new(),
-        add: Vec::new(),
-    };
-    match (&node.kind, value) {
-        (NodeKind::Sequence(items), Value::Array(new)) if new.len() >= items.len() => {
-            for (i, (old, new)) in items.iter().zip(new).enumerate() {
-                if !Value::identical(&node_to_value(old), new) {
-                    plan.changes.push((Step::Index(i as i64), new.clone()));
-                }
-            }
-            plan.append = new[items.len()..].to_vec();
-        }
-        (NodeKind::Mapping(entries), Value::Object(new)) => {
-            // Physical keys, in order. A merge (`<<`) supplies keys too, which
-            // the value view lists after the explicit ones.
-            let phys: Vec<_> = entries.iter().filter(|e| e.key != "<<").collect();
-            if (1..phys.len()).any(|i| phys[..i].iter().any(|e| e.key == phys[i].key)) {
-                return None;
-            }
-            let mut merged = Vec::new();
-            for e in entries.iter().filter(|e| e.key == "<<") {
-                collect_merge(&node_to_value(&e.value), &mut merged);
-            }
-            merged.retain(|(k, _)| !phys.iter().any(|e| &e.key == k));
-            // Dropping a merged-in key can't be done element-wise.
-            if merged
-                .iter()
-                .any(|(k, _)| !new.iter().any(|(nk, _)| nk == k))
-            {
-                return None;
-            }
-            let mut pos = 0;
-            for (k, v) in new {
-                if let Some(e) = phys.get(pos).filter(|e| &e.key == k) {
-                    if !Value::identical(&node_to_value(&e.value), v) {
-                        plan.changes.push((Step::Field(k.clone()), v.clone()));
-                    }
-                    pos += 1;
-                } else if phys.iter().any(|e| &e.key == k) {
-                    return None; // reordered
-                } else if merged
-                    .iter()
-                    .any(|(mk, mv)| mk == k && Value::identical(mv, v))
-                {
-                    // Still supplied, unchanged, by the merge.
-                } else if pos < phys.len() {
-                    return None; // a new key ahead of existing ones
-                } else {
-                    plan.add.push((k.clone(), v.clone()));
-                }
-            }
-            if pos < phys.len() {
-                return None; // a key was removed
-            }
-        }
-        _ => return None,
-    }
-    let grows = !plan.append.is_empty() || !plan.add.is_empty();
-    (!(grows && is_flow(source, node))).then_some(plan)
 }
