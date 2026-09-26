@@ -16,7 +16,10 @@
 
 use crate::{edit, project};
 use edikt_core::wrap::{wrap_comment, wrap_width};
-use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value,
+    sanitize_comment_line as sanitize,
+};
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value as TomlValue};
 
 // --- in-place comment write-back ---------------------------------------
@@ -488,8 +491,4 @@ fn comment_block(lines: &[String], indent: &str) -> String {
         out.push('\n');
     }
     out
-}
-
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
 }

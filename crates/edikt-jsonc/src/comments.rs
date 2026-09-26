@@ -9,20 +9,19 @@
 
 use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
-use edikt_core::wrap::{wrap_comment, wrap_width};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, line_index,
-    place_line_comment,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
+    line_index, place_line_comment, sanitize_comment_line as sanitize,
 };
 use rowan::NodeOrToken;
 
 // --- in-place comment write-back ---------------------------------------
 
-/// Is `line` a JSONC comment line (`//` or `/*`, after indent)?
-fn is_comment_line(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("//") || t.starts_with("/*")
-}
+/// A JSONC comment line: `//` or `/*`, after indent.
+const STYLE: LineComment = LineComment {
+    markers: &["//", "/*"],
+    delim: "// ",
+};
 
 /// Set the `kind` comment on the member/element at `path`, format-preserving.
 /// Head/foot go on own lines around it; inline after its value. A compact
@@ -38,7 +37,7 @@ pub(crate) fn set_node_comment(
     let source = edikt_syntax::to_source(root);
     let start: usize = target.text_range().start().into();
     let end: usize = target.text_range().end().into();
-    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_start = edikt_core::text::line_start(&source, start);
     let indent = &source[line_start..start];
 
     let out = match kind {
@@ -48,16 +47,13 @@ pub(crate) fn set_node_comment(
                     "adding a comment to a compact object needs layout expansion (a follow-up)",
                 ));
             }
-            let width = wrap_width(&source);
-            let wrapped = wrap_comment(text, width, indent.chars().count(), 3);
             place_line_comment(
                 &source,
                 line_index(&source, start),
                 matches!(kind, CommentKind::Head),
                 indent,
-                "// ",
-                &is_comment_line,
-                Some(&wrapped),
+                &STYLE,
+                Some(text),
             )
         }
         CommentKind::Inline => set_inline(&source, start, end, Some(text))?,
@@ -77,7 +73,7 @@ pub(crate) fn delete_node_comment(
     };
     let start: usize = target.text_range().start().into();
     let end: usize = target.text_range().end().into();
-    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_start = edikt_core::text::line_start(&source, start);
     let indent = &source[line_start..start];
     let out = match kind {
         CommentKind::Head | CommentKind::Foot if indent.chars().all(|c| c.is_whitespace()) => {
@@ -86,8 +82,7 @@ pub(crate) fn delete_node_comment(
                 line_index(&source, start),
                 matches!(kind, CommentKind::Head),
                 indent,
-                "// ",
-                &is_comment_line,
+                &STYLE,
                 None,
             )
         }
@@ -428,12 +423,6 @@ fn push_comment_line(out: &mut String, indent: usize, line: &str) {
 fn push_inline(out: &mut String, text: &str) {
     out.push_str(" // ");
     out.push_str(&sanitize(text));
-}
-
-/// A comment line must not contain a newline (it would break out of the
-/// comment); collapse any that sneak through.
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
 }
 
 fn indent_by(level: usize, out: &mut String) {

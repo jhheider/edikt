@@ -13,18 +13,19 @@
 
 use crate::compose::{self, Entry, Node, NodeKind};
 use crate::emit::emit;
-use edikt_core::wrap::{wrap_comment, wrap_width};
+use edikt_core::text::{leading_indent, line_start};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value, line_index,
-    place_line_comment,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
+    line_index, place_line_comment, sanitize_comment_line as sanitize,
 };
 
 // --- in-place comment write-back ---------------------------------------
 
-/// Is `line` a YAML comment line (`#`, after indent)?
-fn is_comment_line(line: &str) -> bool {
-    line.trim_start().starts_with('#')
-}
+/// A YAML comment line: `#`, after indent.
+const STYLE: LineComment = LineComment {
+    markers: &["#"],
+    delim: "# ",
+};
 
 /// Set the `kind` comment on the node at `path` (a value prefix), format-
 /// preserving via a byte-splice over the source. Head/foot go on own lines
@@ -44,19 +45,14 @@ pub(crate) fn set_node_comment(
         )
     })?;
     let out = match kind {
-        CommentKind::Head | CommentKind::Foot => {
-            let width = wrap_width(source);
-            let wrapped = wrap_comment(text, width, indent.chars().count(), 2);
-            place_line_comment(
-                source,
-                line_index(source, anchor),
-                matches!(kind, CommentKind::Head),
-                &indent,
-                "# ",
-                &is_comment_line,
-                Some(&wrapped),
-            )
-        }
+        CommentKind::Head | CommentKind::Foot => place_line_comment(
+            source,
+            line_index(source, anchor),
+            matches!(kind, CommentKind::Head),
+            &indent,
+            &STYLE,
+            Some(text),
+        ),
         CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, Some(text)),
     };
     Ok((out, Vec::new()))
@@ -81,8 +77,7 @@ pub(crate) fn delete_node_comment(
             line_index(source, anchor),
             matches!(kind, CommentKind::Head),
             &indent,
-            "# ",
-            &is_comment_line,
+            &STYLE,
             None,
         ),
         CommentKind::Inline => rewrite_inline(source, anchor, first_line_end, None),
@@ -121,7 +116,7 @@ fn rewrite_inline(source: &str, anchor: usize, first_line_end: usize, set: Optio
 /// between the line start and the anchor holds more than whitespace and
 /// block-sequence `-` markers, e.g. `[`, `,`), which has no own line.
 fn block_indent(source: &str, anchor: usize) -> Option<String> {
-    let line_start = source[..anchor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_start = line_start(source, anchor);
     // Block context: only whitespace and sequence dashes precede the anchor.
     if !source[line_start..anchor]
         .chars()
@@ -129,12 +124,7 @@ fn block_indent(source: &str, anchor: usize) -> Option<String> {
     {
         return None;
     }
-    Some(
-        source[line_start..]
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect(),
-    )
+    Some(edikt_core::text::leading_indent(&source[line_start..]).to_string())
 }
 
 /// The byte index in `line` where an inline comment begins (a `#` at the start
@@ -406,7 +396,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
         (CommentedNode::Object(centries), NodeKind::Mapping(nentries)) => {
             for ((_, cv), ne) in centries.iter().zip(nentries) {
                 let key_line = line_start(text, ne.key_span.start);
-                let indent = indent_of(text, key_line);
+                let indent = leading_indent(&text[key_line..]);
                 if !cv.comments.head.is_empty() {
                     inserts.push((key_line, comment_block(&cv.comments.head, indent)));
                 }
@@ -432,7 +422,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
         (CommentedNode::Array(citems), NodeKind::Sequence(nitems)) => {
             for (cv, ni) in citems.iter().zip(nitems) {
                 let item_line = line_start(text, ni.span.start);
-                let indent = indent_of(text, item_line);
+                let indent = leading_indent(&text[item_line..]);
                 let mut head = cv.comments.head.clone();
                 // A container item has no single line to trail; its inline
                 // joins the head above it.
@@ -460,20 +450,11 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
 
 // --- shared line arithmetic ----------------------------------------------
 
-fn line_start(text: &str, pos: usize) -> usize {
-    text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
-}
-
 fn line_end(text: &str, pos: usize) -> usize {
     text[pos..]
         .find('\n')
         .map(|i| pos + i)
         .unwrap_or(text.len())
-}
-
-fn indent_of(text: &str, line_start: usize) -> &str {
-    let line = &text[line_start..line_end(text, line_start)];
-    &line[..line.len() - line.trim_start().len()]
 }
 
 fn comment_block(lines: &[String], indent: &str) -> String {
@@ -489,8 +470,4 @@ fn comment_block(lines: &[String], indent: &str) -> String {
 
 fn inline_text(text: &str) -> String {
     format!(" # {}", sanitize(text))
-}
-
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
 }

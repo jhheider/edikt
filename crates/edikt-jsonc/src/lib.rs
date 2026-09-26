@@ -274,7 +274,7 @@ fn detect_json5(root: &SyntaxNode) -> bool {
 fn line_col(src: &str, offset: usize) -> (usize, usize) {
     let before = &src[..offset];
     let line = before.matches('\n').count() + 1;
-    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let line_start = edikt_core::text::line_start(src, offset);
     (line, before[line_start..].chars().count() + 1)
 }
 

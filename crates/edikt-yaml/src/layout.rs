@@ -122,9 +122,7 @@ pub(crate) fn column(source: &str, pos: usize) -> usize {
 }
 
 /// The byte offset of the start of the line containing `pos`.
-pub(crate) fn line_start(source: &str, pos: usize) -> usize {
-    source[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
-}
+pub(crate) use edikt_core::text::line_start;
 
 /// The byte offset where the line containing `pos` ends: its `\n`, or the
 /// `\r` of a `\r\n`, or EOF.

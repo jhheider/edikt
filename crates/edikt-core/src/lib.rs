@@ -32,7 +32,9 @@ pub mod wrap;
 
 pub use ast::{BinOp, Expr, Step, render_path};
 pub use comment::{CommentKind, Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
-pub use comment_edit::{apply_comment_mutation, line_index, place_line_comment};
+pub use comment_edit::{
+    LineComment, apply_comment_mutation, line_index, place_line_comment, sanitize_comment_line,
+};
 pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval, eval_with_comments, expand_delete_paths, expand_iter_paths};

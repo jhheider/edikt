@@ -8,7 +8,10 @@
 
 use crate::project;
 use edikt_core::wrap::{wrap_comment, wrap_width};
-use edikt_core::{CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value};
+use edikt_core::{
+    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value,
+    sanitize_comment_line as sanitize,
+};
 use kdl::{KdlDocument, KdlNode};
 
 // --- in-place comment write-back ---------------------------------------
@@ -344,11 +347,5 @@ fn decorate_node(node: &mut KdlNode, c: &Commented) {
 fn leading_indent(node: &KdlNode) -> String {
     let leading = node.format().map(|f| f.leading.as_str()).unwrap_or("");
     let tail = leading.rsplit('\n').next().unwrap_or("");
-    tail.chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect()
-}
-
-fn sanitize(line: &str) -> String {
-    line.replace(['\n', '\r'], " ")
+    edikt_core::text::leading_indent(tail).to_string()
 }
