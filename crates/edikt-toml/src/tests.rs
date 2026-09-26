@@ -241,6 +241,22 @@ fn del_iterate_fans_out() {
 }
 
 #[test]
+fn del_of_an_inline_tables_last_key_keeps_the_space_before_the_brace() {
+    let src = "t = { a = 1, b = 2 } # t\n";
+    assert_eq!(edit_src(src, "del(.t.b)"), "t = { a = 1 } # t\n");
+    assert_eq!(edit_src(src, "del(.t.a)"), "t = { b = 2 } # t\n");
+    assert_eq!(
+        edit_src("a = [{ x = 1, y = 2 }]\n", "del(.a[0].y)"),
+        "a = [{ x = 1 }]\n"
+    );
+    // A standard table's last key keeps its own line's comment to itself.
+    assert_eq!(
+        edit_src("[t]\na = 1\nb = 2 # two\n", "del(.t.b)"),
+        "[t]\na = 1\n"
+    );
+}
+
+#[test]
 fn del_of_an_array_item_keeps_its_neighbours_layout() {
     // One item per line: the item's line goes with the comment beside it;
     // the comments beside the others, and one above it, stay put (#117).

@@ -162,10 +162,22 @@ impl Toml {
         };
         match last {
             Step::Field(key) => {
+                let inline = is_inline_table(self.doc.as_item(), parent);
                 let Some(current) = walk_tables(self.doc.as_table_mut(), parent) else {
                     return Ok(());
                 };
-                current.remove(key);
+                let last = current.iter().last().is_some_and(|(k, _)| k == key);
+                let removed = current.remove(key);
+                // An inline table's last value carries the space before `}`
+                // in its suffix; the new last value takes it over.
+                if inline
+                    && last
+                    && let Some(Item::Value(gone)) = removed
+                    && let Some((_, Item::Value(now))) = current.iter_mut().last()
+                {
+                    let suffix = gone.decor().suffix().cloned().unwrap_or_default();
+                    now.decor_mut().set_suffix(suffix);
+                }
                 Ok(())
             }
             Step::Index(n) => {
@@ -290,6 +302,28 @@ fn follows_dotted_style(parent: &dyn TableLike) -> bool {
         || parent
             .iter()
             .any(|(_, item)| matches!(item, Item::Table(t) if t.is_dotted()))
+}
+
+/// Whether `steps` from `root` lands on an inline table (`{ a = 1 }`), read
+/// without creating anything along the way.
+fn is_inline_table(root: &Item, steps: &[Step]) -> bool {
+    fn walk<'a>(mut item: &'a Item, steps: &[Step]) -> Option<&'a Item> {
+        for step in steps {
+            item = match step {
+                Step::Field(k) => item.get(k.as_str())?,
+                Step::Index(i) => {
+                    let len = match item {
+                        Item::ArrayOfTables(aot) => aot.len(),
+                        _ => item.as_array()?.len(),
+                    };
+                    item.get(edit::resolve_del_index(*i, len)?)?
+                }
+                _ => return None,
+            };
+        }
+        Some(item)
+    }
+    walk(root, steps).is_some_and(Item::is_inline_table)
 }
 
 /// Walk `steps` from `root` **without** creating anything; returns `None` if
