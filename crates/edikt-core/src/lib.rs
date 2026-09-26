@@ -24,6 +24,7 @@ mod macros;
 mod parser;
 mod paths;
 mod strings;
+pub mod text;
 mod value;
 pub mod wrap;
 
