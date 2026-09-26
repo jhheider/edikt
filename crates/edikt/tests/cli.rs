@@ -790,6 +790,33 @@ fn toml_document_updates_like_a_table() {
 }
 
 #[test]
+fn toml_edit_keeps_a_key_spelled_two_ways() {
+    // #104: `["pkg".a]` and `[pkg.b]` share one key in toml_edit, so an edit
+    // to either table rewrote the other header as `["pkg".b]`.
+    let src = "[\"pkg\".a]\nk = 1\n\n[pkg.b]\nk = 1\n";
+    let (out, err, code) = run(&["-t", "toml", ".pkg.a.k = 2"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("[\"pkg\".a]\nk = 2\n\n[pkg.b]\nk = 1\n", 0),
+        "{err}"
+    );
+    // A get is the file's own text, not a re-emit with a synthesized `[pkg]`.
+    let (out, _e, code) = run(&["-t", "toml", "."], src);
+    assert_eq!((out.as_str(), code), (src, 0));
+    let (out, _e, code) = run(&["-t", "toml", ".pkg"], src);
+    assert_eq!((out.as_str(), code), ("[a]\nk = 1\n\n[b]\nk = 1\n", 0));
+    // An edit whose result can't keep a spelling is refused, not respelled.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/spelled-two-ways.toml");
+    let arr = "arr = [{ \"a\".b = 1, a.c = 2 }, { a.b = 3, a.c = 4 }]\n";
+    std::fs::write(&path, arr).unwrap();
+    let (_o, err, code) = run(&["-i", "del(.arr[0])", &path], "");
+    assert_eq!(code, 2);
+    assert!(err.contains("cannot keep the spelling of `a.c`"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), arr);
+}
+
+#[test]
 fn convert_toml_to_json_and_back() {
     let (out, _e, code) = run(&["-t", "toml", "-T", "json"], "[a]\nb = 1\n");
     assert_eq!(out, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");

@@ -243,6 +243,12 @@ impl File<'_> {
     }
 }
 
+/// The byte length of the `[a.b]` or `[[a.b]]` header at the start of `text`,
+/// brackets included.
+pub(crate) fn header_len(text: &str) -> Option<usize> {
+    reroot(text, &[]).map(|(_, close)| close)
+}
+
 /// Re-root the header at the start of `text` (`[a.b.c]` or `[[a.b.c]]`) by
 /// dropping its leading keys, which must spell `drop` (`["a"]` gives `[b.c]`):
 /// the rest of the header, spacing and quoting included, is kept. Returns the

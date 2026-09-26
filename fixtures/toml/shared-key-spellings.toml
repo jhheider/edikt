@@ -1,0 +1,25 @@
+# One key, spelled more than one way (jhheider/edikt#104).
+"a".b = 1
+a . c = 2
+t = { "x".y = 1, x.z = 2 }
+
+["pkg".a]
+k = 1
+
+[pkg.b]
+k = 1
+
+[pkg . c]
+k = 1
+
+[fruit]
+'apple'.color = "red"
+
+[fruit.apple.texture]
+smooth = true
+
+[[ bin ]]
+name = "one"
+
+[[bin]]
+name = "two"

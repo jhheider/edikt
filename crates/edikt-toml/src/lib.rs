@@ -8,6 +8,7 @@ mod comments;
 mod edit;
 mod project;
 mod slice;
+mod spelling;
 
 pub use comments::emit_commented;
 pub use edit::{apply, emit};
@@ -53,9 +54,59 @@ pub struct Toml {
     original: String,
     /// The source opened with a UTF-8 byte-order mark (restored on output).
     bom: bool,
+    /// The key spellings `toml_edit` can't keep on its own, found on first
+    /// use (see the `spelling` module).
+    respelled: std::sync::OnceLock<spelling::Respelled>,
 }
 
 impl Toml {
+    /// The key spellings rendering would lose, from the original source.
+    fn respelled(&self) -> &spelling::Respelled {
+        self.respelled
+            .get_or_init(|| spelling::respelled(&self.original))
+    }
+
+    /// The document as text, every key spelled as the source spelled it
+    /// (jhheider/edikt#104). Errors when a spelling can't be kept.
+    fn render(&self) -> Result<String, EditError> {
+        let out = spelling::restore(self.doc.to_string(), self.doc.as_table(), self.respelled())?;
+        Ok(self.finish(out))
+    }
+
+    /// `toml_edit`'s output with the source's line endings, missing final
+    /// newline and BOM put back.
+    fn finish(&self, mut out: String) -> String {
+        // `toml_edit` terminates the last line unconditionally; a file that
+        // didn't end with a newline keeps not ending with one.
+        if !self.original.is_empty() && !self.original.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        // `toml_edit` also drops every `\r` it writes (decor and string reprs
+        // alike), so put the original's line endings back, line by line.
+        let out = edikt_core::text::restore_endings(&self.original, &out);
+        edikt_core::text::with_bom(self.bom, out)
+    }
+
+    /// Run the edit `f`, refusing it (and leaving the document as it was)
+    /// when its result can't keep every key spelling (jhheider/edikt#104). A
+    /// file that spells each key one way has nothing to check.
+    fn guarded<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, EditError>,
+    ) -> Result<T, EditError> {
+        if self.respelled().is_empty() {
+            return f(self);
+        }
+        let before = self.doc.clone();
+        let had_comments = self.had_comments;
+        let result = f(self).and_then(|t| self.render().map(|_| t));
+        if result.is_err() {
+            self.doc = before;
+            self.had_comments = had_comments;
+        }
+        result
+    }
+
     /// Set the value at `path`, format-preserving. Missing keys are created,
     /// including intermediate tables (jq's `.a.b = 1` auto-creates `.a`). A path
     /// ending in an array index sets, appends (`idx == len`), or auto-vivifies
@@ -377,6 +428,7 @@ pub fn parse(src: &str) -> Result<Toml, ParseError> {
         had_comments,
         original: src.to_string(),
         bom,
+        respelled: std::sync::OnceLock::new(),
     })
 }
 
@@ -427,16 +479,10 @@ fn has_comment_decor(doc: &DocumentMut) -> bool {
 
 impl Document for Toml {
     fn to_source(&self) -> String {
-        let mut out = self.doc.to_string();
-        // `toml_edit` terminates the last line unconditionally; a file that
-        // didn't end with a newline keeps not ending with one.
-        if !self.original.is_empty() && !self.original.ends_with('\n') && out.ends_with('\n') {
-            out.pop();
-        }
-        // `toml_edit` also drops every `\r` it writes (decor and string reprs
-        // alike), so put the original's line endings back, line by line.
-        let out = edikt_core::text::restore_endings(&self.original, &out);
-        edikt_core::text::with_bom(self.bom, out)
+        // An edit that can't keep the spellings was refused (`guarded`), so
+        // the fallback is for the unreachable.
+        self.render()
+            .unwrap_or_else(|_| self.finish(self.doc.to_string()))
     }
     fn to_value(&self) -> Value {
         project::table_to_value(self.doc.as_table())
@@ -469,16 +515,18 @@ impl Document for Toml {
         kind: edikt_core::CommentKind,
         text: &str,
     ) -> Result<Vec<String>, EditError> {
-        let warnings = comments::set_node_comment(&mut self.doc, path, kind, text)?;
-        self.had_comments = true;
-        Ok(warnings)
+        self.guarded(|doc| {
+            let warnings = comments::set_node_comment(&mut doc.doc, path, kind, text)?;
+            doc.had_comments = true;
+            Ok(warnings)
+        })
     }
     fn delete_comment(
         &mut self,
         path: &[Step],
         kind: edikt_core::CommentKind,
     ) -> Result<(), EditError> {
-        comments::delete_node_comment(&mut self.doc, path, kind)
+        self.guarded(|doc| comments::delete_node_comment(&mut doc.doc, path, kind))
     }
 }
 
