@@ -299,7 +299,20 @@ edikt is in exactly one mode per run, decided by the expression:
   JSON-encodes it instead.
 - **structural, pure path, output = input** -> the **original source slice**
   (format-preserving get: exact bytes, comments, layout; YAML block collections
-  dedented to the margin so the fragment stands alone).
+  dedented to the margin so the fragment stands alone). A **TOML table** is
+  spread over the file, so its slice is its own body (the lines after its
+  header, dotted keys, inline tables, arrays and comments verbatim) followed by
+  each descendant `[sub]`/`[[sub]]` section in file order, with that section's
+  leading comments and blank lines. Every byte is the file's own but one:
+  each descendant header is **re-rooted**, its leading keys (the selected
+  table's own path) dropped and the rest of the header, spacing, quoting and
+  comment included, kept (`[ package . "metadata" ]` under `.package` reads
+  `[ "metadata" ]`). That is what makes the fragment a TOML document for the
+  selected value. A TOML selection that can't stand alone that way is emitted
+  instead: an array, an inline table, a whole array of tables (TOML has no
+  top-level array or inline document), or a dotted-key table (its lines spell
+  its key, so cutting them loose would rewrite each one). A multi-result query
+  slices all of its results or none.
 - **structural, otherwise** (computed result, or output ≠ input) -> the value
   **emitted via the output format's emitter**. Layout is the emitter's own, but
   a **pure-path** selection carries its **comments** across (the uniform

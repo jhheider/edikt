@@ -7,6 +7,7 @@
 mod comments;
 mod edit;
 mod project;
+mod slice;
 
 pub use comments::emit_commented;
 pub use edit::{apply, emit};
@@ -427,6 +428,16 @@ impl Document for Toml {
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.doc))
+    }
+    /// A table comes back as the file's own text: its body, then its
+    /// sub-table sections with their headers re-rooted (see the `slice`
+    /// module). Only for the document as parsed: after an edit the source no
+    /// longer describes the tree, so it falls back to emitting.
+    fn source_slice(&self, path: &[Step]) -> Vec<String> {
+        if self.to_source() != edikt_core::text::with_bom(self.bom, self.original.clone()) {
+            return Vec::new();
+        }
+        slice::source_slices(&self.original, path)
     }
     fn set_comment(
         &mut self,

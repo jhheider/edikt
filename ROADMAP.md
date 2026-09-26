@@ -77,7 +77,8 @@ Release infra is intentionally **last**: build the capability, then ship it.
   the serde floor; the greenfield-CST / `yqlib-sys` paths are moot.
 - ✅ **Output follows the format.** A structural query result is returned in the
   document's format: a **pure-path** result (`.services`) as the original
-  **source slice** (exact bytes, comments, layout; YAML blocks dedented); a
+  **source slice** (exact bytes, comments, layout; YAML blocks dedented; TOML
+  tables with their sub-table headers re-rooted, #101); a
   **synthesized** result (`keys`, `.a + .b`) emitted via the output format's
   emitter. Output format = `-T`/`--json`/`--jsonc`/`--ini`/`--toml`/`--yaml` ->
   script `toFormat:` directive -> input format preserved. An unrepresentable

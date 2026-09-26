@@ -1080,6 +1080,39 @@ fn structural_query_returns_source_slice() {
 }
 
 #[test]
+fn toml_structural_query_returns_source_slice() {
+    // jhheider/edikt#101: dotted keys stayed dotted instead of becoming
+    // `[edition]` / `[authors]` tables.
+    let cargo = "[package]\nname = \"x\"\nedition.workspace = true\nauthors.workspace = true\n";
+    let (out, err, code) = run(&["-t", "toml", ".package"], cargo);
+    assert_eq!(
+        out,
+        "name = \"x\"\nedition.workspace = true\nauthors.workspace = true\n"
+    );
+    assert_eq!((err.as_str(), code), ("", 0));
+
+    // Comments and layout are verbatim; a sub-table's header is re-rooted so
+    // the fragment is a TOML document for the selected table.
+    let src = "[a]\nx = [\n  1, # one\n]\n\n# about b\n[a.b]\ny = 2\n\n[[a.c]]\nz = 3\n";
+    let (out, _e, code) = run(&["-t", "toml", ".a"], src);
+    assert_eq!(
+        out,
+        "x = [\n  1, # one\n]\n\n# about b\n[b]\ny = 2\n\n[[c]]\nz = 3\n"
+    );
+    assert_eq!(code, 0);
+    let (out, _e, _c) = run(&["-t", "toml", ".a.c[0]"], src);
+    assert_eq!(out, "z = 3\n");
+
+    // CRLF lines keep their endings.
+    let (out, _e, _c) = run(&["-t", "toml", ".a"], "[a]\r\nx = 1\r\n[a.b]\r\ny = 2\r\n");
+    assert_eq!(out, "x = 1\r\n[b]\r\ny = 2\n");
+
+    // An inline table is a value, not a document: it is still emitted as one.
+    let (out, _e, _c) = run(&["-t", "toml", ".t"], "t = { a = 1, b = 2 }\n");
+    assert_eq!(out, "a = 1\nb = 2\n");
+}
+
+#[test]
 fn synthesized_query_stays_in_format() {
     // A computed result has no source slice; it renders via the input format's
     // emitter: YAML in, YAML out.
