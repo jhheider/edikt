@@ -304,7 +304,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   than erroring, and nothing is ever *emitted* in a spelling the file did not
   already use. Unicode and `\u`-escaped identifiers are deliberately not lexed
   (an error token) rather than half-supported. A bare word is a key spelling
-  only, never a value, so `foo` alone is still not a document.
+  only, never a value, so `foo` alone is still not a document. That leniency
+  (trailing commas, comments, JSON5 spellings) is the whole of it: structure is
+  checked, and a missing `:` or `,`, a stray token where a key or value
+  belongs, an unclosed container, or anything but whitespace and comments after
+  the top-level value is a parse error (exit 2) naming its line and column,
+  never a document an edit would splice into.
   Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
   **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output and
   the JSONC/JSON5-family emitters keep the JSON5 spelling, and only strict `-T

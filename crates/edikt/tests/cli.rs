@@ -407,6 +407,25 @@ fn jsonc_insert_after_trailing_comment_keeps_comma_out_of_it() {
 }
 
 #[test]
+fn jsonc_malformed_input_is_a_located_error_not_a_splice() {
+    // Unclosed input used to reach the insert path: `{"a":}` became `{"a":9`,
+    // and a multibyte character before the missing `}` panicked (exit 101).
+    for (src, expr, at) in [
+        ("{\"a\":}", ".a = 9", "line 1, column 6"),
+        ("{\"a\": 1 // café", ".b = 2", "line 1, column 16"),
+        ("{\"a\": 1 \"b\": 2}", ".b", "line 1, column 9"),
+    ] {
+        let (out, err, code) = run(&["-t", "jsonc", expr], src);
+        assert_eq!(code, 2, "{src:?}: {err}");
+        assert_eq!(out, "", "{src:?}");
+        assert!(
+            err.contains(&format!("invalid JSONC at {at}")),
+            "{src:?}: {err}"
+        );
+    }
+}
+
+#[test]
 fn creates_new_key_env() {
     // The exact case the demo hit; now works.
     let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");

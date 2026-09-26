@@ -7,9 +7,10 @@
 //!
 //! One lexer serves the whole family, matching how the crate already reads
 //! `.json` with the JSONC parser: the grammar is a superset and structural
-//! validity is checked separately in `lib::parse`. A `.jsonc` file that uses a
-//! JSON5 spelling therefore lexes rather than erroring - leniency on input, and
-//! never on output, since edits only rewrite the nodes they target.
+//! validity is checked by the parser, which `lib::parse` enforces. A `.jsonc`
+//! file that uses a JSON5 spelling therefore lexes rather than erroring -
+//! leniency on input, and never on output, since edits only rewrite the nodes
+//! they target.
 //!
 //! `Ident` is the ECMAScript `IdentifierName` of practical configs: ASCII
 //! letters, `_`, `$`, then alphanumerics. The spec also admits Unicode letters

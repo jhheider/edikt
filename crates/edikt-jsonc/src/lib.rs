@@ -2,8 +2,9 @@
 //!
 //! A lossless `rowan` + `logos` CST (the day-zero spike, productionized): parse
 //! JSONC into a tree that round-trips byte-for-byte, project it to
-//! [`edikt_core::Value`] for querying, and, with M2, edit it in place touching
-//! only the targeted nodes. `.json` is read by the same parser (it is a subset
+//! [`edikt_core::Value`] for querying, and edit it in place touching only the
+//! targeted nodes. Structurally malformed input is rejected at [`parse`] with
+//! a line and column, so an edit never splices into a broken tree. `.json` is read by the same parser (it is a subset
 //! with no comments to preserve).
 //!
 //! Everything needed to drive a document is reachable from this crate alone -
@@ -201,20 +202,25 @@ impl Jsonc {
 }
 
 /// Parse JSONC source into a [`Jsonc`] document.
+///
+/// Malformed input is rejected with the first problem's line and column: an
+/// unrecognized character, a missing `:` or `,`, a stray token where a key or
+/// value belongs, an unclosed container, or anything but whitespace and
+/// comments after the top-level value. Editing a structurally broken document
+/// would splice into a tree that does not mean what the bytes say.
 pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
-    let green = parser::build(src);
+    let (green, errors) = parser::build_checked(src);
     let root = SyntaxNode::new_root(green);
 
-    // An unrecognized byte is lexed as an error token; reject rather than
-    // silently editing garbage.
-    let has_error = root
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .any(|t| t.kind() == Sk::Error);
-    if has_error {
-        return Err(ParseError {
-            msg: "invalid JSONC: unexpected character".to_string(),
-        });
+    if let Some(err) = errors.iter().min_by_key(|e| e.offset) {
+        let (line, col) = line_col(src, err.offset);
+        let mut msg = format!("invalid JSONC at line {line}, column {col}: {}", err.msg);
+        if let Some(open) = err.opened {
+            let (l, c) = line_col(src, open);
+            let bracket = &src[open..open + 1];
+            msg.push_str(&format!(" (unclosed `{bracket}` at line {l}, column {c})"));
+        }
+        return Err(ParseError { msg });
     }
 
     if !top_value_present(&root) {
@@ -256,6 +262,14 @@ fn detect_json5(root: &SyntaxNode) -> bool {
             }
             _ => false,
         })
+}
+
+/// The 1-based line and column (in characters) of byte `offset` in `src`.
+fn line_col(src: &str, offset: usize) -> (usize, usize) {
+    let before = &src[..offset];
+    let line = before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    (line, before[line_start..].chars().count() + 1)
 }
 
 /// Does the document have a top-level value (not just whitespace/comments)?
@@ -407,6 +421,87 @@ mod tests {
         assert!(parse("@nope").is_err());
         assert!(parse("   \n  ").is_err()); // no value
         assert!(parse("// only a comment\n").is_err());
+    }
+
+    fn parse_err(src: &str) -> String {
+        match parse(src) {
+            Ok(_) => panic!("{src:?} parsed, but is malformed"),
+            Err(e) => e.msg,
+        }
+    }
+
+    #[test]
+    fn rejects_structural_errors_with_a_location() {
+        // Each of these used to parse, and an edit then spliced garbage (or
+        // panicked). The message names the first problem's line and column.
+        let cases = [
+            ("{\"a\":}", "line 1, column 6: expected a value, found `}`"),
+            (
+                "{\"a\": 1",
+                "line 1, column 8: expected `}`, found end of input \
+                 (unclosed `{` at line 1, column 1)",
+            ),
+            (
+                "{\"a\": 1 // café",
+                "line 1, column 16: expected `}`, found end of input",
+            ),
+            (
+                "{\"a\": 1 \"b\": 2}",
+                "line 1, column 9: expected `,` or `}`, found `\"b\"`",
+            ),
+            (
+                "{\n  \"a\": 1\n  \"b\": 2\n}",
+                "line 3, column 3: expected `,` or `}`, found `\"b\"`",
+            ),
+            (
+                "{\"a\" 1}",
+                "line 1, column 6: expected `:` after an object key, found `1`",
+            ),
+            (
+                "{} {\"z\":1}",
+                "line 1, column 4: unexpected `{` after the top-level value",
+            ),
+            ("true false", "unexpected `false` after the top-level value"),
+            ("{\"a\": foo}", "expected a value, found `foo`"),
+            ("[1 2]", "line 1, column 4: expected `,` or `]`, found `2`"),
+            ("[1,,2]", "line 1, column 4: expected a value, found `,`"),
+            ("[1, 2", "expected `]`, found end of input"),
+            ("[}", "expected a value, found `}`"),
+            ("{]", "expected an object key, found `]`"),
+            ("{,}", "expected an object key, found `,`"),
+            ("{1: 2}", "expected an object key, found `1`"),
+            ("{\"a\"::1}", "expected a value, found `:`"),
+            (
+                "{\"a\": 1} @",
+                "line 1, column 10: unexpected character `@`",
+            ),
+            ("@nope", "line 1, column 1: unexpected character `@`"),
+        ];
+        for (src, want) in cases {
+            let msg = parse_err(src);
+            assert!(msg.contains(want), "{src:?}: {msg}");
+            assert!(msg.starts_with("invalid JSONC at line "), "{src:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn structural_check_accepts_the_lenient_family() {
+        // Trailing commas, comments anywhere, and every JSON5 spelling stay
+        // valid; only structure is checked.
+        for src in [
+            "[1, 2,]",
+            "{\"a\": 1,}",
+            "{}",
+            "[]",
+            "{ }",
+            "// c\n{\"a\": /* x */ 1 /* y */, } // tail\n",
+            "{a: 1, 'b': +.5, null: NaN, true: 0x1F, $c: Infinity,}",
+            "[\n  1 /* one */,\n  2\n  // foot\n]\n",
+            "\"just a string\"",
+            "  42  // trailing comment\n",
+        ] {
+            assert!(parse(src).is_ok(), "{src:?}: {:?}", parse(src).err());
+        }
     }
 
     // --- fixture corpus (roundtrip anything in our test space) -------------
@@ -886,12 +981,14 @@ mod tests {
 
     #[test]
     fn projects_absent_member_value_as_null() {
-        // A malformed member with no value must project to null, not panic; and
-        // still round-trip byte-for-byte (the moat holds even on garbage input).
-        let doc = parse("{\"a\":}").unwrap();
-        assert_eq!(doc.to_source(), "{\"a\":}");
+        // `parse` rejects a member with no value, but the tree under it is still
+        // built: it must round-trip byte-for-byte and project the hole to null
+        // rather than panic (the moat holds even on garbage input).
+        assert!(parse("{\"a\":}").is_err());
+        let root = SyntaxNode::new_root(parser::build("{\"a\":}"));
+        assert_eq!(edikt_syntax::to_source(&root), "{\"a\":}");
         assert_eq!(
-            eval(&parse_expr(".a").unwrap(), &doc.to_value()).unwrap(),
+            eval(&parse_expr(".a").unwrap(), &project::to_value(&root)).unwrap(),
             vec![Value::Null]
         );
     }
@@ -1216,9 +1313,12 @@ mod tests {
 
     #[test]
     fn stray_trailing_token_does_not_break_the_commented_projection() {
-        // Trailing garbage past the top value is tolerated (parsed losslessly);
-        // the commented projection just reflects the leading value.
-        let c = parse("true false").unwrap().to_commented().unwrap();
+        // `parse` rejects trailing garbage past the top value, but the tree is
+        // still built losslessly and the commented projection of it reflects
+        // the leading value rather than panicking.
+        assert!(parse("true false").is_err());
+        let root = SyntaxNode::new_root(parser::build("true false"));
+        let c = comments::to_commented(&root);
         assert_eq!(c.to_value(), Value::Bool(true));
     }
 
