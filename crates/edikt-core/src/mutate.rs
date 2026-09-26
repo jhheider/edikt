@@ -9,7 +9,7 @@
 
 use crate::ast::{Expr, Step};
 use crate::error::EditError;
-use crate::eval::{EvalError, eval, expand_iter_paths};
+use crate::eval::{eval, expand_iter_paths};
 use crate::value::Value;
 
 /// Which mutation a target path belongs to, for [`Mutable::check_path`].
@@ -83,12 +83,6 @@ pub trait Mutable {
     fn check_path(&self, path: &[Step], kind: MutationKind) -> Result<(), EditError> {
         let _ = (path, kind);
         Ok(())
-    }
-}
-
-impl From<EvalError> for EditError {
-    fn from(e: EvalError) -> EditError {
-        EditError::new(e.to_string())
     }
 }
 

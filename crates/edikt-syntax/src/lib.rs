@@ -23,13 +23,20 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 /// A format's syntax-kind enum: tokens and nodes, discriminants contiguous
-/// from 0. Implemented by [`syntax_kinds!`]; not meant to be written by hand.
-pub trait Kinds: Copy + Debug + Eq + Ord + Hash + 'static {
+/// from 0. Sealed: only [`syntax_kinds!`] implements it, so `ALL` always
+/// matches the enum's discriminants.
+pub trait Kinds: __private::Sealed + Copy + Debug + Eq + Ord + Hash + 'static {
     /// Every kind, in discriminant order.
     const ALL: &'static [Self];
 
     /// The kind's discriminant.
     fn raw(self) -> u16;
+}
+
+/// Not API: the seal on [`Kinds`], implemented by [`syntax_kinds!`] only.
+#[doc(hidden)]
+pub mod __private {
+    pub trait Sealed {}
 }
 
 /// Declare a syntax-kind enum (`#[repr(u16)]`, contiguous from 0) and its
@@ -54,6 +61,8 @@ macro_rules! syntax_kinds {
             $($(#[$vmeta])* $variant),*
         }
 
+        impl $crate::__private::Sealed for $name {}
+
         impl $crate::Kinds for $name {
             const ALL: &'static [Self] = &[$($name::$variant),*];
             fn raw(self) -> u16 {
@@ -71,7 +80,9 @@ impl<K: Kinds> Language for Lang<K> {
     type Kind = K;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> K {
-        K::ALL[raw.0 as usize]
+        let kind = K::ALL[raw.0 as usize];
+        debug_assert_eq!(kind.raw(), raw.0, "Kinds::ALL out of discriminant order");
+        kind
     }
 
     fn kind_to_raw(kind: K) -> rowan::SyntaxKind {
