@@ -1,4 +1,5 @@
 use super::*;
+use edikt_core::eval;
 use edikt_core::parse as parse_expr;
 
 const SAMPLE: &str = "# package\n[package]\nname = \"edikt\"\nversion = \"0.1.0\"   # semver\n\n[dependencies]\nrowan = \"0.16\"\n";
