@@ -215,9 +215,45 @@ an *edit* language, not a general-purpose one.
 - update-assign `PATH |= <expr>` - RHS sees the current value as `.`
 - append `.arr += [<expr>]`; merge `.obj += {k: <expr>}` (jq's `+` on two
   objects, applied as one keyed edit per right-hand key: a shared key's value
-  is replaced in place, a new key is added at the end, and the object's other
-  entries, comments and layout are untouched)
+  is assigned in place (diffing, as below), a new key is added at the end,
+  and the object's other entries, comments and layout are untouched)
 - delete `del(PATH)`
+
+  **Assigning a collection over a collection diffs** (#117). When `=` or
+  `|=` (or one key of a `+=` merge, or one element of a fan-out) writes an
+  object over an object, or an array over an array, the shared mutation
+  driver turns it into element edits instead of one replacement, so every
+  element the new value keeps keeps its bytes, comments and layout.
+  "Unchanged" is `Value::identical`: same types, same float bits, same key
+  order.
+  - **Objects**: an unchanged key is left alone; a changed key is assigned
+    by these same rules, so a nested collection diffs too; a key the new
+    value lacks is deleted; a new key is added after the existing ones, in
+    the new value's order. Existing keys keep their order even when the new
+    value lists them in another.
+  - **Arrays**: an unchanged array is a no-op. When the new array is the
+    old one with elements changed at their index and/or extras appended,
+    and no element moved (no old element replaced at its index turns up
+    elsewhere in the new array), each changed element is assigned by these
+    rules and the extras appended the way `+=` appends. Otherwise, when the
+    new array is the old one with elements removed (the rest in order)
+    and/or extras appended, keeping at least one, and no removed element
+    comes back among the extras, the removed elements are deleted in place,
+    back to front, and the extras appended. The match is greedy: each
+    element of the new array takes the earliest remaining old element
+    identical to it, so with duplicates the first ones stay (`[1, 1, 2]`
+    assigned `[1, 2]` deletes the second `1`). Anything else (a reorder, a
+    shorter array that isn't the old one minus some elements, an empty
+    array) is one replacement, as before.
+
+  Each element edit goes through the format's own set, delete and append,
+  so the format's rules (layout, quote style, YAML's read-back guard, TOML's
+  key spellings, INI's quoting refusals) apply to every piece. A format may
+  decline the diff where it can't be done in place, and the collection is
+  then replaced whole: YAML declines for a mapping with a duplicate key or
+  one that would lose a key its `<<` merge supplies, and for a flow
+  collection that would grow. A scalar, or a collection over a scalar or
+  the other kind, is a plain set.
 
   **Mutations fan out over `[]`** exactly like jq: `.a[] |= f` maps `f` over
   every element, `.a[] += x` is `.a[] |= . + x`, `.a[] = x` sets every element,
@@ -394,6 +430,9 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   belongs, an unclosed container, or anything but whitespace and comments after
   the top-level value is a parse error (exit 2) naming its line and column,
   never a document an edit would splice into.
+  `del` of a member or element on a line of its own takes that line, with
+  the comment beside it, and the comma the one before it no longer needs
+  when the collection has no trailing comma; comment lines around it stay.
   Highest-value target (`tsconfig.json`, `settings.json`, `devcontainer.json`).
   **Non-finite numbers** (`Infinity`/`NaN`) exist only in JSON5: raw output and
   the JSONC/JSON5-family emitters keep the JSON5 spelling, and only strict `-T
@@ -418,7 +457,9 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   line break, or surrounding whitespace; a new section name holding `]` or a
   line break. `-T ini` output follows the same rules: a key, value or section
   name it would have to write that way is an error naming the formats that
-  can hold it.
+  can hold it. A section is an object of its keys, so assigning one an
+  object (`.s = {...}`, `.s |= . + {...}`) is diffed key by key (see
+  Mutation) under these same rules.
 - **`envspaced`** - the `.env` document model with a **whitespace separator**
   (`Port 22`), for `sshd_config`-shaped daemon configs. Shares `edikt-env`
   entirely; a `Dialect` picks only how the key ends, since the separator is the
@@ -456,11 +497,13 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   collection opens on its dash line (`- k: v`, `- - x`). A comment beside a
   replaced scalar stays on its line, a key's comment stays on the key line when
   its block becomes a scalar, and comments inside a replaced block go with it,
-  as with `del(.a[])`. A replacement that keeps a collection's shape (the same
-  kind, its existing keys in order or its existing items, anything new after
-  them) edits only the elements that change, so `.tags |= . + ["x"]` appends
-  one line and assigning a collection its own value changes no bytes; any
-  other replacement rewrites the collection, keeping its anchor. A new block
+  as with `del(.a[])`. A collection assigned over a collection diffs (see
+  Mutation), so `.tags |= . + ["x"]` appends one line, `.tags = [...]`
+  without one of its items deletes just that item's line, and assigning a
+  collection its own value changes no bytes; a replacement the diff doesn't
+  cover, or declines (a mapping with a duplicate key, one losing a key its
+  `<<` merge supplies, a growing flow collection), rewrites the collection,
+  keeping its anchor. A new block
   key or item goes directly after the collection's last content line, so the
   blank lines and comments that separate it from what follows stay after the
   insertion (#90). The blank lines after a block scalar count as separators,
@@ -507,28 +550,30 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   shrink, and an edit that breaks that is refused (exit 2) rather than
   respelled. A key an edit creates takes the spelling `toml_edit` holds. An
   array grows
-  in its own layout (#91): `.a += [x]`, `.a[len] = x`, and any assignment
-  whose new array keeps the old elements as a prefix append rather than
-  rewrite, so the kept elements stay byte for byte (assigning an array its own
-  value changes nothing). In a one-item-per-line array (its last item opens
+  in its own layout (#91): `.a += [x]`, `.a[len] = x`, and an assignment
+  the diff turns into appends (see Mutation) append rather than rewrite, so
+  the kept elements stay byte for byte (assigning an array its own value
+  changes nothing). In a one-item-per-line array (its last item opens
   its own line) the new item gets its own line at that item's indentation; an
   empty array whose `]` is on its own line indents one level (four spaces)
   past the bracket. An inline array stays inline, separated like its last
   item. The trailing-comma style is kept (a fresh multi-line list takes one),
   and whatever sat between the last item and `]` stays ahead of the bracket,
   so a comment beside the old last item stays beside it. An array of tables
-  grows by a `[[key]]` block per new table. Any other array assignment
-  rewrites the array inline, keeping the value's decor. A table that `=`
+  grows by a `[[key]]` block per new table. `del` of an item in a
+  one-item-per-line array takes the item's line and the comment beside it,
+  and the comments beside its neighbours stay where they were; in an inline
+  array it takes the item with one separator. An array assignment the diff
+  doesn't cover rewrites the array inline, keeping the value's decor. A table that `=`
   auto-vivifies follows its surroundings: inside a dotted table, or beside a
   sibling table spelled as dotted keys (`edition.workspace = true`), it is a
   dotted key too (`rust-version.workspace = true`); with no dotted precedent
   it gets its own `[a.b]` header (intermediates stay implicit, so `.a.b.c = 1`
   writes only `[a.b]`). A value set to itself changes nothing, and a
-  `[table]` given a new object is updated key by key (changed keys set in
-  place, new ones added, missing ones deleted), so it stays a table and its
-  untouched keys keep their bytes. The document itself is such a table:
-  `. |= .` is a no-op, `. |= f` or `. = {...}` updates the root key by key
-  (#107), and setting `.` to anything but an object errors, since a TOML
+  `[table]` given a new object is diffed like any object (see Mutation), so
+  it stays a table and its untouched keys keep their bytes. The document
+  itself is such a table: `. |= .` is a no-op, `. |= f` or `. = {...}`
+  updates the root key by key (#107), and setting `.` to anything but an object errors, since a TOML
   document is always a table.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
@@ -546,10 +591,10 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
   occurrences). A node given a new object, and the document itself (`. |=
-  f`, `. = {...}`), is updated key by key: unchanged keys are left alone (so
-  `. |= .` is a no-op), missing ones deleted, and each changed one set under
-  these same rules; if any key can't be, the whole update is refused and the
-  document left as it was. Replacing a node body with anything else is
+  f`, `. = {...}`), is diffed like any object (see Mutation): unchanged keys
+  are left alone (so `. |= .` is a no-op), missing ones deleted, and each
+  changed one set under these same rules. An edit that fails partway (a key
+  that can't be set) is refused whole, the document left as it was. Replacing a node body with anything else is
   refused rather than reflowed, and `.` can only be set to an object. A new node copies the layout of the sibling it follows (its
   indent on a line of its own, or a `;`-separated slot in a single-line
   `{ a 1; b 2 }` block), and anything nested inside it indents by the file's
@@ -657,7 +702,9 @@ Workspace; each format is an isolated module with no cross-coupling.
   read value/source-slice/commented projection, format-preserving replace,
   delete, append); the **mutation driver** (`apply_mutation` interprets
   `=` / `|=` / `+=` / `del` / `|` and path-expression targets once, over the
-  `Mutable` primitives each format supplies: value-at, set, delete, add). There
+  `Mutable` primitives each format supplies: value-at, set, delete, add,
+  append; `assign` diffs a collection written over a collection into those
+  primitives, and a format can decline it with `Mutable::diffs`). There
   is no conversion trait: each format crate exports `emit` / `emit_commented`
   free functions, and shared data-model helpers live in `edikt-core`'s
   `convert` module.
