@@ -5,7 +5,9 @@
 //! line including the terminator, so `del` is a single `detach`.
 //!
 //! INI values are scalars: setting an array or object errors (the format has no
-//! nesting or arrays; its `Feature` set says so).
+//! nesting or arrays; its `Feature` set says so). An object assigned over an
+//! existing section is the exception: the shared driver diffs it into one
+//! entry edit per key (#117).
 
 use crate::syntax::{Sk, SyntaxNode};
 use crate::{Ini, project};
@@ -23,8 +25,19 @@ impl Mutable for Ini {
     fn whole(&self) -> Value {
         self.to_value()
     }
+    /// An entry's string, or a section's object of them, so an object
+    /// assigned over a section is diffed key by key (#117).
     fn value_at(&self, path: &[Step]) -> Option<Value> {
-        Ini::value_at(self, path)
+        Ini::value_at(self, path).or_else(|| match path {
+            [Step::Field(section)] => match self.to_value() {
+                Value::Object(top) => top
+                    .into_iter()
+                    .find(|(k, v)| k == section && matches!(v, Value::Object(_)))
+                    .map(|(_, v)| v),
+                _ => None,
+            },
+            _ => None,
+        })
     }
     fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         Ini::set(self, path, value)

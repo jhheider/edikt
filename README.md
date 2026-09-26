@@ -213,6 +213,11 @@ Homebrew, and pkgx, the badge above tracks the current version. See
   (including regex `test`/`match`/`capture`/`sub`/`gsub`, `split`/`join`) are
   in; variables (`as $x`), `if/then`, `reduce`, and user-defined functions are
   not (yet).
+- **Assigning a collection edits only what changed.** An object or array
+  written over one of the same kind is diffed: `edikt -i '.tags = ["a", "c"]'`
+  over `a`, `b`, `c` deletes `b`'s line, and `.server = {...}` or
+  `.server |= del(.debug)` touches only the keys that differ, so the comments
+  beside the rest stay. A reordered array is written as a new one.
 - **Many files, sed-style:** `edikt -i '.v = 9' a.json b.json` (let the shell
   glob: `edikt -i 'del(.telemetry)' config/*.jsonc`). Queries over several
   files concatenate results in order.

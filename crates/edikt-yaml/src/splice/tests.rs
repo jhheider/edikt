@@ -143,10 +143,15 @@ fn nested_blocks_edit_only_what_changed() {
     // Assigning a collection its own value touches nothing.
     let src = "a:\n  - 1   # odd spacing\n  - {x: 1}\n";
     assert_eq!(edit(src, ".a = .a"), src);
-    // A removed or reordered key means a wholesale rewrite.
+    // A removed key is deleted in place (#117), and existing keys keep
+    // their places when the new value lists them in another order.
     assert_eq!(
-        edit("m:\n  a: 1  # gone\n  b: 2\n", ".m = {b: 2, a: 1}"),
-        "m:\n  b: 2\n  a: 1\n"
+        edit("m:\n  a: 1  # keep\n  b: 2  # gone\n", ".m = {a: 1}"),
+        "m:\n  a: 1  # keep\n"
+    );
+    assert_eq!(
+        edit("m:\n  a: 1  # keep\n  b: 2\n", ".m = {b: 2, a: 1}"),
+        "m:\n  a: 1  # keep\n  b: 2\n"
     );
     // A merged-in key that stays unchanged isn't copied in as explicit.
     assert_eq!(
@@ -155,6 +160,83 @@ fn nested_blocks_edit_only_what_changed() {
             ".prod = {r: 5, t: 30, x: 1}"
         ),
         "base: &b\n  t: 30\nprod:\n  <<: *b\n  r: 5\n  x: 1\n"
+    );
+}
+
+#[test]
+fn a_collection_over_a_collection_keeps_what_it_keeps() {
+    // #117: a shorter list deletes just the missing items' lines.
+    let src = "k:\n  - 1 # one\n  - 2 # two\n  - 3\n";
+    assert_eq!(edit(src, ".k = [1, 3]"), "k:\n  - 1 # one\n  - 3\n");
+    assert_eq!(edit(src, ".k |= [.[0], .[2]]"), "k:\n  - 1 # one\n  - 3\n");
+    assert_eq!(
+        edit(src, ".k = [1, 3, 4]"),
+        "k:\n  - 1 # one\n  - 3\n  - 4\n"
+    );
+    // Duplicates: the first ones stay.
+    assert_eq!(
+        edit("k:\n  - 1 # a\n  - 1 # b\n  - 2\n", ".k = [1, 2]"),
+        "k:\n  - 1 # a\n  - 2\n"
+    );
+    // A reorder rewrites the list, rather than setting each item in place
+    // under another item's comment.
+    assert_eq!(edit(src, ".k = [3, 2, 1]"), "k:\n  - 3\n  - 2\n  - 1\n");
+    // A multi-line flow list shrinks in place.
+    assert_eq!(
+        edit("k: [\n  1, # one\n  2, # two\n  3\n]\n", ".k = [1, 3]"),
+        "k: [\n  1, # one\n  3\n]\n"
+    );
+    // Nested mappings diff too.
+    assert_eq!(
+        edit(
+            "a:\n  b:\n    c: 1  # c\n    d: 2  # d\n  e: 3  # e\n",
+            ".a = {b: {c: 1}, e: 3}"
+        ),
+        "a:\n  b:\n    c: 1  # c\n  e: 3  # e\n"
+    );
+    // CRLF: lines go whole, and a new one takes CRLF.
+    assert_eq!(
+        edit("m:\r\n  a: 1  # a\r\n  b: 2\r\n", ".m = {a: 1, c: 3}"),
+        "m:\r\n  a: 1  # a\r\n  c: 3\r\n"
+    );
+}
+
+#[test]
+fn a_diff_yaml_cant_make_in_place_replaces_the_collection() {
+    // Losing a key its `<<` merge supplies: the mapping is rewritten.
+    assert_eq!(
+        edit(
+            "base: &b\n  t: 30\nprod:\n  <<: *b\n  r: 5  # r\n",
+            ".prod = {r: 5}"
+        ),
+        "base: &b\n  t: 30\nprod:\n  r: 5\n"
+    );
+    // A merge that loses nothing still diffs.
+    assert_eq!(
+        edit(
+            "base: &b\n  t: 30\nprod:\n  <<: *b\n  r: 5  # r\n",
+            ".prod = {r: 6, t: 30}"
+        ),
+        "base: &b\n  t: 30\nprod:\n  <<: *b\n  r: 6  # r\n"
+    );
+    // A duplicate key names two entries: rewritten.
+    assert_eq!(
+        edit("m:\n  a: 1  # x\n  a: 2\n  b: 3\n", ".m = {a: 2}"),
+        "m:\n  a: 2\n"
+    );
+    // A flow collection that grows is respelled; one that shrinks isn't.
+    assert_eq!(
+        edit("f: [1,  # one\n  2]\n", ".f = [1, 2, 3]"),
+        "f: [1, 2, 3]\n"
+    );
+    assert_eq!(
+        edit("f: [1,  # one\n  2, 3]\n", ".f = [1, 3]"),
+        "f: [1,  # one\n  3]\n"
+    );
+    // An alias is one token, not its anchor's items.
+    assert_eq!(
+        edit("base: &b\n  - 1\n  - 2\nother: *b\n", ".other = [1]"),
+        "base: &b\n  - 1\n  - 2\nother:\n  - 1\n"
     );
 }
 

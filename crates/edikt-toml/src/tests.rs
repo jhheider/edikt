@@ -240,6 +240,105 @@ fn del_iterate_fans_out() {
     assert_eq!(edit_src("xs = [1]\n", "del(.nope[])"), "xs = [1]\n");
 }
 
+#[test]
+fn a_collection_over_a_collection_keeps_what_it_keeps() {
+    // #117: a shorter array deletes just the missing items.
+    let src = "k = [\n  1, # one\n  2, # two\n  3,\n]\n";
+    let want = "k = [\n  1, # one\n  3,\n]\n";
+    assert_eq!(edit_src(src, ".k = [1, 3]"), want);
+    assert_eq!(edit_src(src, ".k |= [.[0], .[2]]"), want);
+    assert_eq!(
+        edit_src(src, ".k = [1, 3, 4]"),
+        "k = [\n  1, # one\n  3,\n  4,\n]\n"
+    );
+    // Duplicates: the first ones stay.
+    assert_eq!(
+        edit_src("k = [\n  1, # a\n  1, # b\n  2,\n]\n", ".k = [1, 2]"),
+        "k = [\n  1, # a\n  2,\n]\n"
+    );
+    // A reorder is one inline replacement, as before.
+    assert_eq!(edit_src(src, ".k = [3, 2, 1]"), "k = [3, 2, 1]\n");
+    // Inline tables and arrays of tables diff too.
+    assert_eq!(
+        edit_src("t = { a = 1, b = 2 } # t\n", ".t = {a: 1}"),
+        "t = { a = 1 } # t\n"
+    );
+    assert_eq!(
+        edit_src(
+            "[[bin]]\nname = \"a\" # a\n[[bin]]\nname = \"b\"\n[[bin]]\nname = \"c\" # c\n",
+            ".bin = [{name: \"a\"}, {name: \"c\"}]"
+        ),
+        "[[bin]]\nname = \"a\" # a\n[[bin]]\nname = \"c\" # c\n"
+    );
+    // A nested table's arrays diff inside the table's key-by-key update.
+    assert_eq!(
+        edit_src(
+            "[t]\nk = [\n  1, # one\n  2,\n]\nx = 1 # x\n",
+            ".t = {k: [1], x: 1}"
+        ),
+        "[t]\nk = [\n  1, # one\n]\nx = 1 # x\n"
+    );
+    // CRLF lines go whole.
+    assert_eq!(
+        edit_src("k = [\r\n  1, # one\r\n  2,\r\n]\r\n", ".k = [1]"),
+        "k = [\r\n  1, # one\r\n]\r\n"
+    );
+}
+
+#[test]
+fn del_of_an_inline_tables_last_key_keeps_the_space_before_the_brace() {
+    let src = "t = { a = 1, b = 2 } # t\n";
+    assert_eq!(edit_src(src, "del(.t.b)"), "t = { a = 1 } # t\n");
+    assert_eq!(edit_src(src, "del(.t.a)"), "t = { b = 2 } # t\n");
+    assert_eq!(
+        edit_src("a = [{ x = 1, y = 2 }]\n", "del(.a[0].y)"),
+        "a = [{ x = 1 }]\n"
+    );
+    // A standard table's last key keeps its own line's comment to itself.
+    assert_eq!(
+        edit_src("[t]\na = 1\nb = 2 # two\n", "del(.t.b)"),
+        "[t]\na = 1\n"
+    );
+}
+
+#[test]
+fn del_of_an_array_item_keeps_its_neighbours_layout() {
+    // One item per line: the item's line goes with the comment beside it;
+    // the comments beside the others, and one above it, stay put (#117).
+    let src = "k = [\n  1, # one\n  # about two\n  2, # two\n  3, # three\n]\n";
+    assert_eq!(
+        edit_src(src, "del(.k[0])"),
+        "k = [\n  # about two\n  2, # two\n  3, # three\n]\n"
+    );
+    assert_eq!(
+        edit_src(src, "del(.k[1])"),
+        "k = [\n  1, # one\n  # about two\n  3, # three\n]\n"
+    );
+    assert_eq!(
+        edit_src(src, "del(.k[2])"),
+        "k = [\n  1, # one\n  # about two\n  2, # two\n]\n"
+    );
+    // Without a trailing comma, the last item's line goes and `]` stays put.
+    assert_eq!(
+        edit_src("k = [\n  1, # one\n  2 # two\n]\n", "del(.k[1])"),
+        "k = [\n  1 # one\n]\n"
+    );
+    // CRLF lines go whole too.
+    assert_eq!(
+        edit_src("k = [\r\n  1, # one\r\n  2, # two\r\n]\r\n", "del(.k[0])"),
+        "k = [\r\n  2, # two\r\n]\r\n"
+    );
+    // Inline: the item goes with one separator.
+    assert_eq!(edit_src("k = [1, 2, 3]\n", "del(.k[0])"), "k = [2, 3]\n");
+    assert_eq!(edit_src("k = [1, 2, 3]\n", "del(.k[1])"), "k = [1, 3]\n");
+    assert_eq!(edit_src("k = [1, 2, 3 ]\n", "del(.k[2])"), "k = [1, 2 ]\n");
+    // Two on a line: the separator after the item goes, the line break stays.
+    assert_eq!(
+        edit_src("k = [\n  1, 2,\n  3,\n]\n", "del(.k[1])"),
+        "k = [\n  1,\n  3,\n]\n"
+    );
+}
+
 // --- comment model (extraction + commented emit) -----------------------
 
 #[test]

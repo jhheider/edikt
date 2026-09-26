@@ -5,12 +5,18 @@
 //! mutation expression (`=`, `|=`, `+=`, `del`, `|`-chains of them, and
 //! path-expression targets through [`crate::lower_mutation`]) into calls on
 //! those primitives. The format decides what a path means; the driver decides
-//! what the expression means, once, for all of them.
+//! what the expression means, once, for all of them. That includes what an
+//! assignment of a collection over a collection means: element edits, not
+//! one replacement ([`assign`]).
 
 use crate::ast::{Expr, Step};
 use crate::error::EditError;
 use crate::eval::{eval, expand_iter_paths};
 use crate::value::Value;
+
+mod diff;
+
+pub use diff::{assign, diff_grows};
 
 /// Which mutation a target path belongs to, for [`Mutable::check_path`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +66,9 @@ pub trait Mutable {
 
     /// `path += addend`, where `current` is the value there: array onto
     /// array goes through [`Mutable::append`] when the format has one;
-    /// object onto object is jq's shallow merge, written as one keyed `set`
-    /// per right-hand entry, so the object's other entries keep their bytes;
+    /// object onto object is jq's shallow merge, written as one keyed
+    /// [`assign`] per right-hand entry, so the object's other entries keep
+    /// their bytes;
     /// anything else writes `current + addend`.
     fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
         if let (Value::Array(_), Value::Array(items)) = (current, addend)
@@ -73,7 +80,7 @@ pub trait Mutable {
             let mut at = path.to_vec();
             for (k, v) in entries {
                 at.push(Step::Field(k.clone()));
-                self.set(&at, v)?;
+                assign(self, &at, v)?;
                 at.pop();
             }
             return Ok(());
@@ -87,6 +94,15 @@ pub trait Mutable {
     fn miss(&self, path: &[Step]) -> Result<(), EditError> {
         let _ = path;
         Err(EditError::new("path not found"))
+    }
+
+    /// Whether an assignment of `value` over the collection `current` at
+    /// `path` may be written as element edits ([`assign`]). A format
+    /// declines where it can't make them in place, and the collection is
+    /// then replaced through [`Mutable::set`]. The default accepts.
+    fn diffs(&self, path: &[Step], current: &Value, value: &Value) -> bool {
+        let _ = (path, current, value);
+        true
     }
 
     /// Reject a target path this format can't edit before anything happens.
@@ -126,7 +142,7 @@ pub fn apply_mutation<M: Mutable + ?Sized>(doc: &mut M, expr: &Expr) -> Result<(
                 // `.a[] = x`: every element gets the same value.
                 return set_each(doc, steps, &whole, true, |_| Ok(value.clone()));
             }
-            doc.set(steps, &value)
+            assign(doc, steps, &value)
         }
         Expr::UpdateAssign(lhs, rhs) => {
             let steps = target(doc, lhs, MutationKind::Update)?;
@@ -139,7 +155,7 @@ pub fn apply_mutation<M: Mutable + ?Sized>(doc: &mut M, expr: &Expr) -> Result<(
                 return doc.miss(steps);
             };
             let value = eval_one(rhs, &current)?;
-            doc.set(steps, &value)
+            assign(doc, steps, &value)
         }
         Expr::AddAssign(lhs, rhs) => {
             let steps = target(doc, lhs, MutationKind::Add)?;
@@ -200,8 +216,9 @@ fn fans_out<M: Mutable + ?Sized>(steps: &[Step]) -> bool {
 }
 
 /// Apply `f` to each element selected by `steps` (which contains at least one
-/// `Step::Iterate`), setting each through the format's ordinary index-keyed
-/// `set`, so every replacement is as surgical as a hand-typed `.a[i] = ..`.
+/// `Step::Iterate`), assigning each through the format's ordinary
+/// index-keyed edits, so every replacement is as surgical as a hand-typed
+/// `.a[i] = ..`.
 /// `create` is true for plain assignment (`=`), where an expansion resolving
 /// to nothing means "you asked to create elements through `[]`" and errors;
 /// the update forms (`|=`, `+=`) treat an empty expansion as a miss (a no-op),
@@ -222,7 +239,7 @@ fn set_each<M: Mutable + ?Sized>(
             return doc.miss(path);
         };
         let value = f(&current)?;
-        doc.set(path, &value)?;
+        assign(doc, path, &value)?;
     }
     Ok(())
 }
@@ -236,147 +253,4 @@ fn eval_one(expr: &Expr, input: &Value) -> Result<Value, EditError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::parse;
-
-    /// An in-memory document: `set`/`delete` go through the evaluator, so the
-    /// driver's dispatch is tested apart from any CST.
-    struct Mem {
-        v: Value,
-        adds: usize,
-    }
-
-    impl Mutable for Mem {
-        fn whole(&self) -> Value {
-            self.v.clone()
-        }
-        fn value_at(&self, path: &[Step]) -> Option<Value> {
-            let got = eval(&Expr::Path(path.to_vec()), &self.v).ok()?;
-            got.into_iter().next().filter(|v| *v != Value::Null)
-        }
-        fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-            let e = Expr::Assign(
-                Box::new(Expr::Path(path.to_vec())),
-                Box::new(Expr::Literal(value.clone())),
-            );
-            self.v = eval(&e, &self.v)?.remove(0);
-            Ok(())
-        }
-        fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
-            let e = Expr::Call("del".into(), vec![Expr::Path(path.to_vec())]);
-            self.v = eval(&e, &self.v)?.remove(0);
-            Ok(())
-        }
-        fn add(&mut self, path: &[Step], current: &Value, addend: &Value) -> Result<(), EditError> {
-            self.adds += 1;
-            let sum = add_values(current, addend)?;
-            self.set(path, &sum)
-        }
-    }
-
-    fn run(doc: Value, expr: &str) -> Result<(Value, usize), EditError> {
-        let mut m = Mem { v: doc, adds: 0 };
-        apply_mutation(&mut m, &parse(expr).unwrap())?;
-        Ok((m.v, m.adds))
-    }
-
-    #[test]
-    fn dispatches_every_mutation_form() {
-        let doc = || json!({"a": 1, "xs": [1, 2], "s": "x"});
-        let with = |a: Value, xs: Value, s: Value| json!({"a": a, "xs": xs, "s": s});
-        let ok = |e: &str| run(doc(), e).unwrap().0;
-        assert_eq!(ok(".a = .xs[1]"), with(json!(2), json!([1, 2]), json!("x")));
-        assert_eq!(ok(".a |= . + 5"), with(json!(6), json!([1, 2]), json!("x")));
-        let (v, adds) = run(doc(), ".s += \"y\"").unwrap();
-        assert_eq!((v, adds), (with(json!(1), json!([1, 2]), json!("xy")), 1));
-        assert_eq!(
-            ok(".xs[] |= . * 10"),
-            with(json!(1), json!([10, 20]), json!("x"))
-        );
-        assert_eq!(ok(".xs[] += 1"), with(json!(1), json!([2, 3]), json!("x")));
-        assert_eq!(ok(".xs[] = 0"), with(json!(1), json!([0, 0]), json!("x")));
-        assert_eq!(
-            ok(".a = 5 | .s = \"z\""),
-            with(json!(5), json!([1, 2]), json!("z"))
-        );
-        assert_eq!(ok("del(.a)"), json!({"xs": [1, 2], "s": "x"}));
-        assert_eq!(
-            ok("(.xs[] | select(. == 2)) = 9"),
-            with(json!(1), json!([1, 9]), json!("x"))
-        );
-    }
-
-    /// A document on the trait's default `add`, recording each `set` path.
-    struct Keyed {
-        mem: Mem,
-        sets: Vec<String>,
-    }
-
-    impl Mutable for Keyed {
-        fn whole(&self) -> Value {
-            self.mem.whole()
-        }
-        fn value_at(&self, path: &[Step]) -> Option<Value> {
-            self.mem.value_at(path)
-        }
-        fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
-            self.sets.push(crate::render_path(path));
-            self.mem.set(path, value)
-        }
-        fn delete(&mut self, path: &[Step]) -> Result<(), EditError> {
-            self.mem.delete(path)
-        }
-    }
-
-    #[test]
-    fn object_add_assign_is_one_keyed_set_per_right_hand_entry() {
-        // #106: `+=` of an object is jq's shallow merge, written key by key
-        // so a format leaves the object's other entries alone.
-        let run = |expr: &str| {
-            let mut k = Keyed {
-                mem: Mem {
-                    v: json!({"o": {"a": 1, "b": 2}, "xs": [{"a": 1}, {"b": 2}]}),
-                    adds: 0,
-                },
-                sets: Vec::new(),
-            };
-            apply_mutation(&mut k, &parse(expr).unwrap()).unwrap();
-            (k.mem.v, k.sets)
-        };
-        let (v, sets) = run(".o += {b: 3, c: 4}");
-        assert_eq!(sets, [".o.b", ".o.c"]);
-        assert_eq!(
-            v.to_json(),
-            r#"{"o":{"a":1,"b":3,"c":4},"xs":[{"a":1},{"b":2}]}"#
-        );
-        // Fan-out and path-expression targets merge per element the same way.
-        let (_v, sets) = run(".xs[] += {c: 0}");
-        assert_eq!(sets, [".xs[0].c", ".xs[1].c"]);
-        let (_v, sets) = run("(.xs[] | select(.b)) += {c: 0}");
-        assert_eq!(sets, [".xs[1].c"]);
-        // Anything but object onto object still writes the sum.
-        let (_v, sets) = run(".o.a += 1");
-        assert_eq!(sets, [".o.a"]);
-    }
-
-    #[test]
-    fn misses_and_non_mutations_error() {
-        let doc = json!({"xs": []});
-        let err = |e: &str| run(doc.clone(), e).unwrap_err().to_string();
-        assert_eq!(err(".nope |= 1"), "path not found");
-        assert_eq!(err(".nope += 1"), "path not found");
-        assert_eq!(err(".xs[] = 1"), "cannot create through `[]`");
-        assert_eq!(
-            err(".a"),
-            "expected an assignment (`path = value`) or `del(path)`"
-        );
-        assert_eq!(err("del(.a; .b)"), "del(...) takes one path argument");
-        assert_eq!(
-            err(".a = .xs[]"),
-            "right side of the assignment produced no value"
-        );
-        // An update over an empty expansion is a no-op, jq-shaped.
-        assert_eq!(run(doc.clone(), ".xs[] |= 1").unwrap().0, doc);
-    }
-}
+mod tests;

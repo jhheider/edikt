@@ -11,45 +11,26 @@ impl Toml {
     /// including intermediate tables (jq's `.a.b = 1` auto-creates `.a`). A path
     /// ending in an array index sets, appends (`idx == len`), or auto-vivifies
     /// an array or array-of-tables element (`.foo[0] = { ... }` -> `[[foo]]`).
+    /// A collection over a collection is diffed by `edikt_core::assign`
+    /// (#117), so a `[table]` given a new object stays a table and an array
+    /// that grows appends in its own layout.
     pub fn set(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
+        edikt_core::assign(self, path, value)
+    }
+
+    /// The primitive behind [`Toml::set`], one value written in place.
+    pub(crate) fn set_value(&mut self, path: &[Step], value: &Value) -> Result<(), EditError> {
         let Some((last, parent)) = path.split_last() else {
             return self.set_root(value);
         };
         match last {
             Step::Field(key) => {
                 let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
-                if let Some(existing) = current.get(key) {
-                    // An unchanged value keeps its bytes (an identity update
-                    // must not restyle a `[table]` as an inline one).
-                    if project::item_to_value(existing).identical(value) {
-                        return Ok(());
-                    }
-                    // A `[table]` given a new object is updated key by key,
-                    // so it stays a table and its untouched keys keep their
-                    // bytes.
-                    if let (Some(table), Value::Object(entries)) = (existing.as_table(), value) {
-                        let stale: Vec<String> = table
-                            .iter()
-                            .map(|(k, _)| k.to_string())
-                            .filter(|k| entries.iter().all(|(n, _)| n != k))
-                            .collect();
-                        return self.update_table(path, entries, &stale);
-                    }
-                }
-                let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
                 let new_item = edit::value_to_item(value)?;
                 if let Some(existing) = current.get_mut(key) {
-                    // A new array that extends the old one appends in the
-                    // array's own layout (#91) instead of rewriting it.
-                    if let Value::Array(new) = value {
-                        let extended = match existing {
-                            Item::Value(TomlValue::Array(old)) => edit::extend_in_layout(old, new)?,
-                            Item::ArrayOfTables(old) => edit::extend_aot(old, new)?,
-                            _ => false,
-                        };
-                        if extended {
-                            return Ok(());
-                        }
+                    // An unchanged value keeps its bytes.
+                    if project::item_to_value(existing).identical(value) {
+                        return Ok(());
                     }
                     // Keep the existing value's decor (spacing + inline
                     // comment) and, for a string, its quote style.
@@ -90,51 +71,19 @@ impl Toml {
         }
     }
 
-    /// Set the document itself (`. = v`, `. |= f`, jhheider/edikt#107). The
-    /// root is a standard table, so it is updated the same way: an unchanged
-    /// value is a no-op, and any other table is brought to `value` key by key,
-    /// so untouched keys and tables keep their bytes. A TOML document is
-    /// always a table, so anything else errors.
+    /// Set the document itself (`. = v`, `. |= f`, jhheider/edikt#107). A
+    /// TOML document is always a table, so anything but an object errors; an
+    /// object is diffed key by key (#117), so untouched keys and tables keep
+    /// their bytes.
     fn set_root(&mut self, value: &Value) -> Result<(), EditError> {
-        let Value::Object(entries) = value else {
+        if !matches!(value, Value::Object(_)) {
             return Err(EditError::new(format!(
                 "a TOML document is a table, so `.` can only be set to an object (got {})",
                 value.type_name()
             )));
-        };
-        if self.to_value().identical(value) {
-            return Ok(());
         }
-        let stale: Vec<String> = self
-            .doc
-            .iter()
-            .map(|(k, _)| k.to_string())
-            .filter(|k| entries.iter().all(|(n, _)| n != k))
-            .collect();
-        self.update_table(&[], entries, &stale)
-    }
-
-    /// Bring the standard table at `path` to `entries`: each key set in place
-    /// (recursively, so a sub-table stays a table too), and each `stale` key
-    /// deleted.
-    fn update_table(
-        &mut self,
-        path: &[Step],
-        entries: &[(String, Value)],
-        stale: &[String],
-    ) -> Result<(), EditError> {
-        let at = |k: &str| {
-            let mut p = path.to_vec();
-            p.push(Step::Field(k.to_string()));
-            p
-        };
-        for k in stale {
-            self.delete(&at(k))?;
-        }
-        for (k, v) in entries {
-            self.set(&at(k), v)?;
-        }
-        Ok(())
+        // The root always holds an object, so this diffs, never comes back.
+        edikt_core::assign(self, &[], value)
     }
 
     /// The value at `path`, or `None`.
@@ -162,10 +111,22 @@ impl Toml {
         };
         match last {
             Step::Field(key) => {
+                let inline = is_inline_table(self.doc.as_item(), parent);
                 let Some(current) = walk_tables(self.doc.as_table_mut(), parent) else {
                     return Ok(());
                 };
-                current.remove(key);
+                let last = current.iter().last().is_some_and(|(k, _)| k == key);
+                let removed = current.remove(key);
+                // An inline table's last value carries the space before `}`
+                // in its suffix; the new last value takes it over.
+                if inline
+                    && last
+                    && let Some(Item::Value(gone)) = removed
+                    && let Some((_, Item::Value(now))) = current.iter_mut().last()
+                {
+                    let suffix = gone.decor().suffix().cloned().unwrap_or_default();
+                    now.decor_mut().set_suffix(suffix);
+                }
                 Ok(())
             }
             Step::Index(n) => {
@@ -292,9 +253,34 @@ fn follows_dotted_style(parent: &dyn TableLike) -> bool {
             .any(|(_, item)| matches!(item, Item::Table(t) if t.is_dotted()))
 }
 
+/// Whether `steps` from `root` lands on an inline table (`{ a = 1 }`), read
+/// without creating anything along the way.
+fn is_inline_table(root: &Item, steps: &[Step]) -> bool {
+    fn walk<'a>(mut item: &'a Item, steps: &[Step]) -> Option<&'a Item> {
+        for step in steps {
+            item = match step {
+                Step::Field(k) => item.get(k.as_str())?,
+                Step::Index(i) => {
+                    let len = match item {
+                        Item::ArrayOfTables(aot) => aot.len(),
+                        _ => item.as_array()?.len(),
+                    };
+                    item.get(edit::resolve_del_index(*i, len)?)?
+                }
+                _ => return None,
+            };
+        }
+        Some(item)
+    }
+    walk(root, steps).is_some_and(Item::is_inline_table)
+}
+
 /// Walk `steps` from `root` **without** creating anything; returns `None` if
 /// the path doesn't resolve to a table (a delete no-op).
-fn walk_tables<'a>(root: &'a mut dyn TableLike, steps: &[Step]) -> Option<&'a mut dyn TableLike> {
+pub(crate) fn walk_tables<'a>(
+    root: &'a mut dyn TableLike,
+    steps: &[Step],
+) -> Option<&'a mut dyn TableLike> {
     let mut current = root;
     let mut i = 0;
     while i < steps.len() {

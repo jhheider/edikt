@@ -866,11 +866,51 @@ fn del_dot_iterate_fans_out() {
     // Missing target or empty collection is a no-op.
     assert_eq!(edit_src("{\"a\":[]}", "del(.a[])"), "{\"a\":[]}");
     assert_eq!(edit_src("{\"a\":[1]}", "del(.nope[])"), "{\"a\":[1]}");
-    // Multi-line formatting: each deleted element's line disappears (the closing
-    // bracket keeps its own line's indent).
+    // Multi-line formatting: each deleted element's line disappears, and the
+    // closing bracket keeps its own line and indent.
     assert_eq!(
         edit_src("{\n  \"a\": [\n    1,\n    2,\n  ],\n}\n", "del(.a[])"),
-        "{\n  \"a\": [\n    ],\n}\n"
+        "{\n  \"a\": [\n  ],\n}\n"
+    );
+}
+
+#[test]
+fn del_takes_a_one_per_line_elements_line_and_comment() {
+    // The comment beside an element is about it, so it goes with its line;
+    // the neighbours' comments stay beside them (#117).
+    let arr = "{\n  \"k\": [\n    1, // one\n    2, // two\n    3\n  ]\n}\n";
+    let with = |body: &str| format!("{{\n  \"k\": [\n{body}  ]\n}}\n");
+    assert_eq!(edit_src(arr, "del(.k[1])"), with("    1, // one\n    3\n"));
+    assert_eq!(edit_src(arr, "del(.k[0])"), with("    2, // two\n    3\n"));
+    // The last element has no comma, so the one before gives up its own.
+    assert_eq!(
+        edit_src(arr, "del(.k[2])"),
+        with("    1, // one\n    2 // two\n")
+    );
+    // A trailing-comma list keeps its trailing comma.
+    assert_eq!(
+        edit_src("[\n  1, // one\n  2, // two\n]\n", "del(.[1])"),
+        "[\n  1, // one\n]\n"
+    );
+    // Members alike, and an own-line comment above the element stays.
+    let obj = "{\n  \"a\": 1, // one\n  // about b\n  \"b\": 2 // two\n}\n";
+    assert_eq!(
+        edit_src(obj, "del(.b)"),
+        "{\n  \"a\": 1 // one\n  // about b\n}\n"
+    );
+    assert_eq!(
+        edit_src(obj, "del(.a)"),
+        "{\n  // about b\n  \"b\": 2 // two\n}\n"
+    );
+    // CRLF lines go whole, ending included.
+    assert_eq!(
+        edit_src("[\r\n  1, // one\r\n  2 // two\r\n]\r\n", "del(.[1])"),
+        "[\r\n  1 // one\r\n]\r\n"
+    );
+    // Sharing a line with a neighbour, the separator-level delete applies.
+    assert_eq!(
+        edit_src("[\n  1, 2,\n  3\n]\n", "del(.[1])"),
+        "[\n  1,\n  3\n]\n"
     );
 }
 
@@ -1266,5 +1306,62 @@ fn json5_comments_are_still_addressable() {
     assert!(
         flat.iter().any(|e| e.key == "bare"),
         "expected the bare key in the comment projection: {flat:?}"
+    );
+}
+
+#[test]
+fn a_collection_over_a_collection_keeps_what_it_keeps() {
+    // #117: `=`/`|=` of a collection over a collection edits only what
+    // changed, so the other elements keep their comments and layout.
+    let obj = "{\n  \"o\": {\n    \"a\": 1, // one\n    \"b\": 2\n  }\n}\n";
+    assert_eq!(
+        edit_src(obj, ".o = {a: 1}"),
+        "{\n  \"o\": {\n    \"a\": 1 // one\n  }\n}\n"
+    );
+    assert_eq!(
+        edit_src(obj, ".o = {a: 1, b: 3, c: 4}"),
+        "{\n  \"o\": {\n    \"a\": 1, // one\n    \"b\": 3,\n    \"c\": 4\n  }\n}\n"
+    );
+    // Nested objects diff too.
+    assert_eq!(
+        edit_src(
+            "{\n  \"o\": {\n    \"p\": {\n      \"x\": 1, // x\n      \"y\": 2\n    }\n  }\n}\n",
+            ".o = {p: {x: 1}}"
+        ),
+        "{\n  \"o\": {\n    \"p\": {\n      \"x\": 1 // x\n    }\n  }\n}\n"
+    );
+    let arr = "{\n  \"k\": [\n    1, // one\n    2, // two\n    3 // three\n  ]\n}\n";
+    let with = |body: &str| format!("{{\n  \"k\": [\n{body}  ]\n}}\n");
+    assert_eq!(
+        edit_src(arr, ".k = [1, 3]"),
+        with("    1, // one\n    3 // three\n")
+    );
+    assert_eq!(
+        edit_src(arr, ".k |= [.[0], .[2]]"),
+        with("    1, // one\n    3 // three\n")
+    );
+    assert_eq!(
+        edit_src(arr, ".k = [1, 3, 4]"),
+        with("    1, // one\n    3, // three\n    4\n")
+    );
+    // In-place change at an index keeps the comment beside it.
+    assert_eq!(
+        edit_src(arr, ".k = [1, 5, 3]"),
+        with("    1, // one\n    5, // two\n    3 // three\n")
+    );
+    // Duplicates: the first ones stay, the later one goes.
+    assert_eq!(
+        edit_src("[\n  1, // a\n  1, // b\n  2\n]\n", ". = [1, 2]"),
+        "[\n  1, // a\n  2\n]\n"
+    );
+    // A reorder is one replacement, as before.
+    assert_eq!(edit_src(arr, ".k = [3, 2, 1]"), "{\n  \"k\": [3,2,1]\n}\n");
+    // CRLF: the removed line goes whole, the added one takes CRLF.
+    assert_eq!(
+        edit_src(
+            "{\r\n  \"a\": 1, // one\r\n  \"b\": 2\r\n}\r\n",
+            ". = {a: 1, c: 3}"
+        ),
+        "{\r\n  \"a\": 1, // one\r\n  \"c\": 3\r\n}\r\n"
     );
 }
