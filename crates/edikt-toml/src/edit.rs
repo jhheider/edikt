@@ -398,6 +398,66 @@ pub(crate) fn delete_array_element(container: &mut dyn TableLike, key: &str, idx
     } else if let Some(arr) = item.as_value_mut().and_then(TomlValue::as_array_mut)
         && let Some(at) = resolve_del_index(idx, arr.len())
     {
-        arr.remove(at);
+        remove_in_layout(arr, at);
     }
+}
+
+/// Remove item `at` from `arr`, leaving its neighbours' layout as it was.
+///
+/// `toml_edit` keeps what follows an item's comma (a comment beside it, the
+/// line break, the next item's indent) in the next item's prefix, or in the
+/// array's trailing text after the last one, so removing an item's decor
+/// alone would hand its neighbour's comment to the item after it. In a
+/// one-item-per-line array (the item and what follows it each open a line),
+/// the item's line goes whole with the comment beside it, and the comment
+/// beside the item before it, and own-line comments above it, stay. Inline,
+/// the item goes with one separator: `[1, 2, 3]` loses `1, ` or `, 3`.
+fn remove_in_layout(arr: &mut Array, at: usize) {
+    fn text(r: Option<&RawString>) -> String {
+        r.and_then(RawString::as_str).unwrap_or("").to_owned()
+    }
+    /// Up to and including the first line break, and the rest.
+    fn split(s: &str) -> (&str, &str) {
+        s.find('\n').map_or((s, ""), |i| s.split_at(i + 1))
+    }
+    /// The whole lines of `s`: everything up to its last line break.
+    fn lines(s: &str) -> &str {
+        s.rfind('\n').map_or("", |i| &s[..=i])
+    }
+    let n = arr.len();
+    let comma = arr.trailing_comma();
+    let own = text(arr.get(at).and_then(|v| v.decor().prefix()));
+    // What follows the item's comma (or, for a comma-less last item, the
+    // item itself): the next item's prefix, the array's trailing text, or
+    // the item's own suffix.
+    let next = if at + 1 < n {
+        text(arr.get(at + 1).and_then(|v| v.decor().prefix()))
+    } else if comma {
+        text(Some(arr.trailing()))
+    } else {
+        text(arr.get(at).and_then(|v| v.decor().suffix()))
+    };
+    let own_line = own.contains('\n') && next.contains('\n');
+    // The layout that takes the removed item's place.
+    let joined = |inline: String| {
+        if own_line {
+            let (before, above) = split(&own);
+            format!("{before}{}{}", lines(above), split(&next).1)
+        } else {
+            inline
+        }
+    };
+    if at + 1 < n {
+        let prefix = joined(if at == 0 { own.clone() } else { next.clone() });
+        if let Some(v) = arr.get_mut(at + 1) {
+            v.decor_mut().set_prefix(prefix);
+        }
+    } else if comma || at == 0 {
+        let trailing = joined(if comma { next.clone() } else { String::new() });
+        arr.set_trailing(trailing);
+    } else if let Some(prev) = arr.get_mut(at - 1) {
+        let suffix = format!("{}{}", text(prev.decor().suffix()), joined(next.clone()));
+        prev.decor_mut().set_suffix(suffix);
+    }
+    arr.remove(at);
 }

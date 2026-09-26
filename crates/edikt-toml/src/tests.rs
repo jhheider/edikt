@@ -240,6 +240,44 @@ fn del_iterate_fans_out() {
     assert_eq!(edit_src("xs = [1]\n", "del(.nope[])"), "xs = [1]\n");
 }
 
+#[test]
+fn del_of_an_array_item_keeps_its_neighbours_layout() {
+    // One item per line: the item's line goes with the comment beside it;
+    // the comments beside the others, and one above it, stay put (#117).
+    let src = "k = [\n  1, # one\n  # about two\n  2, # two\n  3, # three\n]\n";
+    assert_eq!(
+        edit_src(src, "del(.k[0])"),
+        "k = [\n  # about two\n  2, # two\n  3, # three\n]\n"
+    );
+    assert_eq!(
+        edit_src(src, "del(.k[1])"),
+        "k = [\n  1, # one\n  # about two\n  3, # three\n]\n"
+    );
+    assert_eq!(
+        edit_src(src, "del(.k[2])"),
+        "k = [\n  1, # one\n  # about two\n  2, # two\n]\n"
+    );
+    // Without a trailing comma, the last item's line goes and `]` stays put.
+    assert_eq!(
+        edit_src("k = [\n  1, # one\n  2 # two\n]\n", "del(.k[1])"),
+        "k = [\n  1 # one\n]\n"
+    );
+    // CRLF lines go whole too.
+    assert_eq!(
+        edit_src("k = [\r\n  1, # one\r\n  2, # two\r\n]\r\n", "del(.k[0])"),
+        "k = [\r\n  2, # two\r\n]\r\n"
+    );
+    // Inline: the item goes with one separator.
+    assert_eq!(edit_src("k = [1, 2, 3]\n", "del(.k[0])"), "k = [2, 3]\n");
+    assert_eq!(edit_src("k = [1, 2, 3]\n", "del(.k[1])"), "k = [1, 3]\n");
+    assert_eq!(edit_src("k = [1, 2, 3 ]\n", "del(.k[2])"), "k = [1, 2 ]\n");
+    // Two on a line: the separator after the item goes, the line break stays.
+    assert_eq!(
+        edit_src("k = [\n  1, 2,\n  3,\n]\n", "del(.k[1])"),
+        "k = [\n  1,\n  3,\n]\n"
+    );
+}
+
 // --- comment model (extraction + commented emit) -----------------------
 
 #[test]
