@@ -109,10 +109,7 @@ impl Ini {
 pub fn parse(src: &str) -> Result<Ini, ParseError> {
     let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src));
-    let malformed = root
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .any(|t| t.kind() == Sk::Error);
+    let malformed = edikt_syntax::tokens(&root).any(|t| t.kind() == Sk::Error);
     if malformed {
         return Err(ParseError {
             msg: "invalid INI: a line is neither a comment, section, nor key=value".to_string(),
@@ -135,10 +132,7 @@ impl Document for Ini {
         edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
-        self.root
-            .descendants_with_tokens()
-            .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == Sk::Comment)
+        edikt_syntax::tokens(&self.root).any(|t| t.kind() == Sk::Comment)
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.root))

@@ -10,6 +10,7 @@
 //!   directly, with [`Builder::trivia`] for optional whitespace/newlines.
 //! - [`leaf_node`] builds the one-token replacement node a value edit splices
 //!   in.
+//! - [`tokens`] walks every token under a node (comment and error scans).
 //! - [`to_source`] is lossless serialization, which is *free* with rowan: a
 //!   green tree stores every token including trivia, so concatenating token
 //!   text reproduces the source byte-for-byte.
@@ -131,6 +132,12 @@ pub fn leaf_node<K: Kinds>(node: K, token: K, text: &str) -> GreenNode {
     b.trivia(token, text);
     b.finish_node();
     b.finish()
+}
+
+/// Every token under `node`, in source order.
+pub fn tokens<L: Language>(node: &SyntaxNode<L>) -> impl Iterator<Item = rowan::SyntaxToken<L>> {
+    node.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
 }
 
 /// Serialize a syntax tree back to source, byte-identically for an unedited

@@ -246,28 +246,26 @@ pub fn parse(src: &str) -> Result<Jsonc, ParseError> {
 /// commented-but-otherwise-strict `.jsonc` still refuses a non-finite insert
 /// rather than writing bytes VS Code-style consumers reject.
 fn detect_json5(root: &SyntaxNode) -> bool {
-    root.descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .any(|t| match t.kind() {
-            Sk::SingleStr | Sk::Ident => true,
-            Sk::Str => t.text().to_string().contains("\\\n"),
-            Sk::Num => {
-                let s = t.text().to_string();
-                let u = if s.starts_with('+') || s.starts_with('-') {
-                    &s[1..]
-                } else {
-                    &s
-                };
-                s.starts_with('+')
-                    || u.starts_with("0x")
-                    || u.starts_with("0X")
-                    || u.starts_with('.')
-                    || u.ends_with('.')
-                    || s.ends_with("Infinity")
-                    || s == "NaN"
-            }
-            _ => false,
-        })
+    edikt_syntax::tokens(root).any(|t| match t.kind() {
+        Sk::SingleStr | Sk::Ident => true,
+        Sk::Str => t.text().to_string().contains("\\\n"),
+        Sk::Num => {
+            let s = t.text().to_string();
+            let u = if s.starts_with('+') || s.starts_with('-') {
+                &s[1..]
+            } else {
+                &s
+            };
+            s.starts_with('+')
+                || u.starts_with("0x")
+                || u.starts_with("0X")
+                || u.starts_with('.')
+                || u.ends_with('.')
+                || s.ends_with("Infinity")
+                || s == "NaN"
+        }
+        _ => false,
+    })
 }
 
 /// The 1-based line and column (in characters) of byte `offset` in `src`.
@@ -306,9 +304,7 @@ impl Document for Jsonc {
         edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
-        self.root
-            .descendants_with_tokens()
-            .filter_map(|e| e.into_token())
+        edikt_syntax::tokens(&self.root)
             .any(|t| matches!(t.kind(), Sk::LineComment | Sk::BlockComment))
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {

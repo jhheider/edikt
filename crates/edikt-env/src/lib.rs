@@ -134,10 +134,7 @@ pub fn parse_spaced(src: &str) -> Result<Env, ParseError> {
 pub fn parse_with(src: &str, dialect: Dialect) -> Result<Env, ParseError> {
     let (bom, src) = edikt_core::text::split_bom(src);
     let root = SyntaxNode::new_root(parser::build(src, dialect));
-    let malformed = root
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .any(|t| t.kind() == Sk::Error);
+    let malformed = edikt_syntax::tokens(&root).any(|t| t.kind() == Sk::Error);
     if malformed {
         return Err(ParseError {
             msg: "invalid: a line is neither a comment nor key=value".to_string(),
@@ -160,10 +157,7 @@ impl Document for Env {
         edit::apply(self, expr).map(|()| Vec::new())
     }
     fn has_comments(&self) -> bool {
-        self.root
-            .descendants_with_tokens()
-            .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == Sk::Comment)
+        edikt_syntax::tokens(&self.root).any(|t| t.kind() == Sk::Comment)
     }
     fn to_commented(&self) -> Option<edikt_core::Commented> {
         Some(comments::to_commented(&self.root))
