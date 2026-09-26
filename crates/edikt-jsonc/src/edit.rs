@@ -338,7 +338,7 @@ fn leading_ws_of(elem: &Option<SyntaxElement>) -> Option<SyntaxToken> {
 /// original bytes are preserved; only the new elements are added. `json5`
 /// picks the number spelling (see [`spell`]).
 pub(crate) fn insert_into_array(
-    orig: &str,
+    array: &SyntaxNode,
     items: &[Value],
     json5: bool,
 ) -> Result<String, EditError> {
@@ -346,12 +346,12 @@ pub(crate) fn insert_into_array(
     for v in items {
         elems.push(spell(v, json5)?);
     }
-    Ok(insert_elements(orig, &elems))
+    Ok(insert_elements(array, &elems))
 }
 
 /// Insert `"key": value` as a new member of an object's source text.
 pub(crate) fn insert_into_object(
-    orig: &str,
+    object: &SyntaxNode,
     key: &str,
     value: &Value,
     json5: bool,
@@ -362,12 +362,12 @@ pub(crate) fn insert_into_object(
     // and is the one part of an insertion that ignored the surrounding layout
     // (edikt-087 BUG-5). Single-line objects still take the compact form,
     // because there it IS the file's style.
-    let rendered = match indent_style(orig) {
+    let rendered = match indent_style(&object.text().to_string()) {
         Some((base, unit)) => pretty_value(value, &base, &unit, json5)?,
         None => spell(value, json5)?,
     };
     let member = format!("{}: {rendered}", json_string(key));
-    Ok(insert_elements(orig, &[member]))
+    Ok(insert_elements(object, &[member]))
 }
 
 /// The byte spelling of a fresh value in this document. A JSON5 document can
@@ -447,14 +447,25 @@ fn pretty_value(value: &Value, base: &str, unit: &str, json5: bool) -> Result<St
     }
 }
 
-/// Insert `new_elems` before the closing bracket of a `[...]`/`{...}` text,
+/// Insert `new_elems` before the closing bracket of an `Array`/`Object` node,
 /// matching its style (single-line `, x`; multi-line newline + indent + trailing
 /// comma). Every original byte is preserved.
-fn insert_elements(orig: &str, new_elems: &[String]) -> String {
-    // Brackets are single ASCII bytes at each end.
+///
+/// The separator comma goes right after the last existing element (its value,
+/// or the comma it already owns), located in the CST rather than by trimming
+/// text: the trivia after that element can end in a comment, and a comma pushed
+/// after `1 // note` lands inside the comment. So `"a": 1 // note` becomes
+/// `"a": 1, // note`, and the comment keeps its place after the element.
+fn insert_elements(container: &SyntaxNode, new_elems: &[String]) -> String {
+    let orig = container.text().to_string();
+    let base = usize::from(container.text_range().start());
+    // Brackets are single ASCII bytes; the open one always leads the node.
     let open = &orig[..1];
-    let close = &orig[orig.len() - 1..];
-    let inner = &orig[1..orig.len() - 1];
+    let closed = container
+        .last_token()
+        .is_some_and(|t| matches!(t.kind(), Sk::RBrace | Sk::RBracket));
+    let close = if closed { &orig[orig.len() - 1..] } else { "" };
+    let inner = &orig[1..orig.len() - close.len()];
     let body = inner.trim_end();
     let close_ws = &inner[body.len()..];
 
@@ -462,43 +473,70 @@ fn insert_elements(orig: &str, new_elems: &[String]) -> String {
         return format!("{open}{}{close}", new_elems.join(", "));
     }
 
-    let mut out = String::from(open);
-    out.push_str(body);
-    let has_trailing_comma = body.ends_with(',');
-    if inner.contains('\n') {
-        let indent = detect_indent(inner);
-        if !has_trailing_comma {
-            out.push(',');
+    // Split the body at the end of the last element: `before` ends with it,
+    // `after` is the trivia (comments) that followed it. With no element at all
+    // (a comments-only body) everything is `before` and no separator is needed.
+    let (before, after, needs_separator, has_trailing_comma) = match last_item_end(container) {
+        Some((end, is_comma)) => {
+            let at = end - base - 1; // relative to `inner`
+            (&body[..at], &body[at..], !is_comma, is_comma)
         }
-        // Each new element needs a separator comma before the next one; the
-        // *last* element only gets a trailing comma when the container was
-        // already in trailing-comma style. Manufacturing one otherwise yields
-        // invalid strict JSON (JSON5/JSONC tolerate it, so it hid until a strict
-        // consumer choked).
-        let last = new_elems.len() - 1;
-        for (i, elem) in new_elems.iter().enumerate() {
+        None => (body, "", false, false),
+    };
+
+    let mut out = String::from(open);
+    out.push_str(before);
+    if needs_separator {
+        out.push(',');
+    }
+    out.push_str(after);
+    // Each new element needs a separator comma before the next one; the *last*
+    // element only gets a trailing comma when the container was already in
+    // trailing-comma style. Manufacturing one otherwise yields invalid strict
+    // JSON (JSON5/JSONC tolerate it, so it hid until a strict consumer choked).
+    let last = new_elems.len() - 1;
+    let multiline = inner.contains('\n');
+    let indent = detect_indent(inner);
+    for (i, elem) in new_elems.iter().enumerate() {
+        if multiline {
             out.push('\n');
             out.push_str(&indent);
-            out.push_str(elem);
-            if i < last || has_trailing_comma {
-                out.push(',');
-            }
-        }
-    } else if has_trailing_comma {
-        for elem in new_elems {
+        } else {
             out.push(' ');
-            out.push_str(elem);
-            out.push(',');
         }
-    } else {
-        for elem in new_elems {
-            out.push_str(", ");
-            out.push_str(elem);
+        out.push_str(elem);
+        if i < last || has_trailing_comma {
+            out.push(',');
         }
     }
     out.push_str(close_ws);
     out.push_str(close);
     out
+}
+
+/// The absolute end offset of the last element in an `Array`/`Object` node,
+/// and whether that element is a comma (the container is in trailing-comma
+/// style). An element is a member or value node or a separator comma; trivia
+/// and the brackets are not. `None` for a container with no elements.
+fn last_item_end(container: &SyntaxNode) -> Option<(usize, bool)> {
+    let last = container
+        .children_with_tokens()
+        .filter(|e| matches!(e.kind(), Sk::Member | Sk::Value | Sk::Comma))
+        .last()?;
+    // A member owns its trailing comma; look inside for the last significant
+    // piece so a member ending `1,` counts as trailing-comma style.
+    let tail = match &last {
+        NodeOrToken::Node(n) if n.kind() == Sk::Member => n
+            .children_with_tokens()
+            .filter(|e| !crate::syntax::is_trivia(e.kind()))
+            .last()
+            .unwrap_or_else(|| last.clone()),
+        _ => last,
+    };
+    Some((
+        usize::from(tail.text_range().end()),
+        tail.kind() == Sk::Comma,
+    ))
 }
 
 /// The indentation of the first non-blank line inside a container body.

@@ -107,12 +107,7 @@ impl Jsonc {
                 .find(|n| n.kind() == Sk::Object)
                 .ok_or_else(|| EditError::new("cannot create a key inside a non-object"))?;
             let member_value = edit::nest_value(&remaining[1..], value)?;
-            let text = edit::insert_into_object(
-                &object.text().to_string(),
-                key,
-                &member_value,
-                self.json5,
-            )?;
+            let text = edit::insert_into_object(&object, key, &member_value, self.json5)?;
             object.replace_with(edit::object_green_from_text(&text))
         };
         self.root = SyntaxNode::new_root(new_root);
@@ -134,7 +129,7 @@ impl Jsonc {
             .children()
             .find(|n| n.kind() == Sk::Array)
             .ok_or_else(|| EditError::new("`+= [..]` target is not an array"))?;
-        let new_text = edit::insert_into_array(&array.text().to_string(), items, self.json5)?;
+        let new_text = edit::insert_into_array(&array, items, self.json5)?;
         let new_root = array.replace_with(edit::array_green_from_text(&new_text));
         self.root = SyntaxNode::new_root(new_root);
         Ok(())
@@ -938,6 +933,61 @@ mod tests {
     fn append_single_line_array_with_trailing_comma() {
         // A single-line array that already carries a trailing comma keeps it.
         assert_eq!(edit_src("[1, 2,]", ". += [3]"), "[1, 2, 3,]");
+    }
+
+    #[test]
+    fn insert_after_trailing_comment_puts_the_comma_before_it() {
+        // The separator comma goes after the last element, never inside the
+        // comment that follows it.
+        assert_eq!(
+            edit_src("{\n  \"a\": 1 // note\n}\n", ".b = 2"),
+            "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n"
+        );
+        assert_eq!(
+            edit_src("{\"xs\": [\n  1 // one\n]}", ".xs += [2, 3]"),
+            "{\"xs\": [\n  1, // one\n  2,\n  3\n]}"
+        );
+        // An own-line comment after the last member stays where it is.
+        assert_eq!(
+            edit_src("{\n  \"a\": 1\n  // tail\n}", ".b = 2"),
+            "{\n  \"a\": 1,\n  // tail\n  \"b\": 2\n}"
+        );
+        // Block comments, single-line.
+        assert_eq!(edit_src("[1 /* c */]", ". += [2]"), "[1, /* c */ 2]");
+        assert_eq!(
+            edit_src("{ \"a\": 1 /* c */ }", ".b = 2"),
+            "{ \"a\": 1, /* c */ \"b\": 2 }"
+        );
+    }
+
+    #[test]
+    fn insert_after_comment_keeps_trailing_comma_style() {
+        // A trailing comma followed by a comment is still trailing-comma style:
+        // no second comma, and the new last element carries one.
+        assert_eq!(
+            edit_src("[\n  1, // one\n]", ". += [2]"),
+            "[\n  1, // one\n  2,\n]"
+        );
+        assert_eq!(
+            edit_src("{\n  \"a\": 1, // note\n}", ".b = 2"),
+            "{\n  \"a\": 1, // note\n  \"b\": 2,\n}"
+        );
+        // `1 /* c */,`: the member owns a comma after a comment.
+        assert_eq!(
+            edit_src("[\n  1 /* c */,\n]", ". += [2]"),
+            "[\n  1 /* c */,\n  2,\n]"
+        );
+    }
+
+    #[test]
+    fn insert_into_comment_only_container_adds_no_separator() {
+        // No element to separate from: the comment is not followed by a comma.
+        assert_eq!(
+            edit_src("{\n  // c\n}", ".b = 2"),
+            "{\n  // c\n  \"b\": 2\n}"
+        );
+        assert_eq!(edit_src("{ /* c */ }", ".b = 2"), "{ /* c */ \"b\": 2 }");
+        assert_eq!(edit_src("[ /* c */ ]", ". += [1, 2]"), "[ /* c */ 1, 2 ]");
     }
 
     fn edit_err(src: &str, expr: &str) -> String {

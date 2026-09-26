@@ -392,6 +392,21 @@ fn creates_new_key_jsonc() {
 }
 
 #[test]
+fn jsonc_insert_after_trailing_comment_keeps_comma_out_of_it() {
+    // The separator comma belongs after the last element, not appended to the
+    // comment that ends its line (which would swallow it).
+    let (out, _e, code) = run(&["-t", "jsonc", ".b = 2"], "{\n  \"a\": 1 // note\n}\n");
+    assert_eq!(out, "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n");
+    assert_eq!(code, 0);
+    let (out, _e, code) = run(
+        &["-t", "jsonc", ".xs += [2]"],
+        "{\"xs\": [\n  1 // one\n]}\n",
+    );
+    assert_eq!(out, "{\"xs\": [\n  1, // one\n  2\n]}\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn creates_new_key_env() {
     // The exact case the demo hit; now works.
     let (out, _e, code) = run(&["-t", "env", r#".K2 = "x""#], "K=v\n");
