@@ -771,6 +771,124 @@ fn toml_query_and_edit_keeps_comment() {
 }
 
 #[test]
+fn toml_document_updates_like_a_table() {
+    // #107: `. |= .` used to exit 2, "cannot set the whole document".
+    let src = "top = 1 # c\n\n[t]\na = 1\n";
+    for expr in [". |= .", ". = ."] {
+        let (out, err, code) = run(&["-t", "toml", expr], src);
+        assert_eq!((out.as_str(), code), (src, 0), "{expr}: {err}");
+    }
+    let (out, err, code) = run(&["-t", "toml", ". |= {top: 2, t: .t}"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("top = 2 # c\n\n[t]\na = 1\n", 0),
+        "{err}"
+    );
+    let (_o, err, code) = run(&["-t", "toml", ". = [1]"], src);
+    assert_eq!(code, 2);
+    assert!(err.contains("a TOML document is a table"), "{err}");
+}
+
+#[test]
+fn toml_edit_keeps_a_key_spelled_two_ways() {
+    // #104: `["pkg".a]` and `[pkg.b]` share one key in toml_edit, so an edit
+    // to either table rewrote the other header as `["pkg".b]`.
+    let src = "[\"pkg\".a]\nk = 1\n\n[pkg.b]\nk = 1\n";
+    let (out, err, code) = run(&["-t", "toml", ".pkg.a.k = 2"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("[\"pkg\".a]\nk = 2\n\n[pkg.b]\nk = 1\n", 0),
+        "{err}"
+    );
+    // A get is the file's own text, not a re-emit with a synthesized `[pkg]`.
+    let (out, _e, code) = run(&["-t", "toml", "."], src);
+    assert_eq!((out.as_str(), code), (src, 0));
+    let (out, _e, code) = run(&["-t", "toml", ".pkg"], src);
+    assert_eq!((out.as_str(), code), ("[a]\nk = 1\n\n[b]\nk = 1\n", 0));
+    // An edit whose result can't keep a spelling is refused, not respelled.
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let path = format!("{dir}/spelled-two-ways.toml");
+    let arr = "arr = [{ \"a\".b = 1, a.c = 2 }, { a.b = 3, a.c = 4 }]\n";
+    std::fs::write(&path, arr).unwrap();
+    let (_o, err, code) = run(&["-i", "del(.arr[0])", &path], "");
+    assert_eq!(code, 2);
+    assert!(err.contains("cannot keep the spelling of `a.c`"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), arr);
+}
+
+#[test]
+fn toml_comments_on_array_of_tables_elements() {
+    // #113: "no table `items`", and `.items[0].#` taken for the banner.
+    let src = "[[items]]\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n";
+    for expr in [
+        ".items[1].id.# = \"x\"",
+        // Through a path expression (#109), the case that made this common.
+        "(.items[] | select(.id == \"b\") | .id.#) = \"x\"",
+    ] {
+        let (out, err, code) = run(&["-t", "toml", expr], src);
+        assert_eq!(
+            (out.as_str(), code),
+            ("[[items]]\nid = \"a\"\n\n[[items]]\n# x\nid = \"b\"\n", 0),
+            "{expr}: {err}"
+        );
+    }
+    let (out, err, code) = run(&["-t", "toml", ".items[0].#.inline = \"x\""], src);
+    assert_eq!(
+        (out.as_str(), code),
+        (
+            "[[items]] # x\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n",
+            0
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn toml_comment_on_a_headerless_table_never_silently_drops() {
+    // These exited 0 and wrote nothing.
+    let src = "x = 0\na.b = 1\na.c = 2\n";
+    let (out, err, code) = run(&["-t", "toml", ".a.# = \"note\""], src);
+    assert_eq!(
+        (out.as_str(), code),
+        ("x = 0\n# note\na.b = 1\na.c = 2\n", 0),
+        "{err}"
+    );
+    for (expr, input) in [
+        (".a.#.inline = \"note\"", src),
+        (".a.# = \"note\"", "[a.b]\nk = 1\n"),
+    ] {
+        let (out, err, code) = run(&["-t", "toml", expr], input);
+        assert_eq!((out.as_str(), code), ("", 2), "{expr}");
+        assert!(err.contains("`.a`"), "{expr}: {err}");
+    }
+}
+
+#[test]
+fn kdl_document_updates_node_by_node() {
+    // `. |= .` used to exit 2, "cannot set the whole document".
+    let src = "// c\nserver \"a\" port=80 {\n    tls #true\n}\nname x\n";
+    for expr in [". |= .", ". = ."] {
+        let (out, err, code) = run(&["-t", "kdl", expr], src);
+        assert_eq!((out.as_str(), code), (src, 0), "{expr}: {err}");
+    }
+    let (out, err, code) = run(&["-t", "kdl", ". |= (.server.port = 81)"], src);
+    assert_eq!(
+        (out.as_str(), code),
+        (
+            "// c\nserver \"a\" port=81 {\n    tls #true\n}\nname x\n",
+            0
+        ),
+        "{err}"
+    );
+    let (_o, err, code) = run(&["-t", "kdl", ". = {server: 1}"], src);
+    assert_eq!(code, 2);
+    assert!(
+        err.contains("replacing the whole body of `server`"),
+        "{err}"
+    );
+}
+
+#[test]
 fn convert_toml_to_json_and_back() {
     let (out, _e, code) = run(&["-t", "toml", "-T", "json"], "[a]\nb = 1\n");
     assert_eq!(out, "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n");

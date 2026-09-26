@@ -7,8 +7,11 @@ use toml_edit::{
     Value as TomlValue,
 };
 
+/// Apply a mutation expression. An edit whose result would respell a key the
+/// file spells more than one way is refused, leaving `doc` as it was (see the
+/// `spelling` module).
 pub fn apply(doc: &mut Toml, expr: &Expr) -> Result<(), EditError> {
-    edikt_core::apply_mutation(doc, expr)
+    doc.guarded(|doc| edikt_core::apply_mutation(doc, expr))
 }
 
 impl Mutable for Toml {

@@ -1,4 +1,5 @@
 use super::*;
+use edikt_core::eval;
 use edikt_core::parse as parse_expr;
 
 const SAMPLE: &str = "# package\n[package]\nname = \"edikt\"\nversion = \"0.1.0\"   # semver\n\n[dependencies]\nrowan = \"0.16\"\n";
@@ -579,11 +580,13 @@ fn set_and_del_path_guards() {
         edit_err("[a]\nx = 1\n", ".a[0].y = 5"),
         "`a` is not an array"
     );
-    // set: the whole document cannot be replaced.
+    // set: the whole document is a table, and only ever set to one (#107).
     assert_eq!(
         edit_err("a = 1\n", ". = 5"),
-        "cannot set the whole document"
+        "a TOML document is a table, so `.` can only be set to an object (got number)"
     );
+    assert_eq!(edit_src("a = 1 # c\n", ". |= ."), "a = 1 # c\n");
+    assert_eq!(edit_src("a = 1 # c\n", r#". = {a: 1}"#), "a = 1 # c\n");
     // del: a parent step that cannot match is still a silent no-op, whether
     // that is a missing key or, as here, a key that is not an array.
     assert_eq!(edit_src("[a]\nx = 1\n", "del(.a[0].y)"), "[a]\nx = 1\n");
@@ -721,10 +724,136 @@ fn comment_write_errors() {
         cedit_err("k = 1\n", ".# = \"banner\""),
         "document-level (`.#`) comment editing for TOML is a follow-up"
     );
-    // A non-field parent step in a comment path is rejected.
+    // An index steps only into an array of tables.
     assert_eq!(
         cedit_err("[a]\nx = 1\n", ".a[0].b.# = \"note\""),
-        "TOML comment paths are object keys"
+        "`a` is not an array of tables; TOML comment paths index only `[[a]]` elements"
+    );
+    assert_eq!(
+        cedit_err("a = [1]\n", ".a[0].# = \"note\""),
+        "`a` is not an array of tables; TOML comment paths index only `[[a]]` elements"
+    );
+}
+
+#[test]
+fn comments_on_array_of_tables_elements() {
+    // #113: these failed with "no table `items`", or claimed `.items[0].#`
+    // was the document banner.
+    let src = "[[items]]\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n";
+    // A key inside an element: head (replacing the old one) and inline.
+    assert_eq!(
+        cedit(src, ".items[1].id.# = \"x\""),
+        "[[items]]\nid = \"a\"\n\n[[items]]\n# x\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, ".items[0].id.#.inline = \"y\""),
+        "[[items]]\nid = \"a\" # y\n\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, "del(.items[1].id.#)"),
+        "[[items]]\nid = \"a\"\n\n[[items]]\nid = \"b\"\n"
+    );
+    // The element itself: its `[[items]]` header, like a `[table]`'s.
+    assert_eq!(
+        cedit(src, ".items[0].#.inline = \"first\""),
+        "[[items]] # first\nid = \"a\"\n\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(src, ".items[-1].# = \"second\""),
+        "[[items]]\nid = \"a\"\n\n# second\n[[items]]\n# old\nid = \"b\"\n"
+    );
+    assert_eq!(
+        cedit(
+            "# one\n[[items]] # i\nid = \"a\"\n",
+            "del(.items[0].#) | del(.items[0].#.inline)"
+        ),
+        "[[items]]\nid = \"a\"\n"
+    );
+    // Nested: an element's sub-table and a key under it.
+    let nested = "[[items]]\nid = \"a\"\n[items.meta]\nk = 1\n";
+    assert_eq!(
+        cedit(nested, ".items[0].meta.k.# = \"k\""),
+        "[[items]]\nid = \"a\"\n[items.meta]\n# k\nk = 1\n"
+    );
+    // The array as a whole has no header to hold a comment (writing into its
+    // key used to produce `[[# x\nitems]]`), and an index must be in range.
+    assert_eq!(
+        cedit_err(src, ".items.# = \"x\""),
+        "`items` is an array of tables, with no header of its own; comment one of its elements (`.items[0].#`)"
+    );
+    assert_eq!(
+        cedit_err(src, ".items[5].# = \"x\""),
+        "`items[5]` is out of range (length 2)"
+    );
+    // The foot slot is unsupported here as on every TOML target.
+    assert_eq!(
+        cedit_err(src, ".items[0].#.foot = \"x\""),
+        "setting a foot comment isn't supported for TOML yet"
+    );
+}
+
+#[test]
+fn comments_on_an_inline_table_sit_on_its_line() {
+    // These panicked: an inline table was taken for a `[table]`.
+    assert_eq!(
+        cedit("t = { a = 1 }\n", ".t.# = \"x\""),
+        "# x\nt = { a = 1 }\n"
+    );
+    assert_eq!(
+        cedit("t = { a = 1 }\n", ".t.#.inline = \"x\""),
+        "t = { a = 1 } # x\n"
+    );
+}
+
+#[test]
+fn a_comment_on_a_headerless_table_is_written_or_refused() {
+    // These exited 0 having written nothing: the comment went into decor
+    // `toml_edit` never prints (a dotted or implicit table's own).
+    let dotted = "x = 0\na.b = 1\na.c = 2\n";
+    // A dotted table's head goes above its first line, as `.a.b.#` does,
+    // and a delete clears it there.
+    assert_eq!(
+        cedit(dotted, ".a.# = \"note\""),
+        "x = 0\n# note\na.b = 1\na.c = 2\n"
+    );
+    assert_eq!(
+        cedit("x = 0\n# note\na.b = 1\na.c = 2\n", "del(.a.#)"),
+        dotted
+    );
+    assert_eq!(
+        cedit("[s]\nx = 0\na.b.c = 1\n", ".s.a.# = \"note\""),
+        "[s]\nx = 0\n# note\na.b.c = 1\n"
+    );
+    // Its inline comment goes on its line when it has just one, and is
+    // refused when it has several.
+    assert_eq!(
+        cedit("x = 0\na.b = 1\n", ".a.#.inline = \"note\""),
+        "x = 0\na.b = 1 # note\n"
+    );
+    assert_eq!(cedit("a.b = 1 # note\n", "del(.a.#.inline)"), "a.b = 1\n");
+    let several = "`.a` is a dotted table written over 2 lines, so an inline comment has no \
+                   one line to go on; comment one of them (`.a.b.#.inline`)";
+    assert_eq!(cedit_err(dotted, ".a.#.inline = \"note\""), several);
+    assert_eq!(cedit_err(dotted, "del(.a.#.inline)"), several);
+    // An implicit table has no line at all.
+    let implicit = "`.a` has no line of its own (only the headers under it name it); \
+                    comment one of those instead (`.a.b.#`)";
+    for expr in [".a.# = \"note\"", ".a.#.inline = \"note\"", "del(.a.#)"] {
+        assert_eq!(cedit_err("[a.b]\nk = 1\n", expr), implicit, "{expr}");
+    }
+    // Nor can a comment go inside an inline table: these wrote a line break
+    // into one, or a `#` that swallowed its `}` (both invalid TOML).
+    for expr in [".t.a.# = \"x\"", ".t.a.#.inline = \"x\""] {
+        assert_eq!(
+            cedit_err("t = { a = 1 }\n", expr),
+            "`.t` is an inline table, which holds no comments (TOML keeps it on one line); \
+             comment `.t` itself"
+        );
+    }
+    // A `[table]` that also names sub-tables keeps its own header comment.
+    assert_eq!(
+        cedit("[a]\n[a.b]\nk = 1\n", ".a.# = \"note\""),
+        "# note\n[a]\n[a.b]\nk = 1\n"
     );
 }
 

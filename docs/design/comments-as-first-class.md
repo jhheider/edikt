@@ -287,7 +287,14 @@ Confirmed as the **0.2.0** milestone (ships after v0.1.0; not a blocker for it).
   `head` and `inline`. Easy formats first:
   - ✅ **2a - TOML & KDL** (decor strings). **Shipped.** `foot` and
     document-level (`.#`) editing are follow-ups; comment targets are nodes, not
-    properties/args.
+    properties/args. In TOML a path indexes into an array of tables
+    (`.items[1].id.#`, #113): `.items[1].#` is that element's `[[items]]`
+    header, while the array as a whole (`.items.#`) has no header of its own
+    and errors, naming the element form. A table with no header never takes
+    a comment it can't print: a dotted table's head goes above its first
+    `a.b = ...` line and its inline on its line when it has just one (several
+    are refused); an implicit table (`[a.b]` with no `[a]`) and a key inside
+    an inline table are refused, each naming what can hold the comment.
   - ✅ **2b - JSONC / INI / `.env`** (source splice guided by the rowan tree,
     then re-parse; untouched bytes preserved). **Shipped.** Line-oriented
     formats (INI, `.env`) share `edikt_core::place_line_comment`; JSONC splices

@@ -65,70 +65,230 @@ fn write_comment(
             "setting a foot comment isn't supported for TOML yet",
         ));
     }
-    let Some((Step::Field(key), parent)) = path.split_last() else {
+    if path.is_empty() {
         return Err(EditError::new(
             "document-level (`.#`) comment editing for TOML is a follow-up",
         ));
-    };
-    let mut current: &mut dyn TableLike = doc.as_table_mut();
-    for step in parent {
-        let Step::Field(k) = step else {
-            return Err(EditError::new("TOML comment paths are object keys"));
-        };
-        current = current
-            .get_mut(k)
-            .and_then(|i| i.as_table_like_mut())
-            .ok_or_else(|| EditError::new(format!("no table `{k}`")))?;
     }
-    let is_table = current
-        .get(key)
-        .map(|i| i.is_table_like())
-        .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
-
-    match kind {
-        CommentKind::Head => {
-            // TOML keys sit at column 0 (even inside a table); indent = 0.
-            let block = |existing: &str| match set {
-                Some((text, width)) => rebuild_head(existing, &wrap_comment(text, width, 0, 2)),
-                None => rebuild_head(existing, &[]),
-            };
-            if is_table {
-                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
+    // TOML keys sit at column 0 (even inside a table); indent = 0.
+    let block = |existing: &str| match set {
+        Some((text, width)) => rebuild_head(existing, &wrap_comment(text, width, 0, 2)),
+        None => rebuild_head(existing, &[]),
+    };
+    let inline = || match set {
+        Some((text, _)) => format!(" # {}", sanitize(text)),
+        None => String::new(),
+    };
+    // An array-of-tables element (`.items[1].#`): its `[[items]]` header's
+    // decor, as for a `[table]`.
+    if let [parent @ .., Step::Field(key), Step::Index(n)] = path {
+        let current = walk(doc.as_table_mut(), parent)?;
+        let t = element(current, key, *n)?;
+        match kind {
+            CommentKind::Head => {
                 let existing = decor_prefix(t.decor());
                 t.decor_mut().set_prefix(block(&existing));
-            } else {
-                let existing = current
-                    .key(key)
-                    .and_then(|k| k.leaf_decor().prefix())
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let mut kmut = current
-                    .key_mut(key)
-                    .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
-                kmut.leaf_decor_mut().set_prefix(block(&existing));
             }
+            _ => t.decor_mut().set_suffix(inline()),
         }
-        CommentKind::Inline => {
-            let suffix = match set {
-                Some((text, _)) => format!(" # {}", sanitize(text)),
-                None => String::new(),
-            };
-            if is_table {
-                let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
-                t.decor_mut().set_suffix(suffix);
-            } else {
-                let v = current
-                    .get_mut(key)
-                    .unwrap()
-                    .as_value_mut()
-                    .ok_or_else(|| EditError::new(format!("`{key}` has no inline slot")))?;
-                v.decor_mut().set_suffix(suffix);
-            }
-        }
-        CommentKind::Foot => unreachable!(),
+        return Ok(Vec::new());
+    }
+    let Some((Step::Field(key), parent)) = path.split_last() else {
+        return Err(EditError::new("TOML comment paths are object keys"));
+    };
+    let current = walk(doc.as_table_mut(), parent)?;
+    let item = current
+        .get(key)
+        .ok_or_else(|| EditError::new(format!("no key `{key}`")))?;
+    if item.is_array_of_tables() {
+        // Its key is written inside each `[[key]]` header, where a comment
+        // can't go: the comments belong to the elements.
+        return Err(EditError::new(format!(
+            "`{key}` is an array of tables, with no header of its own; comment \
+             one of its elements (`.{key}[0].#`)"
+        )));
+    }
+    // An inline table is a value: its comments sit on its key and after it.
+    if item.is_table() {
+        let t = current.get_mut(key).unwrap().as_table_mut().unwrap();
+        return table_comment(t, path, kind, &block, &inline).map(|()| Vec::new());
+    }
+    match kind {
+        CommentKind::Head => set_key_head(current, key, &block),
+        _ => set_value_inline(current, key, inline()),
     }
     Ok(Vec::new())
+}
+
+/// A key's head comment: the lines above its `key = value` line (its leaf
+/// decor prefix, written before the first key of a dotted path).
+fn set_key_head(parent: &mut dyn TableLike, key: &str, block: &dyn Fn(&str) -> String) {
+    let existing = parent
+        .key(key)
+        .and_then(|k| k.leaf_decor().prefix())
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    if let Some(mut k) = parent.key_mut(key) {
+        k.leaf_decor_mut().set_prefix(block(&existing));
+    }
+}
+
+/// A value's inline comment: its decor suffix, after the value on its line.
+fn set_value_inline(parent: &mut dyn TableLike, key: &str, suffix: String) {
+    if let Some(v) = parent.get_mut(key).and_then(Item::as_value_mut) {
+        v.decor_mut().set_suffix(suffix);
+    }
+}
+
+/// A comment on the table `t` at `path`. A `[table]` keeps it on its header
+/// line. `toml_edit` prints no decor for a table without a header, so the
+/// other kinds must not write there (the comment would vanish, exit 0):
+/// a dotted table (`a.b = 1` / `a.c = 2`) is its keys' lines, so its head
+/// goes above the first of them and its inline comment on its only line (a
+/// table over several lines is refused); an implicit table (named only by
+/// headers under it, `[a.b]` with no `[a]`) has no line at all, so it is
+/// refused, naming a table that has one.
+fn table_comment(
+    t: &mut Table,
+    path: &[Step],
+    kind: CommentKind,
+    block: &dyn Fn(&str) -> String,
+    inline: &dyn Fn() -> String,
+) -> Result<(), EditError> {
+    let shown = show(path);
+    if t.is_dotted() {
+        let mut leaves = Vec::new();
+        dotted_leaves(t, &mut Vec::new(), &mut leaves);
+        let target = match (kind, leaves.as_slice()) {
+            (CommentKind::Head, [first, ..]) | (_, [first]) => first,
+            (CommentKind::Head, []) | (_, []) => {
+                return Err(EditError::new(format!(
+                    "`{shown}` is a dotted table with no `key = value` line of its own to comment"
+                )));
+            }
+            (_, [first, ..]) => {
+                return Err(EditError::new(format!(
+                    "`{shown}` is a dotted table written over {} lines, so an inline comment \
+                     has no one line to go on; comment one of them (`{shown}.{}.#.inline`)",
+                    leaves.len(),
+                    first.join(".")
+                )));
+            }
+        };
+        let (last, parents) = target.split_last().expect("a leaf has a key");
+        let mut owner: &mut Table = t;
+        for k in parents {
+            owner = owner
+                .get_mut(k)
+                .and_then(Item::as_table_mut)
+                .expect("the leaf path was just read from this table");
+        }
+        match kind {
+            CommentKind::Head => set_key_head(owner, last, block),
+            _ => set_value_inline(owner, last, inline()),
+        }
+        return Ok(());
+    }
+    if t.is_implicit() && t.get_values().is_empty() {
+        let child = t
+            .iter()
+            .find(|(_, i)| i.is_table() || i.is_array_of_tables())
+            .map(|(k, _)| format!(" (`{shown}.{k}.#`)"))
+            .unwrap_or_default();
+        return Err(EditError::new(format!(
+            "`{shown}` has no line of its own (only the headers under it name it); \
+             comment one of those instead{child}"
+        )));
+    }
+    match kind {
+        CommentKind::Head => {
+            let existing = decor_prefix(t.decor());
+            t.decor_mut().set_prefix(block(&existing));
+        }
+        _ => t.decor_mut().set_suffix(inline()),
+    }
+    Ok(())
+}
+
+/// The `key = value` lines of the dotted table `t`, as key paths relative to
+/// it, in the order `toml_edit` writes them.
+fn dotted_leaves(t: &Table, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    for (k, item) in t.iter() {
+        prefix.push(k.to_string());
+        match item {
+            Item::Value(_) => out.push(prefix.clone()),
+            Item::Table(sub) if sub.is_dotted() => dotted_leaves(sub, prefix, out),
+            _ => {}
+        }
+        prefix.pop();
+    }
+}
+
+/// `path` as the user would write it (`.a.b[1]`).
+fn show(path: &[Step]) -> String {
+    path.iter()
+        .map(|s| match s {
+            Step::Field(k) => format!(".{k}"),
+            Step::Index(n) => format!("[{n}]"),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+/// The table `steps` lead to from `root`: object keys, each optionally
+/// followed by an index into an array of tables (`.items[1].id`). An inline
+/// table is not walked into: TOML allows no comment inside one.
+fn walk<'a>(
+    mut current: &'a mut dyn TableLike,
+    steps: &[Step],
+) -> Result<&'a mut dyn TableLike, EditError> {
+    let mut i = 0;
+    while i < steps.len() {
+        let Step::Field(k) = &steps[i] else {
+            return Err(EditError::new("TOML comment paths are object keys"));
+        };
+        if let Some(Step::Index(n)) = steps.get(i + 1) {
+            current = element(current, k, *n)?;
+            i += 2;
+        } else {
+            if matches!(current.get(k), Some(Item::Value(TomlValue::InlineTable(_)))) {
+                return Err(EditError::new(format!(
+                    "`{}` is an inline table, which holds no comments (TOML keeps it \
+                     on one line); comment `{0}` itself",
+                    show(&steps[..=i])
+                )));
+            }
+            current = current
+                .get_mut(k)
+                .and_then(|i| i.as_table_like_mut())
+                .ok_or_else(|| EditError::new(format!("no table `{k}`")))?;
+            i += 1;
+        }
+    }
+    Ok(current)
+}
+
+/// Element `n` (negative counts from the end) of the array of tables at
+/// `parent[key]`.
+fn element<'a>(
+    parent: &'a mut dyn TableLike,
+    key: &str,
+    n: i64,
+) -> Result<&'a mut Table, EditError> {
+    let aot = parent
+        .get_mut(key)
+        .ok_or_else(|| EditError::new(format!("no key `{key}`")))?
+        .as_array_of_tables_mut()
+        .ok_or_else(|| {
+            EditError::new(format!(
+                "`{key}` is not an array of tables; TOML comment paths index only `[[{key}]]` elements"
+            ))
+        })?;
+    let len = aot.len();
+    edikt_core::resolve_index(n, len)
+        .and_then(|at| aot.get_mut(at))
+        .ok_or_else(|| EditError::new(format!("`{key}[{n}]` is out of range (length {len})")))
 }
 
 fn decor_prefix(decor: &toml_edit::Decor) -> String {

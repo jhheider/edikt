@@ -472,7 +472,17 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   its style (see the moat). Refused rather than reflowed: replacing a quoted
   or plain scalar that wraps over several lines, and growing a multi-line
   flow collection.
-- **TOML** - lossless via `toml_edit`'s decor-preserving DOM. An array grows
+- **TOML** - lossless via `toml_edit`'s decor-preserving DOM. `toml_edit`
+  keeps one spelling (quoting, spacing around the dots) per key, so a key the
+  file spells more than one way would come back one way everywhere
+  (`["pkg".a]` and `[pkg.b]` share `pkg`; so do the `[[ bin ]]` and `[[bin]]`
+  elements, and `"a".b` and `a.c`). Each header and key path it would respell
+  is written back as the file spelled it, the edited line's too (#104). The
+  one place that can't be told apart is an inline table in an array: its
+  spellings are kept while its element keeps its value and the array doesn't
+  shrink, and an edit that breaks that is refused (exit 2) rather than
+  respelled. A key an edit creates takes the spelling `toml_edit` holds. An
+  array grows
   in its own layout (#91): `.a += [x]`, `.a[len] = x`, and any assignment
   whose new array keeps the old elements as a prefix append rather than
   rewrite, so the kept elements stay byte for byte (assigning an array its own
@@ -489,7 +499,13 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   sibling table spelled as dotted keys (`edition.workspace = true`), it is a
   dotted key too (`rust-version.workspace = true`); with no dotted precedent
   it gets its own `[a.b]` header (intermediates stay implicit, so `.a.b.c = 1`
-  writes only `[a.b]`).
+  writes only `[a.b]`). A value set to itself changes nothing, and a
+  `[table]` given a new object is updated key by key (changed keys set in
+  place, new ones added, missing ones deleted), so it stays a table and its
+  untouched keys keep their bytes. The document itself is such a table:
+  `. |= .` is a no-op, `. |= f` or `. = {...}` updates the root key by key
+  (#107), and setting `.` to anything but an object errors, since a TOML
+  document is always a table.
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,
@@ -505,8 +521,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   - paths read as printed: `.keybinds.normal.bind[0].["-"]`. Arrays of arrays
     have no KDL spelling and error cleanly on emit.
   Edits are surgical (set an arg/prop, create a leaf node, delete, append new
-  occurrences); replacing a whole node body wholesale is refused rather than
-  reflowed. A new node copies the layout of the sibling it follows (its
+  occurrences). A node given a new object, and the document itself (`. |=
+  f`, `. = {...}`), is updated key by key: unchanged keys are left alone (so
+  `. |= .` is a no-op), missing ones deleted, and each changed one set under
+  these same rules; if any key can't be, the whole update is refused and the
+  document left as it was. Replacing a node body with anything else is
+  refused rather than reflowed, and `.` can only be set to an object. A new node copies the layout of the sibling it follows (its
   indent on a line of its own, or a `;`-separated slot in a single-line
   `{ a 1; b 2 }` block), and anything nested inside it indents by the file's
   own unit. Deleting a block's first child keeps the `{` line intact.
