@@ -423,7 +423,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   and whatever sat between the last item and `]` stays ahead of the bracket,
   so a comment beside the old last item stays beside it. An array of tables
   grows by a `[[key]]` block per new table. Any other array assignment
-  rewrites the array inline, keeping the value's decor.
+  rewrites the array inline, keeping the value's decor. A table that `=`
+  auto-vivifies follows its surroundings: inside a dotted table, or beside a
+  sibling table spelled as dotted keys (`edition.workspace = true`), it is a
+  dotted key too (`rust-version.workspace = true`); with no dotted precedent
+  it gets its own `[a.b]` header (intermediates stay implicit, so `.a.b.c = 1`
+  writes only `[a.b]`).
 - **KDL** - lossless via `kdl-rs` (format-preserving by design; the `toml_edit`
   of KDL). A KDL node carries positional **arguments**, `key=value`
   **properties**, *and* **children**, so the `Value` mapping is a fixed,
