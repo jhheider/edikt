@@ -238,6 +238,10 @@ fn walk_tables_vivify<'a>(
         if current.get(k).is_none() {
             let mut t = Table::new();
             t.set_implicit(true);
+            // Match the surrounding style: under a dotted table, or beside a
+            // dotted sibling (`edition.workspace = true`), the new table is a
+            // dotted key too, not a fresh `[a.b]` header.
+            t.set_dotted(follows_dotted_style(current));
             current.insert(k, Item::Table(t));
         }
         let item = current
@@ -249,6 +253,16 @@ fn walk_tables_vivify<'a>(
         i += 1;
     }
     Ok(current)
+}
+
+/// Does a table created in `parent` belong as a dotted key? Yes when `parent`
+/// is itself a dotted table, or when any of its sub-tables is spelled dotted.
+/// With no dotted precedent, a new table keeps its own `[header]`.
+fn follows_dotted_style(parent: &dyn TableLike) -> bool {
+    parent.is_dotted()
+        || parent
+            .iter()
+            .any(|(_, item)| matches!(item, Item::Table(t) if t.is_dotted()))
 }
 
 /// Walk `steps` from `root` **without** creating anything; returns `None` if
@@ -561,6 +575,25 @@ mod tests {
         // Untouched regions survive byte-for-byte, comments included.
         assert!(out.starts_with("# package\n[package]\nname = \"edikt\""));
         assert!(out.contains("version = \"0.1.0\"   # semver"));
+    }
+
+    #[test]
+    fn vivified_table_follows_dotted_siblings() {
+        // A Cargo.toml `[package]` written with dotted keys gains a dotted
+        // line beside them, not a `[package.rust-version]` sub-table.
+        let src =
+            "[package]\nname = \"x\"\nedition.workspace = true\n\n[dependencies]\nfoo = \"1\"\n";
+        assert_eq!(
+            edit_src(src, r#".package."rust-version".workspace = true"#),
+            "[package]\nname = \"x\"\nedition.workspace = true\nrust-version.workspace = true\n\n[dependencies]\nfoo = \"1\"\n"
+        );
+        // Deeper creates stay dotted all the way down, under or beside one.
+        assert!(edit_src(src, ".package.a.b.c = 1").contains("\na.b.c = 1\n"));
+        assert!(edit_src(src, ".package.edition.x.y = 1").contains("\nedition.x.y = 1\n"));
+        // No dotted precedent in that table: today's `[a.b]` header.
+        assert!(
+            edit_src(src, ".dependencies.bar.v = 1").ends_with("\n[dependencies.bar]\nv = 1\n")
+        );
     }
 
     #[test]
