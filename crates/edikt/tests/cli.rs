@@ -2181,6 +2181,70 @@ fn plus_on_two_objects_is_a_shallow_merge() {
 }
 
 #[test]
+fn a_comment_edit_through_a_path_expression() {
+    // #109: the path part resolves to concrete paths, and each takes the
+    // comment edit, in place.
+    let src = "items:\n  - id: a\n    n: 1  # keep me\n  - id: b\n    # old\n    n: 2\n";
+    let edit = |expr: &str| run(&["-t", "yaml", expr], src);
+    let (out, err, code) = edit(r#"(.items[] | select(.id == "b") | .n.#) = "new""#);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, src.replace("# old", "# new"));
+    assert!(err.is_empty(), "{err}");
+    // jq's postfix spelling (#105), `|=` and `+=`.
+    let (out, _e, code) = edit(r#"(.items[] | select(.id == "b")).n.# |= ascii_upcase"#);
+    assert_eq!((out, code), (src.replace("# old", "# OLD"), 0));
+    let (out, _e, _c) = edit(r#"(.items[] | select(.id == "b") | .n.#) += "!""#);
+    assert_eq!(out, src.replace("# old", "# old!"));
+    // Every match, by kind; `del` removes only the targeted kind.
+    let (out, _e, _c) = edit(r#"(.items[] | select(.n > 0) | .n.#.inline) = "hi""#);
+    assert_eq!(
+        out,
+        src.replace("# keep me", "# hi")
+            .replace("n: 2\n", "n: 2  # hi\n")
+    );
+    let (out, _e, _c) = edit("del(.items[] | select(.n > 0) | .n.#)");
+    assert_eq!(out, src.replace("    # old\n", ""));
+
+    // JSONC too.
+    let jsonc = "{\"xs\": [\n  {\"k\": 1},\n  // two\n  {\"k\": 2}\n]}\n";
+    let (out, err, code) = run(
+        &["-t", "jsonc", "(.xs[] | select(.k == 2)).# = \"second\""],
+        jsonc,
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, jsonc.replace("// two", "// second"));
+
+    // Zero matches: the #88 note, exit 0, and --exit-status makes it 1.
+    let expr = r#"(.items[] | select(.id == "zz") | .n.#) = "x""#;
+    let (out, err, code) = edit(expr);
+    assert_eq!((out.as_str(), code), (src, 0));
+    assert!(
+        err.contains("`.items[] | select(...) | .n.#` matched nothing; no change"),
+        "{err}"
+    );
+    let (_o, _e, code) = run(&["-t", "yaml", "--exit-status", expr], src);
+    assert_eq!(code, 1);
+
+    // A stream: each match is edited in its own document.
+    let stream = "a: 1\n---\na: 2\n";
+    let (out, err, code) = run(
+        &["-t", "yaml", "(.[] | select(. == 2)).# = \"two\""],
+        stream,
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "a: 1\n---\n# two\na: 2\n");
+    // Deleting that way over a stream is refused, not guessed at.
+    let (out, err, code) = run(&["-t", "yaml", "del((.[] | select(. == 2)).#)"], stream);
+    assert_eq!((out.as_str(), code), ("", 2));
+    assert!(err.contains("multi-document stream"), "{err}");
+
+    // Something that isn't a path ending in `.#` is still refused.
+    let (_o, err, code) = edit("(.items | length).# = \"x\"");
+    assert_eq!(code, 2);
+    assert!(err.contains("must be a path"), "{err}");
+}
+
+#[test]
 fn path_builtin_shows_what_an_edit_will_touch() {
     let (out, _e, code) = run(
         &[

@@ -161,8 +161,9 @@ fn step_paths<'v>(
         },
         Step::Comment(_) => {
             return Err(EvalError::new(
-                "a comment (`#`) can't be part of a path expression; \
-                 a comment edit takes a plain path like `.foo.#`",
+                "a comment (`#`) is not a value path, so `path(...)` can't resolve \
+                 one; a comment edit ends its target in `.#`, e.g. \
+                 `(.xs[] | select(...) | .n.#) = \"text\"`",
             ));
         }
     }

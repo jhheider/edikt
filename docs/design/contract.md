@@ -266,8 +266,16 @@ an *edit* language, not a general-purpose one.
     `select(...)`/`^dN` scope, and it judges each assignment against the
     document as the program started, so a path created by an earlier
     statement of the same program isn't seen.
-  - Comment steps (`.#`) don't compose with a path expression yet; a comment
-    edit takes a plain path.
+  - **A comment edit takes a path expression too** (#109), when it ends in a
+    comment step: `(.items[] | select(.id == "b") | .n.#) = "x"`,
+    `(.items[] | select(.id == "b")).n.#.inline |= ascii_upcase`,
+    `del(.items[] | select(.stale) | .#)`. The path part resolves to concrete
+    paths exactly as above, per document of a stream, and each node's comment
+    is then edited as `.items[1].n.# = "x"` would edit it (same kinds, same
+    wrapping, same layout rules). Zero matches is the same noted no-op. One
+    gap: `del` of a comment this way over a **multi-document** stream errors
+    (the per-document delete doesn't exist yet), rather than risk deleting a
+    comment at the same path in a document that didn't match.
 
   `path(f)` is the same resolution as a query: it outputs each concrete path
   as a jq path array (`path(.items[] | select(.id == "b"))` is `["items",1]`),

@@ -35,7 +35,7 @@ pub mod wrap;
 
 pub use ast::{BinOp, Expr, Step, render_path};
 pub use comment::{CommentKind, Commented, CommentedNode, Comments, FlatEntry, flatten_commented};
-pub use comment_edit::{apply_comment_mutation, line_index};
+pub use comment_edit::{apply_comment_mutation, line_index, split_comment_target};
 // Cross-crate plumbing for the format crates, not advertised as stable API.
 #[doc(hidden)]
 pub use comment_edit::{LineComment, place_line_comment, sanitize_comment_line};

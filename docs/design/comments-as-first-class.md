@@ -107,7 +107,7 @@ today (`.[]` discards keys). That dependency is called out under Cost.
 ```
 .foo.# = "deprecated"                     # attach a head comment (case 3, with `.foo = 1 | ...`)
 .foo = 1 | .foo.# = "why"                 # add a value AND annotate it, one pipe (case 3)
-(.[] | select(. == 42)) as targets ...      # case 2 needs value->path; see Cost
+(.[] | select(. == 42)).# = "the answer"  # case 2: annotate every match (#109)
 .foo.# |= gsub("foo"; "bar")              # edit one comment's text
 comments |= gsub("foo"; "bar")            # case 1: bulk edit ALL comment text
 del(.foo.#.inline)                        # remove just the inline comment
@@ -268,7 +268,9 @@ span-tree splice suffices; don't build the layer.
 5. **Deep - key-carrying iteration** for `comments`' `.path` (case 4) and
    value->path for "annotate matching values" (case 2). The language discards keys
    on iteration today; this needs a `path`-aware primitive (jq's
-   `path`/`to_entries` family), itself a scope expansion.
+   `path`/`to_entries` family), itself a scope expansion. *(Case 2 landed as
+   path-expression targets: #88 resolves `(.xs[] | select(...))` to concrete
+   paths, and #109 lets a comment step end one.)*
 
 ## Recommended scope & sequencing - **v0.2.0**
 

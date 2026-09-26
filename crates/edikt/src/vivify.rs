@@ -66,14 +66,21 @@ pub(crate) fn unmatched_targets(expr: &edikt_core::Expr, values: &[Value]) -> Ve
             out
         }
         _ => match edikt_core::path_expr_target(expr) {
-            Some(lhs)
-                if values.iter().all(|v| {
-                    edikt_core::eval_paths(lhs, v).is_ok_and(|paths| paths.is_empty())
-                }) =>
-            {
-                vec![render_target(lhs)]
+            Some(lhs) => {
+                // A comment edit through a path expression (`(... | .n.#)`,
+                // #109) matches where its value part does.
+                let split = edikt_core::split_comment_target(lhs);
+                let probe = split.as_ref().map_or(lhs, |(value, _)| value);
+                if values
+                    .iter()
+                    .all(|v| edikt_core::eval_paths(probe, v).is_ok_and(|paths| paths.is_empty()))
+                {
+                    vec![render_target(lhs)]
+                } else {
+                    Vec::new()
+                }
             }
-            _ => Vec::new(),
+            None => Vec::new(),
         },
     }
 }
