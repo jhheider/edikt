@@ -226,7 +226,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
     let mut flattened = false;
 
     for l in &c.comments.head {
-        push_comment(&mut out, l);
+        STYLE.push_line(&mut out, "", l);
     }
 
     // Preamble: top-level scalars and arrays, in order.
@@ -255,7 +255,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
             out.push('\n');
         }
         for l in &v.comments.head {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
         crate::edit::check_section(name)?;
         out.push_str(&format!("[{name}]"));
@@ -275,14 +275,14 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
             push_flat_entry(&mut out, e)?;
         }
         for l in &v.comments.foot {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
     }
 
     // A root inline comment has no line of its own here; it trails the document
     // with the root foot.
     for l in c.comments.inline.iter().chain(&c.comments.foot) {
-        push_comment(&mut out, l);
+        STYLE.push_line(&mut out, "", l);
     }
 
     let mut warnings = Vec::new();
@@ -298,7 +298,7 @@ fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) -> Result<(), Ed
     crate::edit::check_key(&e.key)?;
     crate::edit::check_value(&e.value)?;
     for l in &e.comments.head {
-        push_comment(out, l);
+        STYLE.push_line(out, "", l);
     }
     out.push_str(&format!("{} = {}", e.key, e.value));
     if let Some(inline) = &e.comments.inline {
@@ -306,13 +306,7 @@ fn push_flat_entry(out: &mut String, e: &edikt_core::FlatEntry) -> Result<(), Ed
     }
     out.push('\n');
     for l in &e.comments.foot {
-        push_comment(out, l);
+        STYLE.push_line(out, "", l);
     }
     Ok(())
-}
-
-fn push_comment(out: &mut String, line: &str) {
-    out.push_str("; ");
-    out.push_str(&sanitize(line));
-    out.push('\n');
 }

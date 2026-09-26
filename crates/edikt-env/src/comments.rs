@@ -9,7 +9,7 @@ use crate::project;
 use crate::syntax::{Sk, SyntaxNode};
 use edikt_core::{
     CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
-    flatten_commented, line_index, place_line_comment, sanitize_comment_line,
+    flatten_commented, line_index, place_line_comment,
 };
 use rowan::NodeOrToken;
 
@@ -165,11 +165,11 @@ pub fn emit_commented_with(
     let mut out = String::new();
     for e in &flat {
         for l in &e.comments.head {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
         if let Some(inline) = &e.comments.inline {
             remapped_inline = true;
-            push_comment(&mut out, inline);
+            STYLE.push_line(&mut out, "", inline);
         }
         // Refuse what would read back as something else, as `set` does.
         crate::edit::check_key(&e.key, dialect)?;
@@ -180,7 +180,7 @@ pub fn emit_commented_with(
         };
         out.push_str(&format!("{}{sep}{}\n", e.key, e.value));
         for l in &e.comments.foot {
-            push_comment(&mut out, l);
+            STYLE.push_line(&mut out, "", l);
         }
     }
 
@@ -192,10 +192,4 @@ pub fn emit_commented_with(
         warnings.push("inline comments moved to their own line (env has none)".to_string());
     }
     Ok((out, warnings))
-}
-
-fn push_comment(out: &mut String, line: &str) {
-    out.push_str("# ");
-    out.push_str(&sanitize_comment_line(line));
-    out.push('\n');
 }

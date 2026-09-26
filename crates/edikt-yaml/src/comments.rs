@@ -345,11 +345,7 @@ fn comment_lines_between(src: &str, from: usize, to: usize) -> Vec<String> {
     };
     src[start..to]
         .lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            t.starts_with('#')
-                .then(|| t.trim_start_matches('#').trim().to_string())
-        })
+        .filter_map(|l| STYLE.comment_text(l))
         .collect()
 }
 
@@ -369,14 +365,14 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
 
     let mut inserts: Vec<(usize, String)> = Vec::new();
     if !c.comments.head.is_empty() {
-        inserts.push((0, comment_block(&c.comments.head, "")));
+        inserts.push((0, STYLE.block(&c.comments.head, "")));
     }
     plan(&text, c, &doc, &mut inserts);
     if let Some(inline) = &c.comments.inline {
         inserts.push((line_end(&text, content_end(&doc)), inline_text(inline)));
     }
     if !c.comments.foot.is_empty() {
-        inserts.push((text.len(), comment_block(&c.comments.foot, "")));
+        inserts.push((text.len(), STYLE.block(&c.comments.foot, "")));
     }
 
     // Apply back-to-front so positions stay valid; the stable sort keeps
@@ -398,7 +394,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
                 let key_line = line_start(text, ne.key_span.start);
                 let indent = leading_indent(&text[key_line..]);
                 if !cv.comments.head.is_empty() {
-                    inserts.push((key_line, comment_block(&cv.comments.head, indent)));
+                    inserts.push((key_line, STYLE.block(&cv.comments.head, indent)));
                 }
                 if let Some(inline) = &cv.comments.inline {
                     let same_line = !text
@@ -414,7 +410,7 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
                 if !cv.comments.foot.is_empty() {
                     let last = content_end(&ne.value).max(ne.key_span.end);
                     let after = (line_end(text, last) + 1).min(text.len());
-                    inserts.push((after, comment_block(&cv.comments.foot, indent)));
+                    inserts.push((after, STYLE.block(&cv.comments.foot, indent)));
                 }
                 plan(text, cv, &ne.value, inserts);
             }
@@ -435,11 +431,11 @@ fn plan(text: &str, c: &Commented, n: &Node, inserts: &mut Vec<(usize, String)>)
                     }
                 }
                 if !head.is_empty() {
-                    inserts.push((item_line, comment_block(&head, indent)));
+                    inserts.push((item_line, STYLE.block(&head, indent)));
                 }
                 if !cv.comments.foot.is_empty() {
                     let after = (line_end(text, content_end(ni)) + 1).min(text.len());
-                    inserts.push((after, comment_block(&cv.comments.foot, indent)));
+                    inserts.push((after, STYLE.block(&cv.comments.foot, indent)));
                 }
                 plan(text, cv, ni, inserts);
             }
@@ -455,17 +451,6 @@ fn line_end(text: &str, pos: usize) -> usize {
         .find('\n')
         .map(|i| pos + i)
         .unwrap_or(text.len())
-}
-
-fn comment_block(lines: &[String], indent: &str) -> String {
-    let mut out = String::new();
-    for l in lines {
-        out.push_str(indent);
-        out.push_str("# ");
-        out.push_str(&sanitize(l));
-        out.push('\n');
-    }
-    out
 }
 
 fn inline_text(text: &str) -> String {

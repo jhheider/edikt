@@ -198,6 +198,30 @@ impl LineComment {
         }
         t.trim().to_string()
     }
+
+    /// The text of `line` if it is a comment line, markers stripped.
+    pub fn comment_text(&self, line: &str) -> Option<String> {
+        let t = line.trim();
+        self.is_comment_line(t).then(|| self.strip_marker(t))
+    }
+
+    /// Write one own-line comment, `{indent}{delim}{text}\n`, with the text
+    /// kept to one line.
+    pub fn push_line(&self, out: &mut String, indent: &str, text: &str) {
+        out.push_str(indent);
+        out.push_str(self.delim);
+        out.push_str(&sanitize_comment_line(text));
+        out.push('\n');
+    }
+
+    /// Render comment lines as an own-line block at `indent`.
+    pub fn block(&self, lines: &[String], indent: &str) -> String {
+        let mut out = String::new();
+        for l in lines {
+            self.push_line(&mut out, indent, l);
+        }
+        out
+    }
 }
 
 /// A comment's text as one line: a line break inside it would end the comment
@@ -319,6 +343,10 @@ mod tests {
         assert!(!s.is_comment_line("a # x"));
         assert_eq!(s.strip_marker("#!# text "), "text");
         assert_eq!(sanitize_comment_line("a\r\nb"), "a  b");
+        assert_eq!(s.comment_text("  ## hi  "), Some("hi".to_string()));
+        assert_eq!(s.comment_text("a = 1"), None);
+        let lines = ["one".to_string(), "two\nthree".to_string()];
+        assert_eq!(s.block(&lines, "  "), "  # one\n  # two three\n");
     }
 
     #[test]

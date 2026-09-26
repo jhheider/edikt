@@ -17,10 +17,16 @@
 use crate::{edit, project};
 use edikt_core::wrap::{wrap_comment, wrap_width};
 use edikt_core::{
-    CommentKind, Commented, CommentedNode, Comments, EditError, Step, Value,
+    CommentKind, Commented, CommentedNode, Comments, EditError, LineComment, Step, Value,
     sanitize_comment_line as sanitize,
 };
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value as TomlValue};
+
+/// A `#` comment line.
+const STYLE: LineComment = LineComment {
+    markers: &["#"],
+    delim: "# ",
+};
 
 // --- in-place comment write-back ---------------------------------------
 
@@ -274,21 +280,13 @@ fn raw(s: Option<&str>) -> &str {
 
 /// Every `# ...` line in a decor string, delimiter-stripped and trimmed.
 fn own_line_comments(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            t.starts_with('#')
-                .then(|| t.trim_start_matches('#').trim().to_string())
-        })
-        .collect()
+    text.lines().filter_map(|l| STYLE.comment_text(l)).collect()
 }
 
 /// A `# ...` comment with no newline before it (i.e. trailing on the same line).
 fn same_line_comment(text: &str) -> Option<String> {
     let first = text.split('\n').next().unwrap_or("");
-    let t = first.trim();
-    t.starts_with('#')
-        .then(|| t.trim_start_matches('#').trim().to_string())
+    STYLE.comment_text(first)
 }
 
 /// Split a decor prefix into (comment on the previous element's line, own-line
@@ -322,7 +320,7 @@ pub fn emit_commented(c: &Commented) -> Result<(String, Vec<String>), EditError>
     trail.extend(c.comments.inline.clone());
     trail.extend(c.comments.foot.iter().cloned());
     if !trail.is_empty() {
-        doc.set_trailing(comment_block(&trail, ""));
+        doc.set_trailing(STYLE.block(&trail, ""));
     }
 
     let mut warnings = Vec::new();
@@ -358,7 +356,7 @@ fn build_table_body(
         if !head.is_empty()
             && let Some(mut key) = table.key_mut(k)
         {
-            key.leaf_decor_mut().set_prefix(comment_block(&head, ""));
+            key.leaf_decor_mut().set_prefix(STYLE.block(&head, ""));
         }
         if let Some(inline) = &v.comments.inline
             && let Some(val) = table.get_mut(k).and_then(|i| i.as_value_mut())
@@ -388,7 +386,7 @@ fn build_table_body(
                 .unwrap_or("")
                 .to_string();
             sub.decor_mut()
-                .set_prefix(format!("{default}{}", comment_block(&head, "")));
+                .set_prefix(format!("{default}{}", STYLE.block(&head, "")));
         }
         if let Some(inline) = &v.comments.inline {
             sub.decor_mut()
@@ -479,16 +477,4 @@ fn collect_comments(c: &Commented, out: &mut Vec<String>) {
         }
     }
     out.extend(c.comments.foot.iter().cloned());
-}
-
-/// Render comment lines as a `# ...\n` block, each line prefixed by `indent`.
-fn comment_block(lines: &[String], indent: &str) -> String {
-    let mut out = String::new();
-    for l in lines {
-        out.push_str(indent);
-        out.push_str("# ");
-        out.push_str(&sanitize(l));
-        out.push('\n');
-    }
-    out
 }
