@@ -208,11 +208,8 @@ fn step_into(value_node: &SyntaxNode, step: &Step) -> Option<SyntaxNode> {
         Step::Index(i) => {
             let array = value_node.children().find(|n| n.kind() == Sk::Array)?;
             let values: Vec<_> = array.children().filter(|n| n.kind() == Sk::Value).collect();
-            let idx = if *i < 0 { values.len() as i64 + i } else { *i };
-            if idx < 0 {
-                return None;
-            }
-            values.into_iter().nth(idx as usize)
+            let idx = edikt_core::normalize_index(*i, values.len())?;
+            values.into_iter().nth(idx)
         }
         // A bare `[]` (all elements) has many value nodes, not one; the
         // iterate-assignment path (`set_each`) handles that fan-out separately.

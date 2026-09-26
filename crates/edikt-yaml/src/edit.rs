@@ -14,7 +14,9 @@
 //! style (see [`crate::splice`]); a replacement that keeps a collection's
 //! shape edits only the elements that change.
 
-use edikt_core::{BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, render_path};
+use edikt_core::{
+    BinOp, EditError, Expr, Step, Value, eval, expand_iter_paths, normalize_index, render_path,
+};
 use std::ops::Range;
 
 use crate::Yaml;
@@ -341,11 +343,6 @@ fn in_flow(source: &str, root: &Node, path: &[Step]) -> bool {
     false
 }
 
-fn normalize_index(i: i64, len: usize) -> Option<usize> {
-    let idx = if i < 0 { len as i64 + i } else { i };
-    (idx >= 0).then_some(idx as usize)
-}
-
 impl Yaml {
     /// The root node of document `idx`.
     fn root(&self, idx: usize) -> &Node {
@@ -619,8 +616,7 @@ impl Yaml {
                     ..block_end(&self.source, &entry.value)
             }
             (Step::Index(i), NodeKind::Sequence(items)) => {
-                let Some(idx) = normalize_index(*i, items.len()).filter(|n| *n < items.len())
-                else {
+                let Some(idx) = edikt_core::resolve_index(*i, items.len()) else {
                     return Ok(());
                 };
                 let item = &items[idx];

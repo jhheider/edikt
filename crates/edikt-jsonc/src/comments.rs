@@ -151,11 +151,9 @@ fn resolve_target(root: &SyntaxNode, path: &[Step]) -> Result<SyntaxNode, EditEr
                 .find(|n| n.kind() == Sk::Array)
                 .ok_or_else(|| EditError::new("comment target is not an array element"))?;
             let values: Vec<_> = array.children().filter(|n| n.kind() == Sk::Value).collect();
-            let idx = if *i < 0 { values.len() as i64 + i } else { *i };
-            if idx < 0 || idx as usize >= values.len() {
-                return Err(EditError::new("array index out of range"));
-            }
-            Ok(values[idx as usize].clone())
+            let idx = edikt_core::resolve_index(*i, values.len())
+                .ok_or_else(|| EditError::new("array index out of range"))?;
+            Ok(values[idx].clone())
         }
         _ => Err(EditError::new(
             "comment paths address object keys or array elements",

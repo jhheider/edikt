@@ -414,20 +414,19 @@ fn array_is_aot_shaped(container: &dyn TableLike, key: &str) -> bool {
 /// set, allowing `idx == len` as an append. Out of range is an error naming the
 /// append index.
 pub(crate) fn resolve_set_index(idx: i64, len: usize) -> Result<usize, EditError> {
-    let resolved = if idx < 0 { len as i64 + idx } else { idx };
-    if resolved < 0 || resolved as usize > len {
-        return Err(EditError::new(format!(
-            "array index {idx} out of range (length {len}); append with index {len}"
-        )));
-    }
-    Ok(resolved as usize)
+    edikt_core::normalize_index(idx, len)
+        .filter(|&n| n <= len)
+        .ok_or_else(|| {
+            EditError::new(format!(
+                "array index {idx} out of range (length {len}); append with index {len}"
+            ))
+        })
 }
 
 /// Resolve `idx` against `len` for a delete (no append); out of range yields
 /// `None`, a jq-style no-op.
 pub(crate) fn resolve_del_index(idx: i64, len: usize) -> Option<usize> {
-    let resolved = if idx < 0 { len as i64 + idx } else { idx };
-    (resolved >= 0 && (resolved as usize) < len).then_some(resolved as usize)
+    edikt_core::resolve_index(idx, len)
 }
 
 /// Set (replace or append) the array element at `container[key][idx]`. A table

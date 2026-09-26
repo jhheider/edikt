@@ -125,9 +125,8 @@ fn step_paths(
             Some(Value::Array(a)) => {
                 // Normalize a negative index against the array, so the path
                 // names the element it resolved to (and `path(.a[-1])` is useful).
-                let idx = if *i < 0 { a.len() as i64 + i } else { *i };
-                match usize::try_from(idx).ok().and_then(|n| a.get(n)) {
-                    Some(x) => push(out, Step::Index(idx), Some(x.clone())),
+                match crate::resolve_index(*i, a.len()) {
+                    Some(n) => push(out, Step::Index(n as i64), Some(a[n].clone())),
                     None => push(out, step.clone(), None),
                 }
             }

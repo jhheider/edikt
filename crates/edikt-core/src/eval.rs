@@ -260,11 +260,8 @@ fn set_path(v: &Value, steps: &[Step], new: &Value) -> Result<Value, EvalError> 
                     )));
                 }
             };
-            let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
-            if idx < 0 {
-                return Err(EvalError::new("array index out of range"));
-            }
-            let idx = idx as usize;
+            let idx = crate::normalize_index(*i, arr.len())
+                .ok_or_else(|| EvalError::new("array index out of range"))?;
             if idx >= arr.len() {
                 arr.resize(idx + 1, Value::Null);
             }
@@ -327,11 +324,8 @@ fn update_path(v: &Value, steps: &[Step], f: &Expr) -> Result<Value, EvalError> 
                     )));
                 }
             };
-            let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
-            if idx < 0 || idx as usize >= arr.len() {
-                return Err(EvalError::new("array index out of range"));
-            }
-            let idx = idx as usize;
+            let idx = crate::resolve_index(*i, arr.len())
+                .ok_or_else(|| EvalError::new("array index out of range"))?;
             arr[idx] = update_path(&arr[idx], rest, f)?;
             Ok(Value::Array(arr))
         }
@@ -386,14 +380,10 @@ fn apply_step(step: &Step, v: &Value) -> Result<Vec<Value>, EvalError> {
             ))),
         },
         Step::Index(i) => match v {
-            Value::Array(a) => {
-                let idx = if *i < 0 { a.len() as i64 + i } else { *i };
-                if idx >= 0 && (idx as usize) < a.len() {
-                    Ok(vec![a[idx as usize].clone()])
-                } else {
-                    Ok(vec![])
-                }
-            }
+            Value::Array(a) => Ok(crate::resolve_index(*i, a.len())
+                .map(|idx| a[idx].clone())
+                .into_iter()
+                .collect()),
             Value::Null => Ok(vec![]),
             other => Err(EvalError::new(format!(
                 "cannot index {} with a number",

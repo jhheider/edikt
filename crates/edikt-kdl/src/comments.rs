@@ -101,12 +101,9 @@ fn resolve_node<'a>(doc: &'a mut KdlDocument, path: &[Step]) -> Result<&'a mut K
     }
     let (idx, rest) = match rest.split_first() {
         Some((Step::Index(i), r)) => {
-            let n = occ.len() as i64;
-            let resolved = if *i < 0 { n + i } else { *i };
-            if resolved < 0 || resolved >= n {
-                return Err(EditError::new(format!("`{name}` index out of range")));
-            }
-            (occ[resolved as usize], r)
+            let resolved = edikt_core::resolve_index(*i, occ.len())
+                .ok_or_else(|| EditError::new(format!("`{name}` index out of range")))?;
+            (occ[resolved], r)
         }
         _ => {
             if occ.len() != 1 {

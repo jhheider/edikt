@@ -18,6 +18,7 @@ mod document;
 mod error;
 mod eval;
 mod feature;
+mod index;
 mod lexer;
 #[macro_use]
 mod macros;
@@ -35,6 +36,7 @@ pub use document::Document;
 pub use error::EditError;
 pub use eval::{EvalError, eval, eval_with_comments, expand_delete_paths, expand_iter_paths};
 pub use feature::Feature;
+pub use index::{normalize_index, resolve_index};
 pub use parser::{ParseError, hyphen_hint_for_unknown_function, parse};
 pub use paths::{eval_paths, lower_mutation, path_expr_target};
 pub use value::Value;

@@ -240,9 +240,7 @@ fn delete_path(v: &Value, steps: &[Step]) -> Result<Value, EvalError> {
                     )));
                 }
             };
-            let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
-            if idx >= 0 && (idx as usize) < arr.len() {
-                let idx = idx as usize;
+            if let Some(idx) = crate::resolve_index(*i, arr.len()) {
                 arr[idx] = delete_path(&arr[idx], rest)?;
             }
             Ok(Value::Array(arr))
@@ -288,9 +286,8 @@ fn remove_step(v: &Value, step: &Step) -> Result<Value, EvalError> {
         Step::Index(i) => match v {
             Value::Array(a) => {
                 let mut arr = a.clone();
-                let idx = if *i < 0 { arr.len() as i64 + i } else { *i };
-                if idx >= 0 && (idx as usize) < arr.len() {
-                    arr.remove(idx as usize);
+                if let Some(idx) = crate::resolve_index(*i, arr.len()) {
+                    arr.remove(idx);
                 }
                 Ok(Value::Array(arr))
             }

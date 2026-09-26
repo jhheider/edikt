@@ -8,7 +8,7 @@
 use crate::Kdl;
 use crate::project::{self, ARGS_KEY};
 use crate::spell::spell_like;
-use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval};
+use edikt_core::{BinOp, Document, EditError, Expr, Step, Value, eval, resolve_index};
 use kdl::{
     FormatConfig, KdlDocument, KdlDocumentFormat, KdlEntry, KdlEntryFormat, KdlNode, KdlValue,
 };
@@ -730,9 +730,4 @@ fn arg_entry(value: KdlValue) -> KdlEntry {
         ..Default::default()
     });
     e
-}
-
-fn resolve_index(i: i64, len: usize) -> Option<usize> {
-    let idx = if i < 0 { len as i64 + i } else { i };
-    (0..len as i64).contains(&idx).then_some(idx as usize)
 }

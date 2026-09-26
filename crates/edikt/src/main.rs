@@ -1101,8 +1101,7 @@ fn path_resolves(steps: &[edikt_core::Step], v: &Value) -> bool {
                     .and_then(|s| s.into_iter().next());
                 match some {
                     Some(Value::Array(a)) => {
-                        let idx = if *i < 0 { a.len() as i64 + *i } else { *i };
-                        idx >= 0 && idx == a.len() as i64
+                        edikt_core::normalize_index(*i, a.len()) == Some(a.len())
                     }
                     _ => false,
                 }

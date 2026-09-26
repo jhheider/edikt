@@ -189,12 +189,8 @@ impl Jsonc {
                     .and_then(|array| {
                         let values: Vec<_> =
                             array.children().filter(|n| n.kind() == Sk::Value).collect();
-                        let idx = if *i < 0 { values.len() as i64 + i } else { *i };
-                        if idx < 0 {
-                            None
-                        } else {
-                            values.into_iter().nth(idx as usize)
-                        }
+                        let idx = edikt_core::normalize_index(*i, values.len())?;
+                        values.into_iter().nth(idx)
                     });
                 if let Some(value) = value {
                     edit::delete_element(&value);

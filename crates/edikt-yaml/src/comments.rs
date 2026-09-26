@@ -170,11 +170,9 @@ fn resolve_anchor(source: &str, doc: &Node, path: &[Step]) -> Result<(usize, usi
             let NodeKind::Sequence(items) = &container.kind else {
                 return Err(EditError::new("comment target is not a sequence element"));
             };
-            let idx = if *i < 0 { items.len() as i64 + i } else { *i };
-            if idx < 0 || idx as usize >= items.len() {
-                return Err(EditError::new("sequence index out of range"));
-            }
-            items[idx as usize].span.start
+            let idx = edikt_core::resolve_index(*i, items.len())
+                .ok_or_else(|| EditError::new("sequence index out of range"))?;
+            items[idx].span.start
         }
         _ => {
             return Err(EditError::new(
@@ -201,9 +199,10 @@ fn descend<'a>(node: &'a Node, path: &[Step]) -> Result<&'a Node, EditError> {
                 .map(|e| &e.value)
                 .ok_or_else(|| EditError::new(format!("no key `{k}`")))?,
             (Step::Index(i), NodeKind::Sequence(items)) => {
-                let idx = if *i < 0 { items.len() as i64 + i } else { *i };
+                let idx = edikt_core::normalize_index(*i, items.len())
+                    .ok_or_else(|| EditError::new("negative index"))?;
                 items
-                    .get(usize::try_from(idx).map_err(|_| EditError::new("negative index"))?)
+                    .get(idx)
                     .ok_or_else(|| EditError::new("index out of range"))?
             }
             _ => return Err(EditError::new("comment path does not resolve to a node")),
