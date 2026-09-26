@@ -1,0 +1,20 @@
+# NPC registry: one entry per character, keyed by id
+npcs:
+  - id: mara
+    name: "Mara Voss"   # harbourmaster
+    status: alive
+    tags: [dock, ally]
+
+  # the smuggler arc
+  - id: tobin
+    name: 'Tobin Reed'
+    status: missing  # since session 4
+    tags:
+      - smuggler
+      - informant
+  - id: ess
+    name: Ess
+    status: alive
+    notes: |
+      Keeps the lighthouse.
+      Owes Mara a favour.

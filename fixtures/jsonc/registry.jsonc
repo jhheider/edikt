@@ -1,0 +1,17 @@
+// plugin registry
+{
+  "plugins": [
+    { "id": "fmt", "enabled": true, "version": "1.2.0" }, // formatter
+    {
+      // the linter is pinned
+      "id": "lint",
+      "enabled": false,
+      "version": "0.9.1",
+    },
+    {
+      "id": "test",
+      "enabled": true,
+      "version": "2.0.0" /* bumped */,
+    },
+  ],
+}
