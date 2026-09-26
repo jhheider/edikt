@@ -10,6 +10,7 @@
 use crate::syntax::{Sk, SyntaxNode};
 use crate::{Ini, project};
 use edikt_core::{Document, EditError, Expr, Mutable, MutationKind, Step, Value, eval};
+use rowan::NodeOrToken;
 
 pub fn apply(doc: &mut Ini, expr: &Expr) -> Result<(), EditError> {
     edikt_core::apply_mutation(doc, expr)
@@ -90,72 +91,73 @@ fn find_entry(section: &SyntaxNode, key: &str) -> Option<SyntaxNode> {
         .find(|e| project::entry_key(e) == key)
 }
 
-/// A `Value` node wrapping the string `s` (empty node if `s` is empty).
-/// Insert a `key = value` entry into INI source at the right place: the end of
-/// the named section's content (creating the section at EOF if absent), or the
-/// preamble. The caller reparses the result.
-pub(crate) fn insert_entry(src: &str, section: Option<&str>, key: &str, value: &str) -> String {
+/// Insert a `key = value` entry at the right place: after the last line of
+/// content (entries, comments) in the named section, creating the section at
+/// EOF if absent, or in the preamble. Returns the new source; the caller
+/// reparses it.
+pub(crate) fn insert_entry(
+    root: &SyntaxNode,
+    section: Option<&str>,
+    key: &str,
+    value: &str,
+) -> String {
+    let src = edikt_syntax::to_source(root);
     // New lines end the way most of the file's lines do.
-    let eol = edikt_core::text::dominant(src);
+    let eol = edikt_core::text::dominant(&src);
     let new_line = format!("{key} = {value}{eol}");
-    let lines: Vec<&str> = src.split_inclusive('\n').collect();
-
-    let (start, end) = match section {
-        None => {
-            let first = lines.iter().position(|l| l.trim_start().starts_with('['));
-            (0, first.unwrap_or(lines.len()))
-        }
-        Some(sec) => match lines.iter().position(|l| header_matches(l, sec)) {
-            Some(hi) => {
-                let end = lines[hi + 1..]
-                    .iter()
-                    .position(|l| l.trim_start().starts_with('['))
-                    .map(|p| hi + 1 + p)
-                    .unwrap_or(lines.len());
-                (hi + 1, end)
-            }
-            None => {
-                // Section absent: append `[section]\nkey = value\n` at EOF.
-                let mut out = String::from(src);
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push_str(eol);
-                }
-                if !out.is_empty() {
-                    out.push_str(eol);
-                }
-                out.push_str(&format!("[{sec}]{eol}{new_line}"));
-                return out;
-            }
-        },
+    let target = match section {
+        None => preamble(root),
+        Some(sec) => named_section(root, sec),
     };
-
-    // Insert after the last non-blank line within [start, end).
-    let mut content_end = start;
-    for (j, line) in lines.iter().enumerate().take(end).skip(start) {
-        if !line.trim().is_empty() {
-            content_end = j + 1;
+    let Some(target) = target else {
+        // Section absent: append `[section]\nkey = value\n` at EOF. (The
+        // preamble always exists, possibly empty.)
+        let mut out = src;
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(eol);
         }
-    }
-
-    let mut out = String::new();
-    for line in &lines[..content_end] {
-        out.push_str(line);
-    }
-    if !out.is_empty() && !out.ends_with('\n') {
+        if !out.is_empty() {
+            out.push_str(eol);
+        }
+        out.push_str(&format!("[{}]{eol}{new_line}", section.unwrap_or_default()));
+        return out;
+    };
+    let at = content_end(&target);
+    let (before, after) = src.split_at(at);
+    let mut out = String::with_capacity(src.len() + new_line.len() + eol.len());
+    out.push_str(before);
+    if !before.is_empty() && !before.ends_with('\n') {
         out.push_str(eol);
     }
     out.push_str(&new_line);
-    for line in &lines[content_end..] {
-        out.push_str(line);
-    }
+    out.push_str(after);
     out
 }
 
-/// Does `line` open the section named `section` (`[section]`, ignoring
-/// trailing content)?
-fn header_matches(line: &str, section: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with('[') && t[1..].split(']').next() == Some(section)
+/// The byte offset just past a section's last line of content (its header,
+/// an entry, or a comment line, with that line's terminator), so trailing
+/// blank lines stay after a new entry. An empty section's own start.
+fn content_end(section: &SyntaxNode) -> usize {
+    let mut end = section.text_range().start();
+    let mut after_comment = false;
+    for el in section.children_with_tokens() {
+        match &el {
+            NodeOrToken::Node(n) => {
+                end = n.text_range().end();
+                after_comment = false;
+            }
+            NodeOrToken::Token(t) if t.kind() == Sk::Comment => {
+                end = t.text_range().end();
+                after_comment = true;
+            }
+            NodeOrToken::Token(t) if after_comment && t.kind() == Sk::Newline => {
+                end = t.text_range().end();
+                after_comment = false;
+            }
+            NodeOrToken::Token(_) => {}
+        }
+    }
+    end.into()
 }
 
 /// Refuse a value INI cannot hold: the scanner would read the line back

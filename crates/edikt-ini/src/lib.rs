@@ -83,8 +83,7 @@ impl Ini {
         if let Some(s) = section {
             edit::check_section(s)?;
         }
-        let src = edikt_syntax::to_source(&self.root);
-        let new_src = edit::insert_entry(&src, section, key, &text);
+        let new_src = edit::insert_entry(&self.root, section, key, &text);
         self.root = SyntaxNode::new_root(parser::build(&new_src));
         Ok(())
     }
@@ -620,6 +619,23 @@ mod tests {
             edit_src("[server]\nhost = x", r#".db.url = "pg""#),
             "[server]\nhost = x\n\n[db]\nurl = pg\n"
         );
+    }
+
+    #[test]
+    fn insert_goes_after_the_sections_content() {
+        // After the section's last content line (a comment counts), before
+        // the blank lines that separate it from the next section.
+        assert_eq!(
+            edit_src("x = 0\n; tail\n\n[s]\na = 1\n", ".y = 2"),
+            "x = 0\n; tail\ny = 2\n\n[s]\na = 1\n"
+        );
+        // An empty preamble takes the new key at the very top.
+        assert_eq!(
+            edit_src("[s]\na = 1\n", ".top = 1"),
+            "top = 1\n[s]\na = 1\n"
+        );
+        // A header-only section takes it right under the header.
+        assert_eq!(edit_src("[s]\n\n[t]\n", ".s.a = 1"), "[s]\na = 1\n\n[t]\n");
     }
 
     #[test]
