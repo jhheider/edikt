@@ -26,7 +26,21 @@ impl Toml {
         match last {
             Step::Field(key) => {
                 let current = walk_tables_vivify(self.doc.as_table_mut(), parent)?;
-                let new_item = edit::value_to_item(value)?;
+                // An object over a non-table value takes the form its
+                // siblings use (#120): dotted keys beside dotted keys, at
+                // the old value's position; an inline table with no dotted
+                // precedent. A missing key is not an overwrite, so it keeps
+                // the inline table.
+                let dotted = matches!(value, Value::Object(m) if !m.is_empty())
+                    && current
+                        .get(key)
+                        .is_some_and(|e| e.as_table_like().is_none())
+                    && follows_dotted_style(current);
+                let new_item = if dotted {
+                    edit::value_to_dotted_item(value)?
+                } else {
+                    edit::value_to_item(value)?
+                };
                 if let Some(existing) = current.get_mut(key) {
                     // An unchanged value keeps its bytes.
                     if project::item_to_value(existing).identical(value) {
@@ -37,6 +51,12 @@ impl Toml {
                     let was_value = existing.is_value();
                     let replacement = match (existing.as_value(), new_item) {
                         (Some(old), Item::Value(new)) => Item::Value(edit::replacing(old, new)),
+                        // The dotted table's lines take the old line's
+                        // decor (spacing after `=`, an inline comment).
+                        (Some(old), Item::Table(mut t)) => {
+                            edit::carry_line_decor(old, &mut t);
+                            Item::Table(t)
+                        }
                         (_, new_item) => new_item,
                     };
                     let now_value = replacement.is_value();

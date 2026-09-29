@@ -59,6 +59,23 @@ pub(crate) fn value_to_item(value: &Value) -> Result<Item, EditError> {
     Ok(Item::Value(value_to_toml(value)?))
 }
 
+/// An object as a dotted-key table (`version.workspace = true`): the form
+/// its sibling keys use when an object replaces a non-table value (#120).
+/// Nested objects stay dotted keys all the way down; anything else is a
+/// plain value, as in [`value_to_item`].
+pub(crate) fn value_to_dotted_item(value: &Value) -> Result<Item, EditError> {
+    let Value::Object(map) = value else {
+        return value_to_item(value);
+    };
+    let mut t = Table::new();
+    t.set_implicit(true);
+    t.set_dotted(true);
+    for (k, v) in map {
+        t.insert(k, value_to_dotted_item(v)?);
+    }
+    Ok(Item::Table(t))
+}
+
 pub(crate) fn value_to_toml(value: &Value) -> Result<TomlValue, EditError> {
     Ok(match value {
         Value::Null => return Err(EditError::new("TOML has no null value")),
@@ -158,6 +175,46 @@ pub(crate) fn replacing(old: &TomlValue, new: TomlValue) -> TomlValue {
     };
     *new.decor_mut() = old.decor().clone();
     new
+}
+
+/// The old value's decor (spacing after `=`, an inline comment) across a
+/// dotted-key table that replaces it (#120): the prefix opens the table's
+/// first `key = value` line, the suffix closes its last.
+pub(crate) fn carry_line_decor(old: &TomlValue, t: &mut Table) {
+    let mut leaves = Vec::new();
+    crate::comments::dotted_leaves(t, &mut Vec::new(), &mut leaves);
+    let (Some(first), Some(last)) = (leaves.first(), leaves.last()) else {
+        return;
+    };
+    if let Some(prefix) = old
+        .decor()
+        .prefix()
+        .and_then(RawString::as_str)
+        .map(str::to_owned)
+        && let Some(v) = leaf_mut(t, first)
+    {
+        v.decor_mut().set_prefix(prefix);
+    }
+    if let Some(suffix) = old
+        .decor()
+        .suffix()
+        .and_then(RawString::as_str)
+        .map(str::to_owned)
+        && let Some(v) = leaf_mut(t, last)
+    {
+        v.decor_mut().set_suffix(suffix);
+    }
+}
+
+/// The value at `path` (keys from [`crate::comments::dotted_leaves`]),
+/// through the nested dotted tables that spell it.
+fn leaf_mut<'a>(t: &'a mut Table, path: &[String]) -> Option<&'a mut TomlValue> {
+    let (k, rest) = path.split_first()?;
+    match (rest.is_empty(), t.get_mut(k.as_str())) {
+        (true, Some(Item::Value(v))) => Some(v),
+        (false, Some(Item::Table(sub))) => leaf_mut(sub, rest),
+        _ => None,
+    }
 }
 
 /// `s` spelled in the style of the string token `old` (jhheider/edikt#81),
