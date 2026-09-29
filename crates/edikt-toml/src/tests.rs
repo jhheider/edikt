@@ -195,6 +195,30 @@ fn vivified_table_follows_dotted_siblings() {
 }
 
 #[test]
+fn object_over_scalar_follows_dotted_siblings() {
+    // jhheider/edikt#120: `version = "0.1.0"` given `{workspace: true}`
+    // becomes `version.workspace = true` at its own position, in the form
+    // its dotted siblings use, not an inline table.
+    let src = "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition.workspace = true\n";
+    assert_eq!(
+        edit_src(src, ".package.version = {workspace: true}"),
+        "[package]\nname = \"x\"\nversion.workspace = true\nedition.workspace = true\n"
+    );
+    // The old value's decor (spacing, an inline comment) carries to the line.
+    let commented = "[package]\nversion = \"0.1.0\"   # semver\nedition.workspace = true\n";
+    assert_eq!(
+        edit_src(commented, ".package.version = {workspace: true}"),
+        "[package]\nversion.workspace = true   # semver\nedition.workspace = true\n"
+    );
+    // No dotted precedent in that table: today's inline table stays.
+    let plain = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n";
+    assert_eq!(
+        edit_src(plain, ".package.version = {workspace: true}"),
+        "[package]\nname = \"x\"\nversion = { workspace = true }\n"
+    );
+}
+
+#[test]
 fn set_deep_vivify_keeps_intermediates_implicit() {
     // `.a.b.c = 1` emits only `[a.b]`, no empty `[a]` header.
     assert_eq!(edit_src("x = 1\n", ".a.b.c = 1"), "x = 1\n\n[a.b]\nc = 1\n");

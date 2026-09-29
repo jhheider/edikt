@@ -569,7 +569,15 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   sibling table spelled as dotted keys (`edition.workspace = true`), it is a
   dotted key too (`rust-version.workspace = true`); with no dotted precedent
   it gets its own `[a.b]` header (intermediates stay implicit, so `.a.b.c = 1`
-  writes only `[a.b]`). A value set to itself changes nothing, and a
+  writes only `[a.b]`). The same surroundings govern an object written
+  **over** a non-table value (#120): at that key's position, dotted siblings
+  make it dotted keys (`version = "0.1.0"` given `{workspace: true}` becomes
+  `version.workspace = true`), no dotted precedent leaves the inline table
+  (`version = { workspace = true }`), and the replaced value's spacing and
+  inline comment carry onto the new line(s). An empty object keeps the inline
+  table (a dotted table with no `key = value` line would write nothing), and
+  a missing key is not an overwrite: it takes the inline table. A value set
+  to itself changes nothing, and a
   `[table]` given a new object is diffed like any object (see Mutation), so
   it stays a table and its untouched keys keep their bytes. The document
   itself is such a table: `. |= .` is a no-op, `. |= f` or `. = {...}`

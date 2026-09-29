@@ -212,8 +212,9 @@ fn table_comment(
 }
 
 /// The `key = value` lines of the dotted table `t`, as key paths relative to
-/// it, in the order `toml_edit` writes them.
-fn dotted_leaves(t: &Table, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+/// it, in the order `toml_edit` writes them. Also the leaf order a dotted-key
+/// replacement decorates in (#120).
+pub(crate) fn dotted_leaves(t: &Table, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     for (k, item) in t.iter() {
         prefix.push(k.to_string());
         match item {
