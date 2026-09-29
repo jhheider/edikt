@@ -260,6 +260,12 @@ fn object_over_scalar_follows_dotted_siblings() {
         edit_src("a.b = 1\n[[bin]]\nname = \"x\"\n", ".bin = {x: 1}"),
         "a.b = 1\nbin = { x = 1 }\n"
     );
+    // Inside an already-dotted table the same carry applies: the head opens
+    // the rewritten line there.
+    assert_eq!(
+        edit_src("# n\na.b = 1\n", ".a.b = {x: 1}"),
+        "# n\na.b.x = 1\n"
+    );
 }
 
 #[test]
