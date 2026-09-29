@@ -216,6 +216,50 @@ fn object_over_scalar_follows_dotted_siblings() {
         edit_src(plain, ".package.version = {workspace: true}"),
         "[package]\nname = \"x\"\nversion = { workspace = true }\n"
     );
+    // The comments above the key survive: the head opens the new first line
+    // (a dotted parent key's own decor is never printed), the inline comment
+    // rides the value.
+    let headed = "[package]\n# pin\nversion = \"0.1.0\" # old\nedition.workspace = true\n";
+    assert_eq!(
+        edit_src(headed, ".package.version = {workspace: true}"),
+        "[package]\n# pin\nversion.workspace = true # old\nedition.workspace = true\n"
+    );
+    // Several keys: both lines at the old value's position, the head on the
+    // first of them, the inline comment after the last.
+    assert_eq!(
+        edit_src(headed, ".package.version = {workspace: true, x: 1}"),
+        "[package]\n# pin\nversion.workspace = true\nversion.x = 1 # old\nedition.workspace = true\n"
+    );
+    // Nested objects stay dotted all the way down.
+    assert_eq!(
+        edit_src(src, ".package.version = {workspace: {optional: true}}"),
+        "[package]\nname = \"x\"\nversion.workspace.optional = true\nedition.workspace = true\n"
+    );
+    // An empty object keeps the inline table: a dotted table with no
+    // `key = value` line would write nothing (the key would vanish).
+    assert_eq!(
+        edit_src(src, ".package.version = {}"),
+        "[package]\nname = \"x\"\nversion = {}\nedition.workspace = true\n"
+    );
+    // An array is a non-table value too.
+    assert_eq!(
+        edit_src(
+            "version = [\"a\"]\nedition.workspace = true\n",
+            ".version = {workspace: true}"
+        ),
+        "version.workspace = true\nedition.workspace = true\n"
+    );
+    // A missing key is not an overwrite: it takes the inline table.
+    assert_eq!(
+        edit_src(src, ".package.rust-version = {workspace: true}"),
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version = { workspace = true }\n"
+    );
+    // An array of tables is not a scalar: `.bin = {…}` keeps today's inline
+    // table instead of respelling `[[bin]]`'s key as dotted.
+    assert_eq!(
+        edit_src("a.b = 1\n[[bin]]\nname = \"x\"\n", ".bin = {x: 1}"),
+        "a.b = 1\nbin = { x = 1 }\n"
+    );
 }
 
 #[test]

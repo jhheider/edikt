@@ -3,7 +3,7 @@
 use crate::Toml;
 use edikt_core::{Document, EditError, Expr, Mutable, Step, Value};
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, InlineTable, Item, RawString, Table, TableLike,
+    Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, RawString, Table, TableLike,
     Value as TomlValue,
 };
 
@@ -203,6 +203,41 @@ pub(crate) fn carry_line_decor(old: &TomlValue, t: &mut Table) {
         && let Some(v) = leaf_mut(t, last)
     {
         v.decor_mut().set_suffix(suffix);
+    }
+}
+
+/// The old key's decor (the comment lines above it, the spacing before
+/// `=`) onto a dotted-key table's first `key = value` line: that line's
+/// decor is read from the last key of its path, so a dotted parent key's
+/// own leaf decor is never printed (#120).
+pub(crate) fn carry_key_decor(old: &Decor, t: &mut Table) {
+    let mut leaves = Vec::new();
+    crate::comments::dotted_leaves(t, &mut Vec::new(), &mut leaves);
+    if let Some(first) = leaves.first() {
+        set_first_line_key_decor(t, first, old);
+    }
+}
+
+/// Set `old`'s decor on the key at `path` (a leaf path from
+/// [`crate::comments::dotted_leaves`]), the key whose leaf decor
+/// `encode_key_path` prints around that line.
+fn set_first_line_key_decor(t: &mut Table, path: &[String], old: &Decor) {
+    let Some((k, rest)) = path.split_first() else {
+        return;
+    };
+    if rest.is_empty() {
+        if let Some(mut key) = t.key_mut(k.as_str()) {
+            if let Some(prefix) = old.prefix() {
+                key.leaf_decor_mut().set_prefix(prefix.clone());
+            }
+            if let Some(suffix) = old.suffix() {
+                key.leaf_decor_mut().set_suffix(suffix.clone());
+            }
+        }
+        return;
+    }
+    if let Some(Item::Table(sub)) = t.get_mut(k.as_str()) {
+        set_first_line_key_decor(sub, rest, old);
     }
 }
 

@@ -30,12 +30,21 @@ impl Toml {
                 // siblings use (#120): dotted keys beside dotted keys, at
                 // the old value's position; an inline table with no dotted
                 // precedent. A missing key is not an overwrite, so it keeps
-                // the inline table.
+                // the inline table - and so does an array of tables, which
+                // is a value, not a scalar to respell dotted.
                 let dotted = matches!(value, Value::Object(m) if !m.is_empty())
                     && current
                         .get(key)
-                        .is_some_and(|e| e.as_table_like().is_none())
+                        .is_some_and(|e| e.as_value().is_some_and(|v| !v.is_inline_table()))
                     && follows_dotted_style(current);
+                // The key's own decor (the comment lines above it, the
+                // spacing before `=`) opens the line it sits on; a dotted
+                // parent key's is never printed, so it moves to the new
+                // table's first line with it (#120).
+                let key_decor = dotted
+                    .then(|| current.key(key))
+                    .flatten()
+                    .map(|k| k.leaf_decor().clone());
                 let new_item = if dotted {
                     edit::value_to_dotted_item(value)?
                 } else {
@@ -52,15 +61,24 @@ impl Toml {
                     let replacement = match (existing.as_value(), new_item) {
                         (Some(old), Item::Value(new)) => Item::Value(edit::replacing(old, new)),
                         // The dotted table's lines take the old line's
-                        // decor (spacing after `=`, an inline comment).
+                        // decor (spacing after `=`, an inline comment) and
+                        // the old key's (the comment above it).
                         (Some(old), Item::Table(mut t)) => {
                             edit::carry_line_decor(old, &mut t);
+                            if let Some(d) = &key_decor {
+                                edit::carry_key_decor(d, &mut t);
+                            }
                             Item::Table(t)
                         }
                         (_, new_item) => new_item,
                     };
                     let now_value = replacement.is_value();
                     *existing = replacement;
+                    // The old key's decor now lives on the table's first
+                    // line; its own copy would never print (#120).
+                    if dotted && let Some(mut k) = current.key_mut(key) {
+                        k.leaf_decor_mut().clear();
+                    }
                     // A `[table]` / `[[array]]` header's key carries no
                     // spacing; as a `key = value` line it takes the default.
                     if !was_value

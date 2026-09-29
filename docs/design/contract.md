@@ -573,9 +573,12 @@ on zero matches, for presence tests; `//` supplies in-expression defaults.
   **over** a non-table value (#120): at that key's position, dotted siblings
   make it dotted keys (`version = "0.1.0"` given `{workspace: true}` becomes
   `version.workspace = true`), no dotted precedent leaves the inline table
-  (`version = { workspace = true }`), and the replaced value's spacing and
-  inline comment carry onto the new line(s). An empty object keeps the inline
-  table (a dotted table with no `key = value` line would write nothing), and
+  (`version = { workspace = true }`), and the replaced value's decor and its
+  key's decor carry onto the new line(s): the spacing after `=`, the inline
+  comment after the value, and the comments above the key opening the first
+  line (a dotted parent key's own decor is never printed). An empty object
+  keeps the inline table (a dotted table with no `key = value` line would
+  write nothing), and
   a missing key is not an overwrite: it takes the inline table. A value set
   to itself changes nothing, and a
   `[table]` given a new object is diffed like any object (see Mutation), so
