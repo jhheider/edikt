@@ -94,6 +94,9 @@ fn set_keeps_or_falls_back_from_the_old_style() {
         ("a: old\n", ".a", s("nginx:1.25"), "a: nginx:1.25\n"),
         ("a: old\n", ".a", s("has#hash"), "a: has#hash\n"),
         ("a: old\n", ".a", s("it's"), "a: it's\n"),
+        // A regex stays readable: `\` and a later `"` are literal in plain.
+        ("a: /x/\n", ".a", s("/v\\d+/"), "a: /v\\d+/\n"),
+        ("a: old\n", ".a", s("say\"hi\""), "a: say\"hi\"\n"),
         // A file already relying on a YAML 1.1 word of the same kind keeps it
         // plain: flipping `yes` to `no` must not turn a 1.1 bool into a string.
         ("a: yes\n", ".a", s("no"), "a: no\n"),

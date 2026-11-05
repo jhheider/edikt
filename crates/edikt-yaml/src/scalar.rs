@@ -373,13 +373,9 @@ fn needs_quoting_core(s: &str) -> bool {
     ) {
         return true;
     }
-    // Any control char, a `: ` (map indicator) or ` #` (comment indicator), or a
-    // quote/backslash forces quoting.
-    s.contains(": ")
-        || s.contains(" #")
-        || s.ends_with(':')
-        || s.contains(['"', '\\'])
-        || s.chars().any(needs_escape)
+    // Any control char, a `: ` (map indicator) or ` #` (comment indicator)
+    // forces quoting. A later `"` or `\` is literal in plain style.
+    s.contains(": ") || s.contains(" #") || s.ends_with(':') || s.chars().any(needs_escape)
 }
 
 /// Minimal double-quoted YAML string with the standard escapes.
@@ -523,10 +519,13 @@ mod tests {
 
     #[test]
     fn double_quote_escapes_every_branch() {
-        // Quote, backslash, newline, tab, CR, NUL, and a generic control char -
-        // each forces quoting (via `needs_quoting`) and hits its own escape arm.
-        assert_eq!(emit_string("a\"b"), r#""a\"b""#);
-        assert_eq!(emit_string("a\\b"), r#""a\\b""#);
+        // Quote and backslash are literal in plain style, so they reach their
+        // escape arms only in a string that's double-quoted anyway.
+        assert_eq!(double_quote("a\"b"), r#""a\"b""#);
+        assert_eq!(double_quote("a\\b"), r#""a\\b""#);
+        assert_eq!(emit_string("\"a\\b"), r#""\"a\\b""#);
+        // Newline, tab, CR, NUL, and a generic control char each force quoting
+        // (via `needs_quoting`) and hit their own escape arm.
         assert_eq!(emit_string("a\nb"), r#""a\nb""#);
         assert_eq!(emit_string("a\tb"), r#""a\tb""#);
         assert_eq!(emit_string("a\rb"), r#""a\rb""#);
