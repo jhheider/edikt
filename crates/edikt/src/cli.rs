@@ -157,6 +157,10 @@ pub(crate) struct Args {
     #[arg(short = '0', long = "raw-output0")]
     pub(crate) raw_output0: bool,
 
+    /// ASCII output: escape non-ASCII characters (like jq -a).
+    #[arg(short = 'a', long = "ascii-output")]
+    pub(crate) ascii_output: bool,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     pub(crate) raw: bool,

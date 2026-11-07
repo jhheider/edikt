@@ -81,6 +81,26 @@ fn resolve_doc_select(
     }
 }
 
+fn escape_ascii(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii() {
+            result.push(c);
+        } else {
+            let code = c as u32;
+            if code <= 0xFFFF {
+                result.push_str(&format!("\\u{:04x}", code));
+            } else {
+                let c = code - 0x10000;
+                let high = 0xD800 + (c >> 10);
+                let low = 0xDC00 + (c & 0x3FF);
+                result.push_str(&format!("\\u{:04x}\\u{:04x}", high, low));
+            }
+        }
+    }
+    result
+}
+
 fn run(args: Args) -> Result<ExitCode> {
     // Gather expression sources (-f script bodies, then -e), collecting script
     // header directives along the way.
@@ -441,6 +461,11 @@ fn run(args: Args) -> Result<ExitCode> {
                     color::colorize_json(out)
                 } else {
                     out.clone()
+                };
+                let rendered = if args.ascii_output {
+                    escape_ascii(&rendered)
+                } else {
+                    rendered
                 };
                 if args.join_output {
                     print!("{}", rendered.trim_end_matches('\n'));
