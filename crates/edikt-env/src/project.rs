@@ -26,6 +26,32 @@ pub(crate) fn entry_value(entry: &SyntaxNode) -> String {
     entry
         .children()
         .find(|n| n.kind() == Sk::Value)
-        .map(|v| v.text().to_string())
+        .map(|v| {
+            let raw = v.text().to_string();
+            // Strip Java .properties continuations: backslash-newline + leading
+            // whitespace on continuation lines.
+            let mut result = String::new();
+            let mut chars = raw.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next(); // consume newline
+                        // Skip leading whitespace on continuation line
+                        while chars
+                            .peek()
+                            .map(|c| c.is_whitespace() && *c != '\n')
+                            .unwrap_or(false)
+                        {
+                            chars.next();
+                        }
+                        continue;
+                    }
+                    result.push(c);
+                } else {
+                    result.push(c);
+                }
+            }
+            result
+        })
         .unwrap_or_default()
 }

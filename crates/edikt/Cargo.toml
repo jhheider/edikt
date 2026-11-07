@@ -23,6 +23,13 @@ clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
 anyhow = { workspace = true }
 
+[features]
+watch = ["dep:notify"]
+
+[dependencies.notify]
+version = "6"
+optional = true
+
 # rust-ci's release.yml ships assets as `edikt-{os}-{arch}.{ext}` (no version,
 # no full target triple), which matches none of cargo-binstall's default
 # guess templates, so `cargo binstall edikt` silently fell back to compiling

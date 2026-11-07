@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(
     name = "edikt",
     version,
@@ -117,6 +117,54 @@ pub(crate) struct Args {
     /// already error on a missing path and `del` stays a no-op.
     #[arg(long)]
     pub(crate) no_vivify: bool,
+
+    /// Check mode: for a mutation, exit 1 if the file would change, 0 if
+    /// not. No output is written. Useful for CI and linting.
+    #[arg(long, conflicts_with = "diff")]
+    pub(crate) check: bool,
+
+    /// Show a unified diff of what would change (for mutations) instead of
+    /// writing. Combine with -i to apply AND show the diff.
+    #[arg(long, conflicts_with = "check")]
+    pub(crate) diff: bool,
+
+    /// Don't read any input: use `null` as the single value. Like jq's `-n`.
+    /// Useful for generating a document from scratch with a mutating
+    /// expression.
+    #[arg(short = 'n', long = "null-input")]
+    pub(crate) null_input: bool,
+
+    /// Read all inputs into a single array (jq -s). Instead of processing
+    /// each file separately, combine their values into one array and run the
+    /// expression over it.
+    #[arg(short = 's', long = "slurp")]
+    pub(crate) slurp: bool,
+
+    /// Process multiple files in batch: continue on error, report per-file
+    /// status to stderr, and print a summary at the end.
+    #[arg(long)]
+    pub(crate) batch: bool,
+
+    /// Colorize output (auto-detects TTY by default; use --color=always/never).
+    #[arg(long, value_name = "WHEN", default_value = "auto")]
+    pub(crate) color: String,
+
+    /// Join output: no newline between outputs (like jq -j).
+    #[arg(short = 'j', long = "join-output")]
+    pub(crate) join_output: bool,
+
+    /// Null-terminated output (like jq -0): use NUL instead of newline.
+    #[arg(short = '0', long = "raw-output0")]
+    pub(crate) raw_output0: bool,
+
+    /// ASCII output: escape non-ASCII characters (like jq -a).
+    #[arg(short = 'a', long = "ascii-output")]
+    pub(crate) ascii_output: bool,
+
+    /// Watch a file for changes and re-run (requires --features watch).
+    #[cfg(feature = "watch")]
+    #[arg(long)]
+    pub(crate) watch: bool,
 
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
