@@ -36,10 +36,37 @@ pub enum Dialect {
 pub(crate) fn build(src: &str, dialect: Dialect) -> GreenNode {
     let mut b = Builder::new();
     b.start_node(Sk::Root);
-    for line in src.split_inclusive('\n') {
-        let (content, term) = edikt_core::text::split_ending(line);
-        process_line(&mut b, content, term, dialect);
+
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let (content, term) = edikt_core::text::split_ending(lines[i]);
+
+        // Java .properties continuation: a line ending with backslash continues
+        // onto the next line.
+        if content.trim_end().ends_with('\\') && i + 1 < lines.len() {
+            let mut joined = content.to_string();
+            joined.push_str(term);
+            let mut j = i + 1;
+            while j < lines.len() {
+                let (next_content, next_term) = edikt_core::text::split_ending(lines[j]);
+                // Preserve leading whitespace for round-trip; strip in projection.
+                joined.push_str(next_content);
+                joined.push_str(next_term);
+                if !next_content.trim_end().ends_with('\\') {
+                    break;
+                }
+                j += 1;
+            }
+            let (joined_content, joined_term) = edikt_core::text::split_ending(&joined);
+            process_line(&mut b, joined_content, joined_term, dialect);
+            i = j + 1;
+        } else {
+            process_line(&mut b, content, term, dialect);
+            i += 1;
+        }
     }
+
     b.finish_node(); // Root
     b.finish()
 }
@@ -100,7 +127,13 @@ fn build_entry(b: &mut Builder<Sk>, rest: &str, dialect: Dialect) {
 
     // Everything after the separator is the value; no inline-comment parsing.
     let val_region = &rest[sep_idx + sep_len..];
-    let core = val_region.trim();
+    // For continuation lines, don't trim (preserve backslash-newline).
+    let has_continuation = val_region.contains("\\\n");
+    let core = if has_continuation {
+        val_region.trim_start().trim_end_matches(|c: char| c == ' ' || c == '\t')
+    } else {
+        val_region.trim()
+    };
     let lead_len = val_region.len() - val_region.trim_start().len();
     b.trivia(Sk::Ws, &val_region[..lead_len]);
     b.start_node(Sk::Value);

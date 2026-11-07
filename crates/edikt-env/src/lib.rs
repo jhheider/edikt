@@ -147,6 +147,28 @@ impl Document for Env {
     fn to_source(&self) -> String {
         edikt_core::text::with_bom(self.bom, edikt_syntax::to_source(&self.root))
     }
+    fn source_slice(&self, path: &[edikt_core::Step]) -> Vec<String> {
+        if path.is_empty() {
+            // Whole document: return the original source.
+            return vec![self.to_source()];
+        }
+        // Flat: find the entry with the matching key and return its value text.
+        for entry in self.root.children() {
+            if entry.kind() != Sk::Entry {
+                continue;
+            }
+            let key = crate::project::entry_key(&entry);
+            if let Some(edikt_core::Step::Field(name)) = path.first() {
+                if key == *name {
+                    // Return the value text from the CST
+                    if let Some(value_node) = entry.children().find(|n| n.kind() == Sk::Value) {
+                        return vec![value_node.text().to_string()];
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
     fn to_value(&self) -> Value {
         project::to_value(&self.root)
     }
