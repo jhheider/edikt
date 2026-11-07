@@ -149,6 +149,14 @@ pub(crate) struct Args {
     #[arg(long, value_name = "WHEN", default_value = "auto")]
     pub(crate) color: String,
 
+    /// Join output: no newline between outputs (like jq -j).
+    #[arg(short = 'j', long = "join-output")]
+    pub(crate) join_output: bool,
+
+    /// Null-terminated output (like jq -0): use NUL instead of newline.
+    #[arg(short = '0', long = "raw-output0")]
+    pub(crate) raw_output0: bool,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     pub(crate) raw: bool,

@@ -437,18 +437,20 @@ fn run(args: Args) -> Result<ExitCode> {
             file_out.extend(outputs);
         } else {
             for out in &outputs {
-                if out.ends_with('\n') {
-                    if use_color {
-                        print!("{}", color::colorize_json(out));
-                    } else {
-                        print!("{out}");
-                    }
+                let rendered = if use_color {
+                    color::colorize_json(out)
                 } else {
-                    if use_color {
-                        println!("{}", color::colorize_json(out));
-                    } else {
-                        println!("{out}");
-                    }
+                    out.clone()
+                };
+                if args.join_output {
+                    print!("{}", rendered.trim_end_matches('\n'));
+                } else if args.raw_output0 {
+                    print!("{}", rendered.trim_end_matches('\n'));
+                    print!("\0");
+                } else if out.ends_with('\n') {
+                    print!("{}", rendered);
+                } else {
+                    println!("{}", rendered);
                 }
                 emitted = true;
             }
