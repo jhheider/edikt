@@ -33,6 +33,13 @@ use vivify::{create_note, scoped_edit, unmatched_targets, would_create};
 
 fn main() -> ExitCode {
     let args = Args::parse_from(munge_args());
+    #[cfg(feature = "watch")]
+    if args.watch {
+        return watch_loop(args).unwrap_or_else(|e| {
+            eprintln!("edikt: {e:#}");
+            ExitCode::FAILURE
+        });
+    }
     // Packager outputs (hidden flags): the binary is its own doc generator,
     // so release archives and package builds need no extra tooling.
     if let Some(shell) = args.completions {
@@ -99,6 +106,48 @@ fn escape_ascii(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(feature = "watch")]
+fn watch_loop(args: Args) -> Result<ExitCode> {
+    use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())
+        .context("failed to create file watcher")?;
+
+    // Watch the input file(s)
+    for operand in &args.operands {
+        let p = std::path::Path::new(operand);
+        if p.exists() {
+            watcher
+                .watch(p, RecursiveMode::NonRecursive)
+                .with_context(|| format!("failed to watch {}", p.display()))?;
+        }
+    }
+
+    // Run once initially
+    let _ = run(args.clone());
+
+    // Watch for changes
+    loop {
+        match rx.recv() {
+            Ok(Ok(event)) => {
+                if event.kind.is_modify() || event.kind.is_create() {
+                    eprintln!("edikt: file changed, re-running...");
+                    let _ = run(args.clone());
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("edikt: watch error: {}", e);
+            }
+            Err(_) => break,
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run(args: Args) -> Result<ExitCode> {

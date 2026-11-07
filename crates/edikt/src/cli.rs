@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(
     name = "edikt",
     version,
@@ -160,6 +160,11 @@ pub(crate) struct Args {
     /// ASCII output: escape non-ASCII characters (like jq -a).
     #[arg(short = 'a', long = "ascii-output")]
     pub(crate) ascii_output: bool,
+
+    /// Watch a file for changes and re-run (requires --features watch).
+    #[cfg(feature = "watch")]
+    #[arg(long)]
+    pub(crate) watch: bool,
 
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
