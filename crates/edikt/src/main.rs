@@ -18,6 +18,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 mod cli;
+mod diff;
 mod format;
 mod io;
 mod render;
@@ -160,6 +161,8 @@ fn run(args: Args) -> Result<ExitCode> {
     // (nothing is written on a query miss).
     let mut file_out: Vec<String> = Vec::new();
     let mut emitted = false;
+    // Track whether any file would change (for --check mode).
+    let mut changed = false;
     // An edit through a path expression that matched nothing (#88), for
     // `--exit-status`.
     let mut unmatched_edit = false;
@@ -225,6 +228,35 @@ fn run(args: Args) -> Result<ExitCode> {
                 warn(args.strict, &loc, &warnings)?;
             }
             let out = doc.to_source();
+            // --check: exit 1 if the file would change, 0 if not. No output.
+            if args.check {
+                if out != *src {
+                    changed = true;
+                }
+                emitted = true;
+                continue;
+            }
+            // --diff: show a unified diff. With -i, also apply.
+            if args.diff {
+                let label = path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<stdin>".to_string());
+                let d = diff::unified_diff(src, &out, &label);
+                if !d.is_empty() {
+                    print!("{d}");
+                }
+                if args.in_place.is_some() {
+                    let p = path
+                        .as_ref()
+                        .context("cannot edit stdin in place; pass a file")?;
+                    write_in_place(p, &args.in_place, &out)?;
+                } else if args.output.is_some() {
+                    file_out.push(out);
+                }
+                emitted = true;
+                continue;
+            }
             if args.in_place.is_some() {
                 let p = path
                     .as_ref()
@@ -398,6 +430,9 @@ fn run(args: Args) -> Result<ExitCode> {
         // --exit-status: an edit whose path expression matched nothing is
         // the mutation analogue of a query miss.
         return Ok(ExitCode::from(1));
+    }
+    if args.check {
+        return Ok(if changed { ExitCode::from(1) } else { ExitCode::SUCCESS });
     }
     Ok(if emitted || !args.exit_status {
         // A query miss is a silent no-op by default, like sed with no

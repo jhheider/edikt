@@ -118,6 +118,16 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) no_vivify: bool,
 
+    /// Check mode: for a mutation, exit 1 if the file would change, 0 if
+    /// not. No output is written. Useful for CI and linting.
+    #[arg(long, conflicts_with = "diff")]
+    pub(crate) check: bool,
+
+    /// Show a unified diff of what would change (for mutations) instead of
+    /// writing. Combine with -i to apply AND show the diff.
+    #[arg(long, conflicts_with = "check")]
+    pub(crate) diff: bool,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     pub(crate) raw: bool,
