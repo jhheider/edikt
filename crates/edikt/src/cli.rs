@@ -128,6 +128,18 @@ pub(crate) struct Args {
     #[arg(long, conflicts_with = "check")]
     pub(crate) diff: bool,
 
+    /// Don't read any input: use `null` as the single value. Like jq's `-n`.
+    /// Useful for generating a document from scratch with a mutating
+    /// expression.
+    #[arg(short = 'n', long = "null-input")]
+    pub(crate) null_input: bool,
+
+    /// Read all inputs into a single array (jq -s). Instead of processing
+    /// each file separately, combine their values into one array and run the
+    /// expression over it.
+    #[arg(short = 's', long = "slurp")]
+    pub(crate) slurp: bool,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     pub(crate) raw: bool,

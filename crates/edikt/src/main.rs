@@ -155,7 +155,24 @@ fn run(args: Args) -> Result<ExitCode> {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
 
-    let inputs = read_inputs(&files)?;
+    let inputs = if args.null_input {
+        vec![(None, "null".to_string())]
+    } else if args.slurp {
+        // Read all inputs, combine their values into a single JSON array.
+        let raw_inputs = read_inputs(&files)?;
+        let mut all_values: Vec<edikt_core::Value> = Vec::new();
+        for (path, src) in &raw_inputs {
+            let fmt = detect_format(path.as_deref(), forced_type.as_deref())?;
+            let doc = parse_document(fmt, src)?;
+            let values = doc.to_values();
+            all_values.extend(values);
+        }
+        // Serialize as JSON array and parse as JSON
+        let json = format!("[{}]", all_values.iter().map(|v| v.to_json()).collect::<Vec<_>>().join(","));
+        vec![(Some(std::path::PathBuf::from("slurp.json")), json)]
+    } else {
+        read_inputs(&files)?
+    };
 
     // With -o, everything accumulates here and is written once at the end
     // (nothing is written on a query miss).
