@@ -140,6 +140,15 @@ pub(crate) struct Args {
     #[arg(short = 's', long = "slurp")]
     pub(crate) slurp: bool,
 
+    /// Process multiple files in batch: continue on error, report per-file
+    /// status to stderr, and print a summary at the end.
+    #[arg(long)]
+    pub(crate) batch: bool,
+
+    /// Colorize output (auto-detects TTY by default; use --color=always/never).
+    #[arg(long, value_name = "WHEN", default_value = "auto")]
+    pub(crate) color: String,
+
     /// Output raw scalars (the default; explicit opt-in).
     #[arg(short = 'r', long, conflicts_with = "outfmt")]
     pub(crate) raw: bool,

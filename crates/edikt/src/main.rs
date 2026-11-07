@@ -18,6 +18,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 mod cli;
+mod color;
 mod diff;
 mod format;
 mod io;
@@ -155,6 +156,13 @@ fn run(args: Args) -> Result<ExitCode> {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
 
+    // Determine if color should be used
+    let use_color = match args.color.as_str() {
+        "always" => true,
+        "never" => false,
+        _ => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    };
+
     let inputs = if args.null_input {
         vec![(None, "null".to_string())]
     } else if args.slurp {
@@ -282,7 +290,11 @@ fn run(args: Args) -> Result<ExitCode> {
             } else if args.output.is_some() {
                 file_out.push(out);
             } else {
-                print!("{out}");
+                if use_color {
+                    print!("{}", color::colorize_json(&out));
+                } else {
+                    print!("{out}");
+                }
             }
             emitted = true;
             continue;
@@ -426,9 +438,17 @@ fn run(args: Args) -> Result<ExitCode> {
         } else {
             for out in &outputs {
                 if out.ends_with('\n') {
-                    print!("{out}");
+                    if use_color {
+                        print!("{}", color::colorize_json(out));
+                    } else {
+                        print!("{out}");
+                    }
                 } else {
-                    println!("{out}");
+                    if use_color {
+                        println!("{}", color::colorize_json(out));
+                    } else {
+                        println!("{out}");
+                    }
                 }
                 emitted = true;
             }
