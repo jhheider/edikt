@@ -58,7 +58,7 @@ pub fn unified_diff(old: &str, new: &str, label: &str) -> String {
             break;
         }
         // Start hunk with context
-        let start = if i >= context { i - context } else { 0 };
+        let start = i.saturating_sub(context);
         let mut end = i;
         // Find end of change region
         while end < output_lines.len() {
@@ -91,17 +91,31 @@ pub fn unified_diff(old: &str, new: &str, label: &str) -> String {
         let new_start = count_new_before(&output_lines, start);
         let mut old_count = 0;
         let mut new_count = 0;
-        for k in start..end {
-            match output_lines[k].0 {
-                ' ' => { old_count += 1; new_count += 1; }
-                '-' => { old_count += 1; }
-                '+' => { new_count += 1; }
+        for item in &output_lines[start..end] {
+            match item.0 {
+                ' ' => {
+                    old_count += 1;
+                    new_count += 1;
+                }
+                '-' => {
+                    old_count += 1;
+                }
+                '+' => {
+                    new_count += 1;
+                }
                 _ => {}
             }
         }
-        let _ = write!(hunk, "@@ -{},{} +{},{} @@\n", old_start + 1, old_count, new_start + 1, new_count);
-        for k in start..end {
-            let _ = write!(hunk, "{}{}\n", output_lines[k].0, output_lines[k].1);
+        let _ = writeln!(
+            hunk,
+            "@@ -{},{} +{},{} @@",
+            old_start + 1,
+            old_count,
+            new_start + 1,
+            new_count
+        );
+        for item in &output_lines[start..end] {
+            let _ = writeln!(hunk, "{}{}", item.0, item.1);
         }
         hunks_out.push(hunk);
         i = end;
@@ -135,21 +149,9 @@ fn lcs_table(a: &[&str], b: &[&str]) -> Vec<Vec<usize>> {
 }
 
 fn count_old_before(lines: &[(char, &str)], idx: usize) -> usize {
-    let mut count = 0;
-    for k in 0..idx {
-        if lines[k].0 != '+' {
-            count += 1;
-        }
-    }
-    count
+    lines[..idx].iter().filter(|l| l.0 != '+').count()
 }
 
 fn count_new_before(lines: &[(char, &str)], idx: usize) -> usize {
-    let mut count = 0;
-    for k in 0..idx {
-        if lines[k].0 != '-' {
-            count += 1;
-        }
-    }
-    count
+    lines[..idx].iter().filter(|l| l.0 != '-').count()
 }

@@ -130,7 +130,7 @@ fn build_entry(b: &mut Builder<Sk>, rest: &str, dialect: Dialect) {
     // For continuation lines, don't trim (preserve backslash-newline).
     let has_continuation = val_region.contains("\\\n");
     let core = if has_continuation {
-        val_region.trim_start().trim_end_matches(|c: char| c == ' ' || c == '\t')
+        val_region.trim_start().trim_end_matches([' ', '\t'])
     } else {
         val_region.trim()
     };

@@ -158,12 +158,12 @@ impl Document for Env {
                 continue;
             }
             let key = crate::project::entry_key(&entry);
-            if let Some(edikt_core::Step::Field(name)) = path.first() {
-                if key == *name {
-                    // Return the value text from the CST
-                    if let Some(value_node) = entry.children().find(|n| n.kind() == Sk::Value) {
-                        return vec![value_node.text().to_string()];
-                    }
+            if let Some(edikt_core::Step::Field(name)) = path.first()
+                && key == *name
+            {
+                // Return the value text from the CST
+                if let Some(value_node) = entry.children().find(|n| n.kind() == Sk::Value) {
+                    return vec![value_node.text().to_string()];
                 }
             }
         }

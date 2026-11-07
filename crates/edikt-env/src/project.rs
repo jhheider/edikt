@@ -37,7 +37,11 @@ pub(crate) fn entry_value(entry: &SyntaxNode) -> String {
                     if chars.peek() == Some(&'\n') {
                         chars.next(); // consume newline
                         // Skip leading whitespace on continuation line
-                        while chars.peek().map(|c| c.is_whitespace() && *c != '\n').unwrap_or(false) {
+                        while chars
+                            .peek()
+                            .map(|c| c.is_whitespace() && *c != '\n')
+                            .unwrap_or(false)
+                        {
                             chars.next();
                         }
                         continue;

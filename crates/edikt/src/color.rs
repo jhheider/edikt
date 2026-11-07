@@ -3,11 +3,11 @@
 /// Colorize a JSON string with ANSI escape codes.
 pub fn colorize_json(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + s.len() / 4);
-    let mut chars = s.chars().peekable();
+    let chars = s.chars().peekable();
     let mut in_string = false;
     let mut escape = false;
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         if escape {
             result.push(c);
             escape = false;

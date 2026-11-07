@@ -115,8 +115,8 @@ fn watch_loop(args: Args) -> Result<ExitCode> {
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
 
-    let mut watcher = RecommendedWatcher::new(tx, Config::default())
-        .context("failed to create file watcher")?;
+    let mut watcher =
+        RecommendedWatcher::new(tx, Config::default()).context("failed to create file watcher")?;
 
     // Watch the input file(s)
     for operand in &args.operands {
@@ -245,7 +245,14 @@ fn run(args: Args) -> Result<ExitCode> {
             all_values.extend(values);
         }
         // Serialize as JSON array and parse as JSON
-        let json = format!("[{}]", all_values.iter().map(|v| v.to_json()).collect::<Vec<_>>().join(","));
+        let json = format!(
+            "[{}]",
+            all_values
+                .iter()
+                .map(|v| v.to_json())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         vec![(Some(std::path::PathBuf::from("slurp.json")), json)]
     } else {
         read_inputs(&files)?
@@ -545,7 +552,11 @@ fn run(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
     if args.check {
-        return Ok(if changed { ExitCode::from(1) } else { ExitCode::SUCCESS });
+        return Ok(if changed {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        });
     }
     Ok(if emitted || !args.exit_status {
         // A query miss is a silent no-op by default, like sed with no
