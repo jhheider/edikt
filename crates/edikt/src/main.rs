@@ -18,6 +18,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 mod cli;
+mod color;
+mod diff;
 mod format;
 mod io;
 mod render;
@@ -31,6 +33,13 @@ use vivify::{create_note, scoped_edit, unmatched_targets, would_create};
 
 fn main() -> ExitCode {
     let args = Args::parse_from(munge_args());
+    #[cfg(feature = "watch")]
+    if args.watch {
+        return watch_loop(args).unwrap_or_else(|e| {
+            eprintln!("edikt: {e:#}");
+            ExitCode::FAILURE
+        });
+    }
     // Packager outputs (hidden flags): the binary is its own doc generator,
     // so release archives and package builds need no extra tooling.
     if let Some(shell) = args.completions {
@@ -77,6 +86,68 @@ fn resolve_doc_select(
     } else {
         Ok(None)
     }
+}
+
+fn escape_ascii(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii() {
+            result.push(c);
+        } else {
+            let code = c as u32;
+            if code <= 0xFFFF {
+                result.push_str(&format!("\\u{:04x}", code));
+            } else {
+                let c = code - 0x10000;
+                let high = 0xD800 + (c >> 10);
+                let low = 0xDC00 + (c & 0x3FF);
+                result.push_str(&format!("\\u{:04x}\\u{:04x}", high, low));
+            }
+        }
+    }
+    result
+}
+
+#[cfg(feature = "watch")]
+fn watch_loop(args: Args) -> Result<ExitCode> {
+    use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+
+    let mut watcher =
+        RecommendedWatcher::new(tx, Config::default()).context("failed to create file watcher")?;
+
+    // Watch the input file(s)
+    for operand in &args.operands {
+        let p = std::path::Path::new(operand);
+        if p.exists() {
+            watcher
+                .watch(p, RecursiveMode::NonRecursive)
+                .with_context(|| format!("failed to watch {}", p.display()))?;
+        }
+    }
+
+    // Run once initially
+    let _ = run(args.clone());
+
+    // Watch for changes
+    loop {
+        match rx.recv() {
+            Ok(Ok(event)) => {
+                if event.kind.is_modify() || event.kind.is_create() {
+                    eprintln!("edikt: file changed, re-running...");
+                    let _ = run(args.clone());
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("edikt: watch error: {}", e);
+            }
+            Err(_) => break,
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run(args: Args) -> Result<ExitCode> {
@@ -154,12 +225,45 @@ fn run(args: Args) -> Result<ExitCode> {
         bail!("in-place (-i) needs a mutating expression or an output format (-T)");
     }
 
-    let inputs = read_inputs(&files)?;
+    // Determine if color should be used
+    let use_color = match args.color.as_str() {
+        "always" => true,
+        "never" => false,
+        _ => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    };
+
+    let inputs = if args.null_input {
+        vec![(None, "null".to_string())]
+    } else if args.slurp {
+        // Read all inputs, combine their values into a single JSON array.
+        let raw_inputs = read_inputs(&files)?;
+        let mut all_values: Vec<edikt_core::Value> = Vec::new();
+        for (path, src) in &raw_inputs {
+            let fmt = detect_format(path.as_deref(), forced_type.as_deref())?;
+            let doc = parse_document(fmt, src)?;
+            let values = doc.to_values();
+            all_values.extend(values);
+        }
+        // Serialize as JSON array and parse as JSON
+        let json = format!(
+            "[{}]",
+            all_values
+                .iter()
+                .map(|v| v.to_json())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        vec![(Some(std::path::PathBuf::from("slurp.json")), json)]
+    } else {
+        read_inputs(&files)?
+    };
 
     // With -o, everything accumulates here and is written once at the end
     // (nothing is written on a query miss).
     let mut file_out: Vec<String> = Vec::new();
     let mut emitted = false;
+    // Track whether any file would change (for --check mode).
+    let mut changed = false;
     // An edit through a path expression that matched nothing (#88), for
     // `--exit-status`.
     let mut unmatched_edit = false;
@@ -225,6 +329,35 @@ fn run(args: Args) -> Result<ExitCode> {
                 warn(args.strict, &loc, &warnings)?;
             }
             let out = doc.to_source();
+            // --check: exit 1 if the file would change, 0 if not. No output.
+            if args.check {
+                if out != *src {
+                    changed = true;
+                }
+                emitted = true;
+                continue;
+            }
+            // --diff: show a unified diff. With -i, also apply.
+            if args.diff {
+                let label = path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<stdin>".to_string());
+                let d = diff::unified_diff(src, &out, &label);
+                if !d.is_empty() {
+                    print!("{d}");
+                }
+                if args.in_place.is_some() {
+                    let p = path
+                        .as_ref()
+                        .context("cannot edit stdin in place; pass a file")?;
+                    write_in_place(p, &args.in_place, &out)?;
+                } else if args.output.is_some() {
+                    file_out.push(out);
+                }
+                emitted = true;
+                continue;
+            }
             if args.in_place.is_some() {
                 let p = path
                     .as_ref()
@@ -233,7 +366,11 @@ fn run(args: Args) -> Result<ExitCode> {
             } else if args.output.is_some() {
                 file_out.push(out);
             } else {
-                print!("{out}");
+                if use_color {
+                    print!("{}", color::colorize_json(&out));
+                } else {
+                    print!("{out}");
+                }
             }
             emitted = true;
             continue;
@@ -376,10 +513,25 @@ fn run(args: Args) -> Result<ExitCode> {
             file_out.extend(outputs);
         } else {
             for out in &outputs {
-                if out.ends_with('\n') {
-                    print!("{out}");
+                let rendered = if use_color {
+                    color::colorize_json(out)
                 } else {
-                    println!("{out}");
+                    out.clone()
+                };
+                let rendered = if args.ascii_output {
+                    escape_ascii(&rendered)
+                } else {
+                    rendered
+                };
+                if args.join_output {
+                    print!("{}", rendered.trim_end_matches('\n'));
+                } else if args.raw_output0 {
+                    print!("{}", rendered.trim_end_matches('\n'));
+                    print!("\0");
+                } else if out.ends_with('\n') {
+                    print!("{}", rendered);
+                } else {
+                    println!("{}", rendered);
                 }
                 emitted = true;
             }
@@ -398,6 +550,13 @@ fn run(args: Args) -> Result<ExitCode> {
         // --exit-status: an edit whose path expression matched nothing is
         // the mutation analogue of a query miss.
         return Ok(ExitCode::from(1));
+    }
+    if args.check {
+        return Ok(if changed {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        });
     }
     Ok(if emitted || !args.exit_status {
         // A query miss is a silent no-op by default, like sed with no
